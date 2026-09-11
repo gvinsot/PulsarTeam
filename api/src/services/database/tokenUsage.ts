@@ -74,6 +74,51 @@ function toTokenSummary(row: TokenSummaryRow | undefined): TokenSummary {
 // Token summary cache (refreshed periodically), keyed by the day window.
 const _tokenSummaryCache: Record<number, TokenSummary | undefined> = {};
 
+/**
+ * The two optional narrowings every budget query supports.
+ *
+ * `userId` restricts to one user's rows (non-admins only see their own).
+ * `projectId` restricts to the usage produced by the agents of that project:
+ * token_usage_log.agent_id (TEXT) → agents.id → agents.board_id →
+ * boards.project_id. Both are additive — they AND together.
+ */
+export interface UsageScope {
+  userId?: string | null;
+  projectId?: string | null;
+}
+
+/**
+ * Build the trailing `AND ...` clauses shared by the four budget queries.
+ *
+ * `nextIndex` is the first free `$n` placeholder — each query binds its own
+ * leading parameters (trunc unit, day window) first — and the returned params
+ * must be appended to those in the same order.
+ *
+ * The project clause compares `agents.id::text` to `agent_id` rather than
+ * casting `agent_id` to UUID: agent_id is a free-form TEXT column and a
+ * non-UUID value (a deleted agent, an out-of-band runner id) would make the
+ * cast throw for the whole query instead of simply not matching.
+ */
+function usageScopeFilter(scope: UsageScope, nextIndex: number) {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (scope.userId) {
+    params.push(scope.userId);
+    clauses.push(` AND user_id = $${nextIndex + params.length - 1}`);
+  }
+  if (scope.projectId) {
+    params.push(scope.projectId);
+    clauses.push(
+      ` AND agent_id IN (
+           SELECT a.id::text FROM agents a
+           JOIN boards b ON b.id = a.board_id
+           WHERE b.project_id = $${nextIndex + params.length - 1}::uuid
+         )`
+    );
+  }
+  return { clause: clauses.join(''), params };
+}
+
 // agent_name / provider / model are nullable columns, but both call sites
 // (agentManager._recordUsage and the internal token-usage route) resolve them
 // to a string with an 'unknown' fallback before getting here.
@@ -198,23 +243,29 @@ export function getTokenUsageSummary(days = 1): TokenSummary {
   return _tokenSummaryCache[days] || emptyTokenSummary();
 }
 
-/** Async per-user (or global when userId is null) token usage summary */
+/**
+ * Async token usage summary, optionally narrowed to a user and/or a project.
+ * With no narrowing at all it serves the periodically refreshed cache; any
+ * scope means the cached (global) totals do not apply and the query runs.
+ */
 export async function getTokenUsageSummaryAsync(
   days = 1,
-  userId: string | null = null
+  userId: string | null = null,
+  projectId: string | null = null
 ): Promise<TokenSummary> {
   const pool = getPool();
   if (!pool) return emptyTokenSummary();
-  if (!userId) return _tokenSummaryCache[days] || emptyTokenSummary();
+  if (!userId && !projectId) return _tokenSummaryCache[days] || emptyTokenSummary();
   try {
+    const scope = usageScopeFilter({ userId, projectId }, 2);
     const result = await pool.query<TokenSummaryRow>(
       `SELECT COALESCE(SUM(cost), 0) as total_cost,
               COALESCE(SUM(input_tokens), 0) as total_input,
               COALESCE(SUM(output_tokens), 0) as total_output,
               COALESCE(SUM(context_tokens), 0) as total_context
        FROM token_usage_log
-       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1 AND user_id = $2`,
-      [days, userId]
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${scope.clause}`,
+      [days, ...scope.params]
     );
     return toTokenSummary(result.rows[0]);
   } catch (err) {
@@ -241,13 +292,14 @@ export type UsageByAgentRow = {
 
 export async function getTokenUsageByAgent(
   days = 30,
-  userId: string | null = null
+  userId: string | null = null,
+  projectId: string | null = null
 ): Promise<UsageByAgentRow[]> {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const userFilter = userId ? ' AND user_id = $2' : '';
-    const params = userId ? [days, userId] : [days];
+    const scope = usageScopeFilter({ userId, projectId }, 2);
+    const params = [days, ...scope.params];
     // The generic names the row as it leaves this function, i.e. after the
     // parseNumericFields pass below turns the BIGINT counters from lossless
     // strings into numbers. Naming it here is what keeps the field names —
@@ -259,7 +311,7 @@ export async function getTokenUsageByAgent(
               SUM(context_tokens) as total_context, SUM(cost) as total_cost,
               COUNT(*) as request_count
        FROM token_usage_log
-       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${scope.clause}
        GROUP BY provider, model
        ORDER BY total_cost DESC`,
       params
@@ -274,20 +326,21 @@ export async function getTokenUsageByAgent(
 export async function getTokenUsageTimeline(
   days = 7,
   groupBy = 'day',
-  userId: string | null = null
+  userId: string | null = null,
+  projectId: string | null = null
 ) {
   const pool = getPool();
   if (!pool) return [];
   const trunc = groupBy === 'hour' ? 'hour' : 'day';
   try {
-    const userFilter = userId ? ' AND user_id = $3' : '';
-    const params = userId ? [trunc, days, userId] : [trunc, days];
+    const scope = usageScopeFilter({ userId, projectId }, 3);
+    const params = [trunc, days, ...scope.params];
     const result = await pool.query(
       `SELECT date_trunc($1, recorded_at) as period, agent_name,
               SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens,
               SUM(context_tokens) as context_tokens, SUM(cost) as total_cost
        FROM token_usage_log
-       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $2${userFilter}
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $2${scope.clause}
        GROUP BY period, agent_name ORDER BY period`,
       params
     );
@@ -298,18 +351,22 @@ export async function getTokenUsageTimeline(
   }
 }
 
-export async function getDailyTokenUsage(days = 30, userId: string | null = null) {
+export async function getDailyTokenUsage(
+  days = 30,
+  userId: string | null = null,
+  projectId: string | null = null
+) {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const userFilter = userId ? ' AND user_id = $2' : '';
-    const params = userId ? [days, userId] : [days];
+    const scope = usageScopeFilter({ userId, projectId }, 2);
+    const params = [days, ...scope.params];
     const result = await pool.query(
       `SELECT date_trunc('day', recorded_at) as day,
               SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
               SUM(context_tokens) as total_context, SUM(cost) as total_cost
        FROM token_usage_log
-       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${scope.clause}
        GROUP BY day ORDER BY day`,
       params
     );
