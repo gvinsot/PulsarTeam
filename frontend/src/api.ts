@@ -9,6 +9,11 @@ import type {
   AgentTimeSeries,
   ApiKeyCreated,
   ApiKeyInfoResponse,
+  ApiKeyScope,
+  ScopedApiKeyCreated,
+  ScopedApiKeyListResponse,
+  LegacyApiKeyListResponse,
+  LegacyApiKeyRevokeResponse,
   AvailableRepo,
   AvailableStorage,
   Board,
@@ -1008,12 +1013,33 @@ export const api = {
       { long: true }
     ),
 
-  // API Key (MCP)
+  // ── API keys (MCP) ──────────────────────────────────────────────────────
+  // Two families, deliberately separate. The three below manage the LEGACY
+  // instance-wide key: ownerless, admin-only, still accepted on /api/swarm/*
+  // and refused on /api/mcp/*.
   getApiKeyInfo: () => get<ApiKeyInfoResponse>('/settings/api-key'),
 
   generateApiKey: () => post<ApiKeyCreated>('/settings/api-key'),
 
   revokeApiKey: () => del<SuccessAck>('/settings/api-key'),
+
+  /** Outstanding ownerless keys — admin only, backs the modal's warning banner. */
+  listLegacyApiKeys: () => get<LegacyApiKeyListResponse>('/settings/api-key/legacy'),
+
+  /** Retire every ownerless key at once — admin only. */
+  revokeLegacyApiKeys: () => del<LegacyApiKeyRevokeResponse>('/settings/api-key/legacy'),
+
+  // …and these manage the caller's OWN scoped keys, one per (user, scope).
+  // Available to every authenticated user: they are personal credentials, and
+  // the owner is part of every server-side predicate.
+  listMyApiKeys: () => get<ScopedApiKeyListResponse>('/settings/api-key/mine'),
+
+  /** Mint or ROTATE the caller's key for one scope. Returns the key once. */
+  createMyApiKey: (scope: ApiKeyScope, name?: string) =>
+    post<ScopedApiKeyCreated>('/settings/api-key/mine', { scope, name }),
+
+  revokeMyApiKey: (id: string) =>
+    del<SuccessAck>(`/settings/api-key/mine/${encodeURIComponent(id)}`),
 
   // General settings
   getSettings: () => get<Settings>('/settings/general'),

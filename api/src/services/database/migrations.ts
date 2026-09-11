@@ -111,6 +111,35 @@ const MIGRATIONS: Migration[] = [
     'ALTER TABLE board_audit_logs DROP CONSTRAINT IF EXISTS board_audit_logs_board_id_fkey',
   ]),
 
+  // API keys stop being one ownerless instance-wide secret and become one row
+  // per (user, scope). Existing rows keep `user_id`/`scope` NULL and are the
+  // "legacy" keys: still accepted on /api/swarm/* so no integration breaks,
+  // refused everywhere added since (middleware/apiKeyAuth.ts).
+  //
+  // CREATE TABLE first because `api_keys` is created by ensureApiKeysTable()
+  // at the END of boot (src/index.ts), i.e. AFTER migrations run — on a fresh
+  // database the ALTERs below would otherwise have nothing to alter.
+  sqlMigration('202609010001_api_keys_user_scope', 'API keys are per user and per scope', [
+    `CREATE TABLE IF NOT EXISTS api_keys (
+       id TEXT PRIMARY KEY,
+       key_hash TEXT NOT NULL,
+       prefix TEXT NOT NULL,
+       created_at TIMESTAMPTZ DEFAULT NOW(),
+       hash_version INTEGER NOT NULL
+     )`,
+    // ON DELETE CASCADE, not SET NULL: a deleted user's key must stop working,
+    // not silently demote itself into an instance-wide legacy key.
+    'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE',
+    'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scope TEXT',
+    'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS name TEXT',
+    'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ',
+    // One key per (user, scope) — minting again replaces, which is how a user
+    // rotates. Partial so the legacy rows (user_id NULL) are not constrained.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uniq_api_keys_user_scope
+       ON api_keys (user_id, scope) WHERE user_id IS NOT NULL`,
+    'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id)',
+  ]),
+
   {
     id: '202607010001_remove_legacy_default_boards',
     name: 'remove legacy Default boards',

@@ -211,9 +211,13 @@ export interface AppUser {
 }
 
 /**
- * Metadata about the single active MCP API key — prefix only, never the key.
- * Produced by api/src/services/apiKeyManager.ts:90.
+ * Metadata about the LEGACY, instance-wide MCP API key — prefix only, never the
+ * key. Produced by api/src/services/apiKeyManager.ts getApiKeyInfo.
  * key_hash and hash_version are absent from the SELECT and are not declared.
+ *
+ * "Legacy" is the real name for it: the row carries no `user_id` and no
+ * `scope`, so it names nobody. It still opens /api/swarm/*, and is REFUSED on
+ * /api/mcp/* — see ScopedApiKey below, which is what replaces it.
  */
 export interface ApiKeyInfo {
   id: string;
@@ -243,6 +247,73 @@ export interface ApiKeyCreated {
   /** CLEAR TEXT, shown once: 'swarm_sk_<64 hex chars>'. Only the HMAC is stored. */
   key: string;
   prefix: string;
+}
+
+/**
+ * The tool set a scoped key opens. NOT a role: an `admin`-scoped key is still
+ * bounded by what its owner can already administer, and the genuinely
+ * instance-wide tools re-check the owner's role server-side.
+ *
+ * The ladder is one-way — `admin` also opens the management surface,
+ * `management` never opens the admin one.
+ */
+export type ApiKeyScope = 'admin' | 'management';
+
+/**
+ * One of the caller's OWN scoped keys — one row per (user, scope).
+ * Produced by api/src/services/apiKeyManager.ts listApiKeysForUser.
+ */
+export interface ScopedApiKey {
+  id: string;
+  prefix: string;
+  scope: ApiKeyScope;
+  name: string | null;
+  created_at: string;
+  /** null until the key is used for the first time. */
+  last_used_at: string | null;
+}
+
+/** Body of GET /api/settings/api-key/mine. */
+export interface ScopedApiKeyListResponse {
+  keys: ScopedApiKey[];
+}
+
+/**
+ * Body of POST /api/settings/api-key/mine — the ONLY response carrying the
+ * clear-text scoped key. Minting a scope twice ROTATES it: the previous key for
+ * that (user, scope) stops working immediately.
+ */
+export interface ScopedApiKeyCreated {
+  id: string;
+  /** CLEAR TEXT, shown once. */
+  key: string;
+  prefix: string;
+  scope: ApiKeyScope;
+  name: string;
+}
+
+/**
+ * One outstanding legacy (ownerless) key, as listed by
+ * GET /api/settings/api-key/legacy for an admin. Its presence is what the
+ * modal's banner warns about.
+ */
+export interface LegacyApiKey {
+  id: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+/** Body of GET /api/settings/api-key/legacy. */
+export interface LegacyApiKeyListResponse {
+  keys: LegacyApiKey[];
+}
+
+/** Body of DELETE /api/settings/api-key/legacy. */
+export interface LegacyApiKeyRevokeResponse {
+  success: true;
+  /** How many ownerless rows were retired. */
+  revoked: number;
 }
 
 /**

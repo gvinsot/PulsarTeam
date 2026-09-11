@@ -14,7 +14,8 @@ Per-domain endpoint lists:
 - [integrations.md](integrations.md) — GitHub, Gmail, Drive, OneDrive, Outlook, Slack, Jira, WordPress, S3
 - [budget-and-llm.md](budget-and-llm.md) — budgets, LLM configs
 - [code-index.md](code-index.md) — code-index API & MCP
-- [swarm-and-internal.md](swarm-and-internal.md) — external Swarm API, internal token routes
+- [mcp-surfaces.md](mcp-surfaces.md) — the scoped MCP surfaces `/api/mcp/admin` and `/api/mcp/management`, and the per-user API keys that open them
+- [swarm-and-internal.md](swarm-and-internal.md) — external Swarm API (legacy key), internal token routes
 - [misc.md](misc.md) — health, settings, realtime, leader tools, contact
 
 WebSocket events are documented separately in [../websocket-events.md](../websocket-events.md).
@@ -23,13 +24,14 @@ WebSocket events are documented separately in [../websocket-events.md](../websoc
 
 ## 1. Authentication models
 
-The API uses **five** authentication modes:
+The API uses **six** authentication modes:
 
 | Mode | Header | Used by |
 |---|---|---|
 | JWT session cookie | `Cookie: __Host-pt_session=<jwt>` (`pt_session` in development) | All `/api/*` user routes, from the browser. Set by `/api/auth/login` or any of the OAuth callbacks: `HttpOnly`, `SameSite=Lax`, `Secure` in production, `Path=/`, 24 h. Payload includes `userId`, `username`, `role`, a per-session `csrf` secret, optional `impersonatedBy` / `impersonatorId`. Validated by `authenticateToken`; minted and read by `middleware/session.ts`. |
 | JWT Bearer | `Authorization: Bearer <jwt>` | The same routes, for non-browser callers (desktop bridge, the internal MCP client, scripts, tests). Accepted ahead of the cookie when both are present, and exempt from the CSRF check below. |
-| API key (user) | `Authorization: Bearer <api_key>` | All `/api/swarm/*` external endpoints. Keys are generated per user via the API-key modal in the UI. Each key is hashed at rest, only the prefix is returned in subsequent reads. |
+| API key (legacy, instance-wide) | `Authorization: Bearer <api_key>` | All `/api/swarm/*` external endpoints. ONE ownerless key for the whole instance: it attaches no identity, so everything it reaches runs with no tenant. Kept so existing integrations keep working; **refused** on `/api/mcp/*`. Admin-managed. |
+| API key (scoped, per user) | `Authorization: Bearer <api_key>` | `/api/mcp/admin` and `/api/mcp/management`. One key per `(user, scope)`, minted by the user. The key names an owner id only — the role is re-read from the database on every request, so a demotion applies immediately. Validated by `requireApiKeyScope(scope)`; see [mcp-surfaces.md](mcp-surfaces.md). |
 | Internal coder key | `Authorization: Bearer <CODER_API_KEY>` | `/api/internal/*`. Used by the runner service to read/write Claude OAuth tokens for the user's agents. Configured via a Docker secret. |
 | Public | — | `/api/auth/login`, `/api/auth/logout`, `/api/auth/*/status`, `/api/auth/*/url`, all OAuth `oauth-redirect` handlers, `/api/contact`, `/api/health`. |
 

@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { checkAgentIdAccess, checkBoardIdAccess } from '../lib/agentAccess.js';
 import { errorMessage } from '../lib/errors.js';
+import type { SessionClaims } from '../middleware/session.js';
 
 /**
  * Agent context for one MCP request.
@@ -18,6 +19,19 @@ import { errorMessage } from '../lib/errors.js';
 export type McpHandlerContext = {
   agentId: string | null;
   boardId: string | null;
+  /**
+   * The authenticated caller, when there is one.
+   *
+   * Set by `authenticateToken` for the internal JWT mounts and by
+   * `requireApiKeyScope` for /api/mcp/*, where it is the OWNER of the scoped
+   * API key, re-read from the database on every request. Null on the external
+   * /api/swarm/mcp mount, whose legacy key names nobody.
+   *
+   * Servers that are global (Gmail, Slack, the browser tools…) ignore it; the
+   * two /api/mcp/* surfaces are built entirely around it, because it is the
+   * tenant every one of their tools is bounded by.
+   */
+  user: SessionClaims | null;
 };
 
 /** First value of a possibly-repeated header, trimmed, or null when absent. */
@@ -96,7 +110,7 @@ export function createMcpHttpHandler(
       }
 
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = buildServer({ agentId, boardId });
+      const server = buildServer({ agentId, boardId, user: req.user ?? null });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {

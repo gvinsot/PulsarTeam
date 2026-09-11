@@ -56,6 +56,7 @@ type RoutePolicy = typeof PUBLIC | readonly string[];
  * recognizable only if it has a name. The four factories that used to return
  * anonymous functions now name what they return, permission level included:
  *   requireRole(admin) / requireRole(admin|advanced)  — middleware/auth.ts
+ *   requireApiKeyScope(admin|management)              — middleware/apiKeyAuth.ts
  *   authorizeBoardAccess(read|edit|admin)             — middleware/authz.ts
  *   authorizeProjectAccess(read|edit|admin)           — middleware/authz.ts
  *   agentAccess(read|edit)                            — lib/agentAccess.ts
@@ -64,7 +65,8 @@ type RoutePolicy = typeof PUBLIC | readonly string[];
  */
 const GUARD_PREFIXES = [
   'authenticateToken', // session JWT / HttpOnly cookie — middleware/auth.ts
-  'authenticateApiKey', // per-user API key (external Swarm API) — middleware/apiKeyAuth.ts
+  'authenticateApiKey', // legacy instance-wide key (external Swarm API) — middleware/apiKeyAuth.ts
+  'requireApiKeyScope(', // per-user, per-scope key (/api/mcp/*) — middleware/apiKeyAuth.ts
   'authenticateCoderApiKey', // shared runner key (/api/internal/*) — middleware/coderApiKeyAuth.ts
   'requireRole(',
   'authorizeBoardAccess(',
@@ -351,6 +353,15 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'GET /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],
   'POST /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],
   'DELETE /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],
+  // The legacy instance-wide key panel — same admin gate as the three above.
+  'GET /api/settings/api-key/legacy': ['authenticateToken', 'requireRole(admin)'],
+  'DELETE /api/settings/api-key/legacy': ['authenticateToken', 'requireRole(admin)'],
+  // Personal scoped keys. Deliberately NOT admin-only: these are each user's
+  // own credentials, and the owner id is part of every query's predicate
+  // (services/apiKeyManager.ts), so one user cannot list or revoke another's.
+  'GET /api/settings/api-key/mine': ['authenticateToken'],
+  'POST /api/settings/api-key/mine': ['authenticateToken'],
+  'DELETE /api/settings/api-key/mine/:id': ['authenticateToken'],
 
   // ── /api/llm-configs ──────────────────────────────────────────────
   'GET /api/llm-configs': ['authenticateToken'],
@@ -497,7 +508,21 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   // ── /api/pulsar-gateway ───────────────────────────────────────────
   'ALL /api/pulsar-gateway/mcp': ['authenticateToken'],
 
+  // ── /api/mcp ──────────────────────────────────────────────────────
+  // The two scoped MCP surfaces. `requireApiKeyScope` resolves a per-user key,
+  // re-reads its owner from the database and publishes them as req.user, so
+  // every tool behind these two mounts runs inside a real tenant. The scope in
+  // the guard name is the ladder rung the mount demands: `admin` satisfies
+  // both, `management` only the second. A downgrade of the first entry to
+  // `requireApiKeyScope(management)` would open agent, board, project and
+  // workflow mutation to every management key — which is exactly the kind of
+  // quiet widening this table exists to catch.
+  'ALL /api/mcp/admin': ['requireApiKeyScope(admin)'],
+  'ALL /api/mcp/management': ['requireApiKeyScope(management)'],
+
   // ── /api/swarm ────────────────────────────────────────────────────
+  // Legacy key only (middleware/apiKeyAuth.ts): this surface runs unscoped, so
+  // a scoped key is refused here rather than escaping its own scope.
   'ALL /api/swarm/mcp': ['authenticateApiKey'],
   'GET /api/swarm/agents': ['authenticateApiKey'],
   'GET /api/swarm/agents/:id': ['authenticateApiKey'],
@@ -622,6 +647,7 @@ test('authorization guards are still identifiable by name', async () => {
     'authorizeBoardAccess(admin)',
     'authorizeProjectAccess(read)',
     'agentAccess(edit)',
+    'requireApiKeyScope(admin)',
   ]) {
     assert.ok(
       vocabulary.has(guard),
