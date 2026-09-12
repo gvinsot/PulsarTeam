@@ -39,6 +39,13 @@ import {
 import { DEFAULT_BOARD_WORKFLOW } from '../boardDefaults.js';
 import { normalizeWorkflowColumnIds } from '../workflow/columnIds.js';
 import { createAgentSchema, updateAgentSchema } from '../../schemas/agents.js';
+import {
+  agentConfigSchema,
+  agentUpdatesSchema,
+  workflowColumnSchema,
+  workflowTransitionSchema,
+} from './schemas.js';
+import { applyColumnRenamesToBoardTasks } from '../workflow/renameBoardColumns.js';
 import { jsonOk, jsonError } from '../mcpResponses.js';
 import { createMcpHttpHandler } from '../mcpHttpHandler.js';
 import { errorMessage } from '../../lib/errors.js';
@@ -57,21 +64,29 @@ import type { SkillManager } from '../skillManager.js';
 
 /** Agent projection — never the API key, never the stored credentials. */
 function agentView(agent: McpRecord) {
+  // Allowlist configuration fields: runtime sessions, prompts with credentials,
+  // histories and future secret fields cannot leak through object spreading.
+  const excluded = new Set(['apiKey', 'credentials', 'mcpAuth', 'copyApiKeyFromAgent', 'todoList']);
+  const config: Record<string, unknown> = {};
+  for (const key of Object.keys(createAgentSchema.shape)) {
+    if (!excluded.has(key) && agent[key] !== undefined) config[key] = agent[key];
+  }
   return {
+    ...config,
     id: agent.id,
-    name: agent.name,
-    role: agent.role || null,
-    description: agent.description || null,
-    provider: agent.provider || null,
-    model: agent.model || null,
     status: agent.status,
-    enabled: agent.enabled !== false,
-    boardId: agent.boardId || null,
     ownerId: agent.ownerId || null,
-    project: agent.project || null,
+    boardId: agent.boardId || null,
+    enabled: agent.enabled !== false,
     skills: agent.skills || [],
     mcpServers: agent.mcpServers || [],
-    isLeader: !!agent.isLeader,
+    batchId: agent.batchId || null,
+    batchIndex: agent.batchIndex ?? null,
+    configuredSecrets: {
+      apiKey: !!agent.apiKey,
+      credentials: Object.keys(agent.credentials || {}),
+      mcpAuth: Object.keys(agent.mcpAuth || {}),
+    },
   };
 }
 
@@ -83,6 +98,9 @@ function boardView(board: McpRecord) {
     project_id: board.project_id || null,
     columns: (board.workflow?.columns || []).map((c: McpRecord) => ({ id: c.id, label: c.label })),
     workflowVersion: board.workflow?.version ?? null,
+    workflow: board.workflow || { columns: [], transitions: [] },
+    plugins: board.plugins || [],
+    filters: board.filters || {},
   };
 }
 
@@ -115,7 +133,24 @@ export function createAdminMcpServer(
       const agent = agentManager.agents.get(agent_id);
       const allowed = await scopedAgent(actor, agent, 'read');
       if (!allowed.ok) return allowed.error!;
-      return jsonOk({ agent: agentView(allowed.value) });
+      const resolved = agentManager.resolveLlmConfig?.(allowed.value);
+      const effectiveLlm = resolved
+        ? {
+            provider: resolved.provider,
+            model: resolved.model,
+            endpoint: resolved.endpoint,
+            configName: resolved.configName,
+            temperature: resolved.temperature,
+            maxTokens: resolved.maxTokens,
+            contextLength: resolved.contextLength,
+            managesContext: resolved.managesContext,
+            supportsImages: resolved.supportsImages,
+            isReasoning: resolved.isReasoning,
+            costPerInputToken: resolved.costPerInputToken,
+            costPerOutputToken: resolved.costPerOutputToken,
+          }
+        : null;
+      return jsonOk({ agent: { ...agentView(allowed.value), effectiveLlm } });
     }
   );
 
@@ -123,11 +158,7 @@ export function createAdminMcpServer(
     'create_agent',
     'Create an agent on a board you can edit. board_id is mandatory — a board-less agent is created, started, and then never displayed anywhere.',
     {
-      config: z
-        .record(z.string(), z.any())
-        .describe(
-          'Agent configuration object. Required: name, board_id (as boardId). Validated by the same schema POST /api/agents uses, so any field that route accepts works here.'
-        ),
+      config: agentConfigSchema,
     },
     async ({ config }) => {
       const refused = refuseBasic(actor, 'create agents');
@@ -160,7 +191,7 @@ export function createAdminMcpServer(
     'Update an agent you can edit. Fields are validated by the same schema PUT /api/agents/:id uses.',
     {
       agent_id: z.string().describe('Agent UUID'),
-      updates: z.record(z.string(), z.any()).describe('Fields to change'),
+      updates: agentUpdatesSchema,
     },
     async ({ agent_id, updates }) => {
       const refused = refuseBasic(actor, 'modify agents');
@@ -398,6 +429,17 @@ export function createAdminMcpServer(
     }
   );
 
+  server.tool(
+    'get_board',
+    'Read a board and its complete workflow (columns, conditions, actions and version), plugins and filters. Credentials are excluded.',
+    { board_id: z.string().describe('Board UUID') },
+    async ({ board_id }) => {
+      const board = await scopedBoard(actor, board_id, 'read');
+      if (!board.ok) return board.error!;
+      return jsonOk({ board: boardView(board.value) });
+    }
+  );
+
   // ── Boards ──────────────────────────────────────────────────────────────
 
   server.tool(
@@ -416,7 +458,8 @@ export function createAdminMcpServer(
     {
       name: z.string().min(1).max(200).describe('Board name'),
       columns: z
-        .array(z.object({ id: z.string().optional(), label: z.string() }))
+        .array(workflowColumnSchema)
+        .max(50)
         .optional()
         .describe('Workflow columns. Omit for the default workflow.'),
     },
@@ -483,10 +526,15 @@ export function createAdminMcpServer(
     {
       board_id: z.string().describe('Board UUID'),
       columns: z
-        .array(z.object({ id: z.string().optional(), label: z.string() }))
+        .array(workflowColumnSchema)
+        .max(50)
         .min(1)
         .describe('The full ordered column list'),
-      transitions: z.array(z.any()).optional().describe('Optional transition rules'),
+      transitions: z
+        .array(workflowTransitionSchema)
+        .max(200)
+        .optional()
+        .describe('Full transition list. Omit to preserve existing transitions; [] removes them.'),
     },
     async ({ board_id, columns, transitions }) => {
       const board = await scopedBoard(actor, board_id, 'edit');
@@ -495,11 +543,16 @@ export function createAdminMcpServer(
       // Same call as PUT /api/boards/:id/workflow, so ids, renames and the
       // version bump behave identically.
       const { workflow, renames } = normalizeWorkflowColumnIds(
-        { columns, transitions: transitions || [] },
+        {
+          ...board.value.workflow,
+          columns,
+          transitions: transitions ?? board.value.workflow?.transitions ?? [],
+        },
         board.value.workflow
       );
       const newWorkflow = { ...workflow, version: (board.value.workflow?.version || 0) + 1 };
       const updated = await updateBoard(board_id, { workflow: newWorkflow });
+      await applyColumnRenamesToBoardTasks(agentManager, board_id, renames, actor.username);
       agentManager._refreshWorkflowManagedStatuses?.();
 
       return jsonOk({

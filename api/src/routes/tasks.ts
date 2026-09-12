@@ -24,7 +24,7 @@ import { validateBody } from '../lib/validate.js';
 import { projectObject, projectionIncludesField, type FieldProjection } from '../lib/projection.js';
 import { parseTaskProjection } from '../services/taskProjection.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
-import { isCliRunner } from '../services/runners.js';
+import { stopTaskExecution } from '../services/taskControl.js';
 import {
   reorderTasksSchema,
   updateTaskSchema,
@@ -227,31 +227,6 @@ function stopTaskExecutor(mgr: AgentManager, task: Task) {
   const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
   if (executorId) mgr.stopAgent(executorId);
   clearActionRunning(task);
-}
-
-function requestTaskCliInterrupt(mgr: AgentManager, task: Task): void {
-  const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
-  if (!executorId || !mgr?.executionManager) return;
-  const executor = mgr.agents.get(executorId);
-  const provider = mgr.executionManager.getProviderType?.(executorId);
-  if (executor && !isCliRunner(executor) && (!provider || provider === 'sandbox')) return;
-  const interrupt =
-    mgr.executionManager.interruptCliTerminalSessions ||
-    mgr.executionManager.interruptTerminalSession;
-  if (!interrupt) return;
-  Promise.resolve(interrupt.call(mgr.executionManager, executorId))
-    .then((sent: boolean) => {
-      if (sent) {
-        console.log(
-          `🛑 [Execution] Sent CLI interrupt to task executor ${executor?.name || executorId}`
-        );
-      }
-    })
-    .catch((err: any) => {
-      console.warn(
-        `⚠️ [Execution] CLI interrupt failed for task executor ${executorId}: ${err?.message || err}`
-      );
-    });
 }
 
 /**
@@ -848,27 +823,7 @@ router.post(
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Clear stuck flags on the DB-sourced task
-    const target = task;
-    requestTaskCliInterrupt(mgr, target);
-    target.actionRunning = false;
-    target.actionRunningAgentId = null;
-    target.actionRunningMode = null;
-    // Mark as stopped only for active-status tasks; error-status tasks keep
-    // their error state so the user sees the Resume button as recovery.
-    if (mgr._isActiveTaskStatus(target.status)) {
-      target.executionStatus = 'stopped';
-      target.startedAt = null;
-    }
-
-    // Signal any pending workflow lock so it unblocks immediately
-    setTaskSignal(req.params.id, 'stopped', true);
-
-    await saveTaskToDb({ ...target, agentId: task.agentId });
-    mgr._emit('task:updated', {
-      agentId: task.agentId,
-      task: { ...target, agentId: task.agentId },
-    });
+    await stopTaskExecution(mgr, task, req.user.username || req.user.userId);
     res.json({ ok: true });
   })
 );

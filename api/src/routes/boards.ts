@@ -13,14 +13,12 @@ import {
   getBoardAuditLogs,
   getAllUsers,
   getAllBoards,
-  getTasksByBoard,
   getTasksByAssignee,
-  updateTaskFields,
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
-import { emitTaskUpdated } from '../services/taskMutations.js';
 import { validateBody } from '../lib/validate.js';
-import { normalizeWorkflowColumnIds, type ColumnRename } from '../services/workflow/columnIds.js';
+import { normalizeWorkflowColumnIds } from '../services/workflow/columnIds.js';
+import { applyColumnRenamesToBoardTasks } from '../services/workflow/renameBoardColumns.js';
 import type { AgentManager } from '../services/agentManager/index.js';
 import { DEFAULT_BOARD_WORKFLOW, normalizeBoardName } from '../services/boardDefaults.js';
 import {
@@ -33,51 +31,6 @@ import {
   createShareSchema,
   updateShareSchema,
 } from '../schemas/boards.js';
-
-async function applyColumnRenamesToBoardTasks(
-  agentManager: AgentManager,
-  boardId: string,
-  renames: ColumnRename[],
-  by: string
-) {
-  if (!renames.length) return;
-
-  const renameMap = new Map(renames.map(r => [r.from, r.to]));
-  const tasks = await getTasksByBoard(boardId);
-  const now = new Date().toISOString();
-
-  for (const task of tasks) {
-    const nextStatus = renameMap.get(task.status);
-    const nextErrorFromStatus = task.errorFromStatus
-      ? renameMap.get(task.errorFromStatus)
-      : undefined;
-    if (!nextStatus && !nextErrorFromStatus) continue;
-
-    const history = Array.isArray(task.history) ? [...task.history] : [];
-    if (nextStatus) {
-      history.push({
-        at: now,
-        by,
-        type: 'workflow_column_rename',
-        from: task.status,
-        status: nextStatus,
-      });
-    }
-
-    const fields: any = { history };
-    if (nextStatus) fields.status = nextStatus;
-    if (nextErrorFromStatus) fields.errorFromStatus = nextErrorFromStatus;
-
-    const updated = await updateTaskFields(task.id, fields);
-    const taskForEmit = updated || {
-      ...task,
-      ...fields,
-      updatedAt: now,
-    };
-
-    emitTaskUpdated(agentManager, taskForEmit);
-  }
-}
 
 export function boardRoutes(agentManager: AgentManager) {
   const router = express.Router();

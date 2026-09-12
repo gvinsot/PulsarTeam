@@ -407,7 +407,8 @@ export interface AgentManager {
     agentId: string,
     taskId: string,
     streamCallback: HandoffCallback,
-    user: SessionClaims
+    user: SessionClaims,
+    options?: { status?: string; executorId?: string }
   ): Promise<{ taskId: string; response: null }>;
   executeAllTasks(
     agentId: string,
@@ -429,7 +430,7 @@ export interface AgentManager {
     taskText: string,
     options?: any
   ): Promise<string>;
-  _resumeActiveTask(agentId: string, agent: any, task: any): Promise<void>;
+  _resumeActiveTask(agentId: string, agent: any, task: any, reserved?: () => void): Promise<void>;
   getTask(taskId: string): Promise<any | null>;
   saveTaskDirectly(task: any): any;
   _enqueueAgentTask(agentId: string, taskFn: () => Promise<any>): Promise<any>;

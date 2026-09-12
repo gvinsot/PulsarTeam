@@ -77,12 +77,32 @@ Streamable-HTTP MCP. Everything here is about **tasks**: a key handed to a plann
 | `list_agents` | Agents visible to the owner, `project` / `status` filters. |
 | `list_tasks` | Tasks on reachable boards; optional `board_id`, `status`, `limit`. |
 | `get_task` | One task plus its history. Read-level. |
-| `create_task` | `board_id` mandatory; requires **edit** on it. Created unassigned. |
+| `create_task` | `board_id` mandatory; requires **edit** on it. Created unassigned. Supports title, description, priority, due_date, task_type and is_manual. |
 | `delegate_task` | Assign to an agent. **Both** the task and the agent must be reachable at edit level. |
-| `update_task` | Status / repo / storage and/or completion (`comment`, `commits`, `done`). |
+| `update_task` | Metadata (title, description, priority, due_date, task_type, is_manual), status / repo / storage and/or completion (`comment`, `commits`, `done`). |
 | `delete_task` | Soft delete. Refuses a task a busy agent is executing, exactly as `DELETE /api/tasks/:id` does. |
 | `restore_task` | Requires the **admin role** on the key owner, mirroring `POST /api/tasks/:id/restore`. |
 | `search_tasks` | Bound to the owner's boards in SQL; naming another tenant's board answers "not found". |
+
+Additional execution and recurrence tools:
+
+| Tool | Contract |
+|---|---|
+| `start_task`, `resume_task` | `task_id`, optional `agent_id`, optional `status` (column label or id). Executor defaults to assignee then owner. Both task and executor require edit access. Returns `accepted: true`; inspect `get_task` for progress. |
+| `stop_task` | Stops one task, persists its stopped state and interrupts its live CLI/native executor. Does not invoke the leader's global stop. A stale assignment cannot interrupt an agent reserved for another task. |
+| `set_task_recurrence` | `task_id` + `recurrence`. Creates a rule from a task or updates its existing rule. The task remains its first run. `enabled:false` removes the rule, preserving runs. |
+| `list_task_templates` | Optional `board_id`; lists accessible rules with their schedule and next run. |
+| `get_task_template` | Reads one rule, schedule, occurrence counter and unfinished-run count. |
+| `update_task_template` | Partial title / description / recurrence update; omitted schedule fields and the schedule clock are preserved. |
+| `delete_task_template` | Deletes the rule only; existing executions and history remain. |
+| `run_task_template` | Spawns an extra execution and triggers its board workflow, without postponing the next automatic run. This explicit request may overlap existing runs. |
+| `list_task_template_runs` | Lists accessible executions of a rule; `limit` defaults to 50, maximum 200. |
+
+Execution is asynchronous. An explicit start/resume dispatches the task directly to the selected agent, without also firing the column's on-entry chain. The column must be active: explicit `status`, otherwise current/pre-error column, otherwise the first active column. Completed tasks, disabled agents and reserved agents/tasks are refused. Start from an unassigned task requires `agent_id` or a prior `delegate_task`. A stopped task stays stopped until resumed.
+
+Task results include deadlines, execution status, errors, executor id, commits and recurrence linkage. `due_date` accepts an ISO date or a timestamp with timezone; `null` clears it. Priorities are `low`, `medium`, `high`, `urgent`, or `null`. Task metadata edits preserve omitted fields. `project` on creation is a legacy consistency check against the board's project, never a separate stored task tag.
+
+A recurrence object exposes `enabled`, `period`, `intervalMinutes` (1–525600), `originalStatus`, `historyRetentionDays` (0–3650 or null), `keepLastOccurrences` (0–1000 or null), and `onOverlap` (`skip` or `spawn`). The interval determines cadence. Retention 0/null means unlimited. `originalStatus` must name an existing board column. Use the dedicated rule tools to inspect or edit schedules; ordinary task lists exclude rules.
 
 No agent, board, project or workflow mutation is exposed here.
 
@@ -101,9 +121,15 @@ The genuinely instance-wide tools check `role === 'admin'` on the owner — re-r
 | Agents | `get_agent`, `create_agent`, `update_agent`, `delete_agent`, `attach_tools_to_agent` |
 | Catalogues | `list_plugins`, `list_mcp_servers`, `list_agent_skills` |
 | Projects | `list_projects`, `create_project`, `update_project`, `delete_project` |
-| Boards | `list_boards`, `create_board`, `update_board`, `delete_board`, `set_board_workflow` |
+| Boards | `get_board`, `list_boards`, `create_board`, `update_board`, `delete_board`, `set_board_workflow` |
 | Shares | `list_board_shares`, `share_board` |
 | Users | `list_users` — **admin role required** |
+
+`get_agent` returns stored editable configuration including instructions, permissions, runner, LLM configuration reference, limits, tool hooks, documents and voice settings. `effectiveLlm` shows resolved model/provider/limits and capabilities. Secrets remain write-only: `configuredSecrets` reports their presence/names, while API keys, credential values, OAuth configuration and runner session data are excluded. Omit secret fields on update to preserve them.
+
+`get_board` and admin board responses include the full `workflow` (columns, transition actions and conditions, version), plugins and filters, excluding credentials. Read it before editing. `set_board_workflow` takes a full column list; omitting `transitions` preserves the existing rules, while `[]` explicitly removes them. Column renames migrate existing task statuses through the same helper as REST.
+
+MCP `tools/list` exposes the REST agent create/update schemas directly, plus explicit column, action, condition and recurrence schemas. Actions are discriminated by `type`: `run_agent`, `assign_agent`, `assign_agent_individual`, `change_status`. Unknown action types, invalid modes, malformed deadlines and invalid recurrence intervals fail before execution.
 
 Role gates carried over verbatim from the REST routes:
 
@@ -125,7 +151,7 @@ Neither surface implements an access rule. `services/mcp/actorScope.ts` calls th
 | Agent | `checkAgentAccess` | `lib/agentAccess.ts`, `routes/agents.ts` |
 | Task | board-then-owner, mirroring `requireTaskAccess` | `routes/tasks.ts` |
 
-Mutations go through the same application functions too — `createAgentSchema`, `updateAgentSchema`, `agentManager.create/update/delete`, `normalizeWorkflowColumnIds`, `applyTaskUpdate`, `agentManager.addTask/deleteTask/restoreTask`. An MCP tool and its REST twin cannot diverge, because they are the same code.
+Mutations go through the same application functions too — `createAgentSchema`, `updateAgentSchema`, `agentManager.create/update/delete`, `normalizeWorkflowColumnIds`, `applyTaskUpdate`, `agentManager.addTask/deleteTask/restoreTask`. Execution, stop and column-rename operations reuse the application services. MCP-specific projections and schemas are tested over the actual MCP protocol, including write/read round trips.
 
 ### "Not found", never "forbidden"
 
@@ -166,3 +192,4 @@ Keys are minted from the UI's **MCP API Keys** modal, which also warns — with 
 | `api/src/services/__tests__/apiKeyScopeMiddleware.test.ts` | The scope ladder, legacy refusal, live demotion/deletion, 401 vs 403 vs 503, guard naming |
 | `api/src/services/__tests__/scopedMcpSurfaces.test.ts` | Cross-tenant read / write / delegate / search on both surfaces, "not found" wording, role-gated tools, the exact tool list of each surface |
 | `api/src/services/__tests__/routeInventory.test.ts` | That both mounts carry `requireApiKeyScope(<scope>)` and cannot be silently downgraded |
+| `api/src/services/__tests__/mcpOperations.test.ts` | MCP discovery/schema validation, complete configuration without secrets, workflow round trips and task migration, metadata persistence, explicit execution/stop/resume, recurrence lifecycle and cross-tenant denials. |
