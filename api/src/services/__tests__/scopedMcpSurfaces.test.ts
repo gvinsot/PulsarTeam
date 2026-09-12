@@ -23,6 +23,8 @@
 
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+const realDb = await import('../database.js');
+const realTasks = await import('../database/tasks.js');
 
 // ── The two tenants ─────────────────────────────────────────────────────────
 // Real UUIDs: `createAgentSchema` — the very schema POST /api/agents uses —
@@ -77,6 +79,7 @@ const updatedFields: { id: string; fields: Record<string, unknown> }[] = [];
 // access RULES is faked — only the rows they read.
 mock.module('../database.js', {
   namedExports: {
+    ...realDb,
     getBoardById: async (id: string) => BOARDS[id] || null,
     getBoardsByUser: async (userId: string) =>
       Object.values(BOARDS).filter(b => b.user_id === userId),
@@ -127,6 +130,7 @@ mock.module('../database.js', {
 
 mock.module('../database/tasks.js', {
   namedExports: {
+    ...realTasks,
     getTaskByIdPrefix: async (id: string) => TASKS[id] || null,
     getTaskById: async (id: string) => TASKS[id] || null,
     getTasksByAgent: async () => [],
@@ -583,6 +587,16 @@ test('the management surface exposes no agent, board, project or workflow mutati
   assert.deepEqual(
     names.sort(),
     [
+      'start_task',
+      'resume_task',
+      'stop_task',
+      'set_task_recurrence',
+      'list_task_templates',
+      'get_task_template',
+      'update_task_template',
+      'delete_task_template',
+      'run_task_template',
+      'list_task_template_runs',
       'create_task',
       'delegate_task',
       'delete_task',
@@ -593,7 +607,7 @@ test('the management surface exposes no agent, board, project or workflow mutati
       'restore_task',
       'search_tasks',
       'update_task',
-    ],
+    ].sort(),
     'a management key must not be able to reshape the instance that runs its tasks'
   );
 });
@@ -609,6 +623,7 @@ test('the admin surface exposes the declared administrative tool set', async () 
     'delete_board',
     'delete_project',
     'get_agent',
+    'get_board',
     'list_agent_skills',
     'list_board_shares',
     'list_boards',

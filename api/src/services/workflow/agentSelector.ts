@@ -21,6 +21,11 @@ export function isAgentBusy(agentId: string): boolean {
   return _agentRuns.has(agentId) || _busyAgents.has(agentId);
 }
 
+/** The live task reservation, used to avoid interrupting a stale assignee. */
+export function getAgentRunningTaskId(agentId: string): string | null {
+  return _agentRuns.get(agentId)?.taskId || null;
+}
+
 export function isTaskRunning(taskId: string): boolean {
   return _taskRuns.has(taskId);
 }

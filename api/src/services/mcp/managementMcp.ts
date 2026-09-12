@@ -18,7 +18,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getBoardsByUser, searchTasks } from '../database.js';
+import { getBoardsByUser, searchTasks, getProjectById } from '../database.js';
 import {
   getTaskByIdPrefix,
   getTasksByStatusAndBoards,
@@ -42,27 +42,9 @@ import {
   type McpRecord,
 } from './actorScope.js';
 import type { AgentManager } from '../agentManager/index.js';
-
-/** The task shape these tools hand back — never the raw row. */
-function taskView(task: McpRecord) {
-  return {
-    id: task.id,
-    title: task.title || null,
-    text: task.text,
-    status: task.status,
-    boardId: task.boardId || null,
-    agentId: task.agentId || null,
-    assignee: task.assignee || null,
-    project: task.project || null,
-    taskType: task.taskType || null,
-    priority: task.priority || null,
-    repoFullName: task.repoFullName || null,
-    storagePath: task.storagePath || null,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt || null,
-    completedAt: task.completedAt || null,
-  };
-}
+import { registerTaskOperations, taskView, editTaskMetadata } from './taskOperations.js';
+import { taskEditShape } from './schemas.js';
+import { errorMessage } from '../../lib/errors.js';
 
 /**
  * Resolve a caller-supplied status against a board's workflow columns. Labels
@@ -82,6 +64,8 @@ function resolveBoardStatus(board: McpRecord, status: string): { status?: string
 
 export function createManagementMcpServer(agentManager: AgentManager, actor: McpActor) {
   const server = new McpServer({ name: 'PulsarTeam Management', version: '1.0.0' });
+
+  registerTaskOperations(server, agentManager, actor);
 
   // ── list_boards ─────────────────────────────────────────────────────────
   server.tool(
@@ -157,14 +141,20 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
     {
       task: z.string().min(1).max(5000).describe('The task description'),
       board_id: z.string().describe('REQUIRED. Board UUID — see list_boards.'),
-      title: z.string().max(500).optional().describe('Optional short title'),
+      ...taskEditShape,
       status: z
         .string()
         .optional()
         .describe(
           'Initial column — workflow column label preferred, column id also accepted. Defaults to the board first column.'
         ),
-      project: z.string().max(200).optional().describe('Optional project name to tag the task'),
+      project: z
+        .string()
+        .max(200)
+        .optional()
+        .describe(
+          'Optional consistency check: must match the board project. The project is inherited from the board.'
+        ),
       repo_full_name: z
         .string()
         .optional()
@@ -180,6 +170,11 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
       task,
       board_id,
       title,
+      description,
+      priority,
+      due_date,
+      task_type,
+      is_manual,
       status,
       project,
       repo_full_name,
@@ -190,6 +185,14 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
       // 'edit' on the board, i.e. the same level POST /api/tasks demands.
       const board = await scopedBoard(actor, board_id, 'edit');
       if (!board.ok) return board.error!;
+
+      const boardProject = board.value.project_id
+        ? await getProjectById(board.value.project_id)
+        : null;
+      if (project && project !== boardProject?.name)
+        return jsonError(
+          'project must match the board project; attach the board to the project first.'
+        );
 
       const repoFullName = normalizeRepoFullName(repo_full_name);
       if (repo_full_name && !repoFullName) {
@@ -210,7 +213,7 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
       // is not an agent, so there is no agent to own the task.
       const created = await agentManager.addTask(
         null,
-        task,
+        description ?? task,
         { type: 'mcp', scope: 'management' },
         resolvedStatus,
         {
@@ -224,14 +227,27 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
       );
       if (!created) return jsonError('Failed to create task.');
 
-      if (title || project) {
+      if (
+        title !== undefined ||
+        priority !== undefined ||
+        due_date !== undefined ||
+        task_type !== undefined ||
+        is_manual !== undefined
+      ) {
         const fields: Record<string, unknown> = {};
-        if (title) fields.title = title;
-        if (project) fields.project = project;
-        await updateTaskFields(created.id, fields);
-        Object.assign(created, fields);
+        if (title !== undefined) fields.title = title;
+        if (priority !== undefined) fields.priority = priority;
+        if (due_date !== undefined) fields.dueDate = due_date;
+        if (task_type !== undefined) fields.taskType = task_type;
+        if (is_manual !== undefined) fields.isManual = is_manual;
+        try {
+          Object.assign(created, await editTaskMetadata(agentManager, created, fields, actor));
+        } catch (err) {
+          return jsonError(errorMessage(err));
+        }
       }
 
+      created.project = boardProject?.name || null;
       return jsonOk({ success: true, task: taskView(created) });
     }
   );
@@ -270,12 +286,13 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
   // ── update_task ─────────────────────────────────────────────────────────
   server.tool(
     'update_task',
-    'Update a task AND/OR mark it finished. Change its status (board column), repository or storage path, and/or record completion with a `comment` summary (plus optional `commits`). At least one of status, repo_full_name, storage_path, comment or done must be provided.',
+    'Edit task metadata (title, description, priority, due_date, task_type, is_manual), move its column, change repository/storage, or record completion. Omit fields to preserve them; null clears optional metadata. Recurring rules use set_task_recurrence and update_task_template.',
     {
       task_id: z.string().describe('Task UUID to update'),
       ...taskMutationSharedShape,
+      ...taskEditShape,
     },
-    async ({ task_id, ...rest }) => {
+    async ({ task_id, title, description, priority, due_date, task_type, is_manual, ...rest }) => {
       // Authorize BEFORE applyTaskUpdate: that function resolves the task by id
       // prefix across the whole instance by design (it backs the agent runtime),
       // so the tenant bound has to be proven here.
@@ -283,14 +300,33 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
       const allowed = await scopedTask(actor, task, agentManager.agents, 'edit');
       if (!allowed.ok) return allowed.error!;
 
-      // The identical function PUT /api/tasks/:id and the gateway MCP call.
-      const result = await applyTaskUpdate(agentManager, { task_id: allowed.value.id, ...rest });
-      if (!result.ok) return jsonError(result.error || 'Update failed');
-      return jsonOk({
-        success: true,
-        completed: !!result.completed,
-        task: taskView(result.task),
-      });
+      if (allowed.value.isTemplate)
+        return jsonError('Use update_task_template to edit a recurring rule.');
+      const fields: Record<string, unknown> = {};
+      if (title !== undefined) fields.title = title;
+      if (description !== undefined) fields.text = description || '';
+      if (priority !== undefined) fields.priority = priority;
+      if (due_date !== undefined) fields.dueDate = due_date;
+      if (task_type !== undefined) fields.taskType = task_type;
+      if (is_manual !== undefined) fields.isManual = is_manual;
+      const hasMutation =
+        rest.status !== undefined ||
+        rest.repo_full_name !== undefined ||
+        rest.storage_path !== undefined ||
+        !!rest.comment ||
+        !!rest.commits ||
+        !!rest.done;
+      if (!hasMutation && !Object.keys(fields).length) return jsonError('Nothing to update.');
+      try {
+        const result = hasMutation
+          ? await applyTaskUpdate(agentManager, { task_id: allowed.value.id, ...rest })
+          : { ok: true, task: allowed.value, completed: false };
+        if (!result.ok) return jsonError(result.error || 'Update failed');
+        const updated = await editTaskMetadata(agentManager, result.task, fields, actor);
+        return jsonOk({ success: true, completed: !!result.completed, task: taskView(updated) });
+      } catch (err) {
+        return jsonError(errorMessage(err));
+      }
     }
   );
 

@@ -21,6 +21,7 @@ import {
   countUnfinishedOccurrences,
   purgeTemplateOccurrences,
   updateTaskFields,
+  getBoardById,
   clearAllStaleActionRunning,
 } from '../database.js';
 import {
@@ -970,7 +971,8 @@ export const tasksMethods = {
     agentId: string,
     taskId: string,
     _streamCallback: any,
-    user: SessionClaims
+    user: SessionClaims,
+    options: { status?: string; executorId?: string } = {}
   ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
@@ -980,71 +982,132 @@ export const tasksMethods = {
     const task = await getTaskById(taskId);
     if (!task) throw new Error('Task not found');
     await requireTaskExecutionAccess(this.agents, task, user);
+    if (task.isTemplate) throw new Error('Use run_task_template to execute a recurring rule');
     if (task.status === 'done') throw new Error('Task already completed');
 
     // Check before clearing Stop/watching signals: a rejected resume must not
     // disturb the workflow already owning this task or executor.
-    const requestedExecutorId = task.assignee || agentId;
+    const requestedExecutorId = options.executorId || task.assignee || agentId;
+    const requestedExecutor = this.agents.get(requestedExecutorId);
+    if (!requestedExecutor || !(await checkAgentAccess(requestedExecutor, user, 'edit')).ok) {
+      throw new Error('Access denied to executor');
+    }
+    if (requestedExecutor.enabled === false) throw new Error('Executor is disabled');
     if (isTaskRunning(task.id) || isAgentBusy(requestedExecutorId)) {
       throw new Error('Agent or task is already processing another execution');
     }
 
-    console.log(
-      `[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`
-    );
-
-    clearTaskSignal(taskId, 'stopped');
-    clearTaskSignal(taskId, 'watching');
-    await updateTaskExecutionStatus(taskId, null);
-
-    // Reset the failure circuit breaker so a manual resume always gets a fresh attempt
-    this._taskResumeFailures?.delete(taskId);
-
-    // Notify frontend so the yellow "Stopped" state clears (executionStatus was
-    // just cleared in the DB above; reflect it on the fetched task for the emit).
-    task.executionStatus = null;
-    this._emit('task:updated', { agentId, task: { ...task, agentId } });
-
-    if (this._isActiveTaskStatus(task.status)) {
-      // Manual resume of an in-flight task: send the prompt directly so the
-      // agent actually picks up where it left off, instead of relying on the
-      // 5s task loop (which can skip resume if executionStatus="watching" or
-      // the workflow engine doesn't fire on_enter for the current column).
-      const executorId = task.assignee || agentId;
-      const executor = this.agents.get(executorId);
-
-      if (!executor) {
-        // Fall back to the workflow engine if the executor is gone
-        this._checkAutoRefine({ ...task, agentId }, { by: 'resume' });
-        return { taskId, response: null };
-      }
-
-      if (executor.status !== 'idle') {
-        throw new Error(`Agent "${executor.name}" is busy — stop it first before resuming`);
-      }
-
-      if (!this._loopProcessing) this._loopProcessing = new Set();
-      if (this._loopProcessing.has(executorId)) {
-        throw new Error(`Agent "${executor.name}" is already processing another task`);
-      }
-
-      this._loopProcessing.add(executorId);
-      // Fire-and-forget — caller (socket handler) doesn't await the agent run
-      this._resumeActiveTask(agentId, executor, task)
-        .catch((err: any) =>
-          console.error(
-            `[Resume] _resumeActiveTask failed for "${task.text?.slice(0, 60)}":`,
-            err.message
-          )
-        )
-        .finally(() => {
-          this._loopProcessing.delete(executorId);
+    let explicitReservation: (() => void) | null = null;
+    try {
+      if (options.status !== undefined) {
+        const board = task.boardId ? await getBoardById(task.boardId) : null;
+        if (
+          !board?.workflow?.columns?.some((c: { id: string }) => c.id === options.status) ||
+          !this._isActiveTaskStatus(options.status)
+        ) {
+          throw new Error('Execution requires an active workflow column');
+        }
+        if (requestedExecutor.status !== 'idle') throw new Error('Executor is busy');
+        explicitReservation = reserveAgentForTask(
+          requestedExecutorId,
+          task.id,
+          `${task.agentId}:${task.id}:explicit`
+        );
+        if (!explicitReservation)
+          throw new Error('Agent or task is already processing another execution');
+        // Prepare the explicit run without firing on_enter as a second execution.
+        const updated = await updateTaskFields(task.id, {
+          status: options.status,
+          assignee: requestedExecutorId,
+          error: null,
+          errorFromStatus: null,
+          pendingOnEnter: null,
+          completedActionIdx: null,
+          actionRunning: false,
+          actionRunningAgentId: null,
+          actionRunningMode: null,
+          history: [
+            ...(task.history || []),
+            {
+              at: new Date().toISOString(),
+              by: user.username || user.userId,
+              type: 'execution_requested',
+              from: task.status,
+              status: options.status,
+            },
+          ],
         });
-    } else {
-      this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
-    }
+        if (!updated) throw new Error('Failed to prepare task execution');
+        Object.assign(task, updated);
+      }
 
-    return { taskId, response: null };
+      console.log(
+        `[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`
+      );
+
+      clearTaskSignal(taskId, 'stopped');
+      clearTaskSignal(taskId, 'watching');
+      await updateTaskExecutionStatus(taskId, null);
+
+      // Reset the failure circuit breaker so a manual resume always gets a fresh attempt
+      this._taskResumeFailures?.delete(taskId);
+
+      // Notify frontend so the yellow "Stopped" state clears (executionStatus was
+      // just cleared in the DB above; reflect it on the fetched task for the emit).
+      task.executionStatus = null;
+      this._emit('task:updated', { agentId: task.agentId, task });
+
+      if (this._isActiveTaskStatus(task.status)) {
+        // Manual resume of an in-flight task: send the prompt directly so the
+        // agent actually picks up where it left off, instead of relying on the
+        // 5s task loop (which can skip resume if executionStatus="watching" or
+        // the workflow engine doesn't fire on_enter for the current column).
+        const executorId = task.assignee || agentId;
+        const executor = this.agents.get(executorId);
+
+        if (!executor) {
+          // Fall back to the workflow engine if the executor is gone
+          this._checkAutoRefine({ ...task, agentId }, { by: 'resume' });
+          return { taskId, response: null };
+        }
+
+        if (executor.status !== 'idle') {
+          throw new Error(`Agent "${executor.name}" is busy — stop it first before resuming`);
+        }
+
+        if (!this._loopProcessing) this._loopProcessing = new Set();
+        if (this._loopProcessing.has(executorId)) {
+          throw new Error(`Agent "${executor.name}" is already processing another task`);
+        }
+
+        this._loopProcessing.add(executorId);
+        // Fire-and-forget — caller (socket handler) doesn't await the agent run
+        const release = explicitReservation;
+        this._resumeActiveTask(
+          options.status !== undefined ? task.agentId : agentId,
+          executor,
+          task,
+          release || undefined
+        )
+          .catch((err: any) =>
+            console.error(
+              `[Resume] _resumeActiveTask failed for "${task.text?.slice(0, 60)}":`,
+              err.message
+            )
+          )
+          .finally(() => {
+            this._loopProcessing.delete(executorId);
+            release?.();
+          });
+        explicitReservation = null;
+      } else {
+        this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
+      }
+
+      return { taskId, response: null };
+    } finally {
+      explicitReservation?.();
+    }
   },
 
   async executeAllTasks(
@@ -1754,14 +1817,17 @@ export const tasksMethods = {
     });
   },
 
-  async _resumeActiveTask(this: any, agentId: string, agent: any, task: any): Promise<void> {
+  async _resumeActiveTask(
+    this: any,
+    agentId: string,
+    agent: any,
+    task: any,
+    reserved?: () => void
+  ): Promise<void> {
     const executorId = task.assignee || agentId;
     const executor = this.agents.get(executorId) || agent;
-    const releaseRun = reserveAgentForTask(
-      executorId,
-      task.id,
-      `${task.agentId}:${task.id}:resume`
-    );
+    const releaseRun =
+      reserved || reserveAgentForTask(executorId, task.id, `${task.agentId}:${task.id}:resume`);
     if (!releaseRun) {
       throw new Error(`Agent or task already reserved: agent="${executorId}" task="${task.id}"`);
     }
@@ -1860,6 +1926,9 @@ export const tasksMethods = {
         // executor makes — the only detection that works for CLI runners, whose
         // git activity happens silently inside their PTY.
         gitBaselineHead = await snapshotGitBaseline(this.executionManager, executorId);
+
+        // A Stop received during workspace preparation cancels prompt injection.
+        if (getTaskSignal(task.id, 'stopped')) return;
 
         if (terminalDriven) {
           await bindAgentRunner(this, executor);
