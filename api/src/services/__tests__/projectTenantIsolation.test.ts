@@ -68,6 +68,13 @@ mock.module('../database.js', {
       projectResourceCalls.storages.push(args);
       return [];
     },
+    // services/projectTransfer.ts (the export/import routes) imports these at
+    // module load. These tests never call those routes, but the module must
+    // still resolve every import.
+    getAgentsByBoard: async () => [],
+    getAllLlmConfigs: async () => [],
+    createBoard: async () => null,
+    updateBoard: async () => null,
   },
 });
 
@@ -115,7 +122,9 @@ function request(router: Router | RequestHandler, path: string): Promise<Respons
 }
 
 test('GET /projects lists and enriches only projects accessible to the caller', async () => {
-  const response = await request(projectRoutes(), '/');
+  // The three managers are only reached by the export/import routes, which this
+  // test never calls — GET /projects goes straight to the database mocks above.
+  const response = await request(projectRoutes(null as never, null as never, null as never), '/');
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), [
     {

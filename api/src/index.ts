@@ -231,7 +231,7 @@ app.use('/api/microsoft', microsoftOAuthRedirectRouter());
 
 app.use('/api/agents', authenticateToken, agentRoutes(agentManager));
 app.use('/api/templates', authenticateToken, templateRoutes());
-app.use('/api/projects', authenticateToken, projectRoutes());
+app.use('/api/projects', authenticateToken, projectRoutes(agentManager, skillManager, mcpManager));
 app.use('/api/code-index', authenticateToken, codeIndexRoutes(codeIndexService));
 app.use('/api/plugins', authenticateToken, pluginRoutes(skillManager, mcpManager));
 app.use('/api/agent-skills', authenticateToken, agentSkillRoutes());

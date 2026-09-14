@@ -21,6 +21,15 @@ import { validateBody } from '../lib/validate.js';
 import { createProjectSchema, updateProjectSchema } from '../schemas/projects.js';
 import { analyzeRepoCallGraph } from '../services/codeGraphAnalyzer.js';
 import { getSettings } from '../services/configManager.js';
+import {
+  exportProjectConfig,
+  importProjectConfig,
+  importRequestSchema,
+} from '../services/projectTransfer.js';
+import { errorMessage } from '../lib/errors.js';
+import type { AgentManager } from '../services/agentManager/index.js';
+import type { SkillManager } from '../services/skillManager.js';
+import type { MCPManager } from '../services/mcpManager.js';
 
 // ── In-memory caches for GitHub explorer endpoints ─────────────────────────
 const ACTIVITY_CACHE_TTL = 60 * 1000;
@@ -105,7 +114,11 @@ function uuidGuard(req: any, _res: any, next: any) {
   return next();
 }
 
-export function projectRoutes() {
+export function projectRoutes(
+  agentManager: AgentManager,
+  skillManager: SkillManager,
+  mcpManager: MCPManager
+) {
   const router = express.Router();
 
   // ── DB-backed projects CRUD ──────────────────────────────────────────────
@@ -196,6 +209,59 @@ export function projectRoutes() {
       const ok = await deleteProject(req.params.id);
       if (!ok) return res.status(404).json({ error: 'Project not found' });
       res.json({ success: true });
+    })
+  );
+
+  // ── Configuration export / import ────────────────────────────────────────
+  //
+  // The bundle carries the project, its boards (workflow, filters, plugin
+  // wiring), the agents standing on them, and the plugin / MCP definitions they
+  // reference — never a credential. See services/projectTransfer.ts.
+
+  // Import is declared BEFORE the `/:id` routes purely for readability; the
+  // literal path cannot collide with them (POST /:id is not a route).
+  router.post(
+    '/import',
+    requireRole('admin', 'advanced'),
+    validateBody(importRequestSchema),
+    asyncHandler(async (req, res) => {
+      try {
+        const result = await importProjectConfig(
+          req.body.bundle,
+          { userId: req.user?.userId || null, role: req.user?.role || 'basic' },
+          { agentManager, skillManager, mcpManager },
+          { name: req.body.name, includeAgents: req.body.includeAgents }
+        );
+        res.status(201).json(result);
+      } catch (err) {
+        console.error('Failed to import project:', errorMessage(err));
+        res.status(400).json({ error: errorMessage(err) || 'Failed to import project' });
+      }
+    })
+  );
+
+  router.get(
+    '/:id/export',
+    uuidGuard,
+    authorizeProjectAccess('read'),
+    asyncHandler(async (req, res) => {
+      const project = req.projectAccess.project;
+      const bundle = await exportProjectConfig(
+        project,
+        { userId: req.user?.userId || null, role: req.user?.role || 'basic' },
+        { skillManager, mcpManager }
+      );
+      // Named so a browser "save as" lands on a self-describing file.
+      const slug = String(project.name || 'project')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 60);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="pulsarteam-project-${slug || 'export'}.json"`
+      );
+      res.json(bundle);
     })
   );
 

@@ -637,6 +637,72 @@ POST /api/projects/refresh
 
 Forces a re-fetch of starred repositories from GitHub.
 
+### Export Project Configuration
+
+```
+GET /api/projects/:id/export
+```
+
+**Requires:** read access on the project.
+
+Returns the project's WHOLE configuration as one portable JSON document: the
+project itself, every board the caller can read on it (workflow, filters,
+plugin wiring), the agents standing on those boards, and the plugin / MCP
+server definitions they reference.
+
+**No credential ever leaves.** Agent `apiKey` / `credentials` / `mcpAuth`,
+plugin and MCP-server API keys, board `mcp_auth`, OAuth tokens and LLM config
+keys are all stripped; only boolean markers saying a credential is still needed
+survive (`configuredSecrets`, `requiresApiKey`). Tasks are not included, so the
+`repos` / `storages` on each board — which are derived from tasks — are
+informational only.
+
+```json
+{
+  "format": "pulsarteam.project-config",
+  "version": 1,
+  "exportedAt": "2026-09-14T10:00:00.000Z",
+  "project": { "name": "Apollo", "description": "", "rules": "" },
+  "boards": [{ "id": "…", "name": "Delivery", "workflow": {}, "filters": {}, "plugins": ["…"], "agents": [] }],
+  "plugins": [{ "id": "…", "name": "GitHub", "instructions": "…", "mcpServerIds": ["…"] }],
+  "mcpServers": [{ "id": "…", "name": "GitHub MCP", "url": "…", "requiresApiKey": true }],
+  "llmConfigs": [{ "id": "…", "name": "GPT", "provider": "openai", "model": "gpt-4" }]
+}
+```
+
+### Import Project Configuration
+
+```
+POST /api/projects/import
+```
+
+**Requires:** `admin` or `advanced` role (same gate as `POST /api/projects`).
+
+**Body:** `{ "bundle": <export document>, "name"?: string, "includeAgents"?: boolean }`
+
+Replays a bundle as a **new** project owned by the caller. An import only ever
+CREATES — it never overwrites. The project name is suffixed (`Apollo (2)`) when
+it is taken, boards and agents are created fresh and owned by the caller, and
+plugins / MCP servers are reused when one already exists under the same id and
+recreated (without credentials) otherwise.
+
+**Response:**
+```json
+{
+  "project": { "id": "…", "name": "Apollo (2)" },
+  "boards": [{ "id": "…", "name": "Delivery", "sourceId": "…" }],
+  "createdAgents": 3,
+  "createdPlugins": 1,
+  "reusedPlugins": 2,
+  "createdMcpServers": 1,
+  "reusedMcpServers": 0,
+  "warnings": ["MCP server \"GitHub MCP\" needs an API key — imported without one, …"]
+}
+```
+
+Both operations are also exposed on the admin MCP surface
+(`POST /api/mcp/admin`) as the `export_project` and `import_project` tools.
+
 ---
 
 ## Project Contexts

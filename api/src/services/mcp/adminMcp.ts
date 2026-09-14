@@ -46,6 +46,7 @@ import {
   workflowTransitionSchema,
 } from './schemas.js';
 import { applyColumnRenamesToBoardTasks } from '../workflow/renameBoardColumns.js';
+import { exportProjectConfig, importProjectConfig } from '../projectTransfer.js';
 import { jsonOk, jsonError } from '../mcpResponses.js';
 import { createMcpHttpHandler } from '../mcpHttpHandler.js';
 import { errorMessage } from '../../lib/errors.js';
@@ -426,6 +427,53 @@ export function createAdminMcpServer(
       const ok = await deleteProject(project_id);
       if (!ok) return notFound('Project');
       return jsonOk({ success: true, project_id });
+    }
+  );
+
+  // ── Project configuration transfer ──────────────────────────────────────
+
+  server.tool(
+    'export_project',
+    'Export the WHOLE configuration of a project you can read: the project itself, every board you can reach on it (workflow, filters, plugin wiring), the agents standing on those boards, and the plugin / MCP server definitions they reference. Credentials (API keys, OAuth tokens, per-agent secrets) are never included. Feed the result back to import_project.',
+    { project_id: z.string().describe('Project UUID') },
+    async ({ project_id }) => {
+      const project = await scopedProject(actor, project_id, 'read');
+      if (!project.ok) return project.error!;
+      const bundle = await exportProjectConfig(project.value as never, actor, {
+        skillManager,
+        mcpManager,
+      });
+      return jsonOk({ bundle });
+    }
+  );
+
+  server.tool(
+    'import_project',
+    'Recreate a project from an export_project bundle. Always CREATES — a new project (renamed when the name is taken), new boards and new agents, all owned by you; nothing existing is overwritten. Plugins and MCP servers already present under the same id are reused, the rest are recreated without their credentials. Requires the advanced or admin role.',
+    {
+      bundle: z.record(z.string(), z.any()).describe('A bundle produced by export_project'),
+      name: z.string().min(1).max(200).optional().describe('Override the imported project name'),
+      include_agents: z
+        .boolean()
+        .optional()
+        .describe('Recreate the agents on each board. Default true.'),
+    },
+    async ({ bundle, name, include_agents }) => {
+      // Same gate as POST /api/projects — an import creates a project.
+      if (actor.role !== 'admin' && actor.role !== 'advanced') {
+        return jsonError('Importing a project requires the advanced or admin role.');
+      }
+      try {
+        const result = await importProjectConfig(
+          bundle,
+          actor,
+          { agentManager, skillManager, mcpManager },
+          { name, includeAgents: include_agents }
+        );
+        return jsonOk({ success: true, ...result });
+      } catch (err) {
+        return jsonError(errorMessage(err));
+      }
     }
   );
 

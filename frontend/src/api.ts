@@ -54,7 +54,9 @@ import type {
   PluginDraft,
   PluginMcpDraft,
   Project,
+  ProjectConfigBundle,
   ProjectDetail,
+  ProjectImportResult,
   ProjectListItem,
   ProjectMutationAck,
   ProjectStatsResponse,
@@ -945,6 +947,18 @@ export const api = {
   updateProject: (id: string, fields: Partial<Project>) => put<Project>(`/projects/${id}`, fields),
 
   deleteProject: (id: string) => del<ProjectMutationAck>(`/projects/${id}`),
+
+  // Configuration transfer. The bundle holds the project, its boards, their
+  // agents and the plugin / MCP definitions they reference — never a credential
+  // (api/src/services/projectTransfer.ts).
+  exportProject: (id: string) => get<ProjectConfigBundle>(`/projects/${id}/export`),
+
+  // Always creates: a new project (renamed when the name is taken), new boards
+  // and new agents. `name` overrides the bundle's project name.
+  importProject: (
+    bundle: ProjectConfigBundle,
+    options: { name?: string; includeAgents?: boolean } = {}
+  ) => post<ProjectImportResult>('/projects/import', { bundle, ...options }),
 
   // Project ↔ Board linking
   attachBoardToProject: (projectId: string, boardId: string) =>

@@ -180,6 +180,8 @@ export type {
   ProjectTaskSummary,
   ProjectStatsResponse,
   ProjectMutationAck,
+  ProjectConfigBundle,
+  ProjectImportResult,
 } from './project';
 
 // ── user, session, api keys ────────────────────────────────────────────────

@@ -332,3 +332,43 @@ export interface ProjectStatsResponse {
 export interface ProjectMutationAck {
   success: true;
 }
+
+/**
+ * GET /api/projects/:id/export — a project's WHOLE configuration as one
+ * portable document. Produced by api/src/services/projectTransfer.ts.
+ *
+ * Deliberately loose past the identifying header: the bundle is a document the
+ * UI downloads, re-uploads and never reads into, so the only fields typed here
+ * are the ones the drawer shows in its import summary. It is validated
+ * server-side by `projectBundleSchema` on the way back in.
+ *
+ * It carries NO credential — agent keys, plugin/MCP keys, board mcp_auth and
+ * OAuth tokens are all stripped on export.
+ */
+export interface ProjectConfigBundle {
+  format: 'pulsarteam.project-config';
+  version: number;
+  exportedAt?: string;
+  project: { id?: string; name: string; description?: string; rules?: string };
+  boards: Array<{ name: string; agents?: unknown[]; [key: string]: unknown }>;
+  plugins: Array<{ id: string; name: string; [key: string]: unknown }>;
+  mcpServers: Array<{ id: string; name: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+/**
+ * POST /api/projects/import — what the import actually created. An import never
+ * overwrites, so every count below is of NEW rows, except the `reused*` pair
+ * which counts the plugins / MCP servers that already existed under the same id.
+ */
+export interface ProjectImportResult {
+  project: { id: string; name: string };
+  boards: Array<{ id: string; name: string; sourceId: string | null }>;
+  createdAgents: number;
+  createdPlugins: number;
+  reusedPlugins: number;
+  createdMcpServers: number;
+  reusedMcpServers: number;
+  /** Everything the import could not carry over — missing keys, dropped refs. */
+  warnings: string[];
+}

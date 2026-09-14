@@ -216,6 +216,11 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
     'requireRole(admin|advanced)',
     'authorizeProjectAccess(admin)',
   ],
+  // Configuration transfer. The export reads a project the caller may read and
+  // is itself filtered to the boards they may read (services/projectTransfer.ts);
+  // the import only ever CREATES, so it carries the same gate as POST /projects.
+  'GET /api/projects/:id/export': ['authenticateToken', 'authorizeProjectAccess(read)'],
+  'POST /api/projects/import': ['authenticateToken', 'requireRole(admin|advanced)'],
   'GET /api/projects/:id/boards': ['authenticateToken', 'authorizeProjectAccess(read)'],
   'POST /api/projects/:id/boards/:boardId': [
     'authenticateToken',
