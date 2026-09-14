@@ -25,6 +25,7 @@ import {
   exportProjectConfig,
   importProjectConfig,
   importRequestSchema,
+  ProjectImportAuthorizationError,
 } from '../services/projectTransfer.js';
 import { errorMessage } from '../lib/errors.js';
 import type { AgentManager } from '../services/agentManager/index.js';
@@ -235,7 +236,9 @@ export function projectRoutes(
         res.status(201).json(result);
       } catch (err) {
         console.error('Failed to import project:', errorMessage(err));
-        res.status(400).json({ error: errorMessage(err) || 'Failed to import project' });
+        res
+          .status(err instanceof ProjectImportAuthorizationError ? 403 : 400)
+          .json({ error: errorMessage(err) || 'Failed to import project' });
       }
     })
   );

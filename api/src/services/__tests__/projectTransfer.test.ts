@@ -109,7 +109,7 @@ function fakeAgentManager() {
   } as any;
 }
 
-const ACTOR = { userId: 'user-A', role: 'advanced' };
+const ACTOR = { userId: 'user-A', role: 'admin' };
 
 function resetDb() {
   db.boards = [];
@@ -310,11 +310,15 @@ test('import reuses plugins and MCP servers that already exist under the same id
 
   const skillManager = fakeSkillManager(SOURCE_PLUGINS);
   const mcpManager = fakeMcpManager(SOURCE_MCPS);
-  const result = await importProjectConfig(bundle, ACTOR, {
-    agentManager: fakeAgentManager(),
-    skillManager,
-    mcpManager,
-  });
+  const result = await importProjectConfig(
+    bundle,
+    { ...ACTOR, role: 'advanced' },
+    {
+      agentManager: fakeAgentManager(),
+      skillManager,
+      mcpManager,
+    }
+  );
 
   assert.equal(result.reusedPlugins, 1);
   assert.equal(result.createdPlugins, 0);

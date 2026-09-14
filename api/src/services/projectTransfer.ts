@@ -342,6 +342,9 @@ export interface ImportOptions {
   includeAgents?: boolean;
 }
 
+/** A denied import must be reported as forbidden by HTTP callers. */
+export class ProjectImportAuthorizationError extends Error {}
+
 export interface ImportResult {
   project: { id: string; name: string };
   boards: Array<{ id: string; name: string; sourceId: string | null }>;
@@ -367,8 +370,8 @@ async function resolveAvailableProjectName(name: string): Promise<string> {
 /**
  * Replay a bundle as a NEW project owned by `actor`.
  *
- * Callers must have already checked that the actor may create a project (the
- * advanced/admin gate `POST /api/projects` applies). Every created board and
+ * Enforces the advanced/admin project-creation gate and the admin-only global
+ * MCP-creation policy before any writes or connections. Every created board and
  * agent is owned by the actor, whatever the bundle says: an import is never a
  * way to plant resources under someone else's account.
  */
@@ -378,6 +381,12 @@ export async function importProjectConfig(
   deps: TransferDeps,
   options: ImportOptions = {}
 ): Promise<ImportResult> {
+  const isAdmin = actor.role === 'admin';
+  if (!isAdmin && actor.role !== 'advanced') {
+    throw new ProjectImportAuthorizationError(
+      'Importing a project requires the advanced or admin role.'
+    );
+  }
   const parsed = projectBundleSchema.safeParse(input);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
@@ -389,12 +398,27 @@ export async function importProjectConfig(
   const { agentManager, skillManager, mcpManager } = deps;
   const warnings: string[] = [];
 
+  // The MCP catalogue is readable by every authenticated user. Resolve it once
+  // before any side effects: advanced users may reuse these ids, but must never
+  // create a global server (which also connects to its URL when enabled).
+  const existingMcpIds = new Set(
+    bundle.mcpServers.filter(server => mcpManager.getById(server.id)).map(server => server.id)
+  );
+  if (!isAdmin) {
+    const missing = bundle.mcpServers.filter(server => !existingMcpIds.has(server.id));
+    if (missing.length) {
+      throw new ProjectImportAuthorizationError(
+        `Import requires the admin role to create missing global MCP servers: ${missing.map(server => server.id).join(', ')}. Ask an administrator to configure them before importing.`
+      );
+    }
+  }
+
   // 1. MCP servers ─ reuse by id, otherwise recreate (never with credentials).
   const mcpIdMap = new Map<string, string>();
   let createdMcpServers = 0;
   let reusedMcpServers = 0;
   for (const server of bundle.mcpServers) {
-    if (mcpManager.getById(server.id)) {
+    if (existingMcpIds.has(server.id)) {
       mcpIdMap.set(server.id, server.id);
       reusedMcpServers++;
       continue;
@@ -434,7 +458,6 @@ export async function importProjectConfig(
   const pluginIdMap = new Map<string, string>();
   let createdPlugins = 0;
   let reusedPlugins = 0;
-  const isAdmin = actor.role === 'admin';
   for (const plugin of bundle.plugins) {
     const existing = skillManager.getById(plugin.id);
     if (existing && skillManager.canView(existing, actor.userId, isAdmin)) {

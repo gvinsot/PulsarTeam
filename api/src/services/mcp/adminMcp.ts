@@ -449,7 +449,7 @@ export function createAdminMcpServer(
 
   server.tool(
     'import_project',
-    'Recreate a project from an export_project bundle. Always CREATES — a new project (renamed when the name is taken), new boards and new agents, all owned by you; nothing existing is overwritten. Plugins and MCP servers already present under the same id are reused, the rest are recreated without their credentials. Requires the advanced or admin role.',
+    'Recreate a project from an export_project bundle. Always CREATES — a new project (renamed when the name is taken), new boards and new agents, all owned by you; nothing existing is overwritten. Plugins and MCP servers already present under the same id are reused, the rest are recreated without their credentials. Requires the advanced or admin role. Missing global MCP servers require admin; advanced imports are refused before any changes if a server is missing.',
     {
       bundle: z.record(z.string(), z.any()).describe('A bundle produced by export_project'),
       name: z.string().min(1).max(200).optional().describe('Override the imported project name'),
