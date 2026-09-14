@@ -633,6 +633,9 @@ export async function _ensureAgentOnTaskRepo(
   // clone fails with a GitHub auth error.
   let gitCreds: AgentGitCredentials | null = null;
   try {
+    // Select the runner before provisioning: an unbound agent defaults to the
+    // sandbox, while terminal injection later binds it to its CLI container.
+    await bindAgentRunner(agentManager, agent);
     gitCreds = await resolveAgentGitCredentials(agent);
     const { switched } = await ensureAgentWorkspace(agentManager.executionManager, agent, {
       repo: taskRepo,

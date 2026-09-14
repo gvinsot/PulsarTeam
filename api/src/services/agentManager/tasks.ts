@@ -1870,6 +1870,9 @@ export const tasksMethods = {
         // TTL-debounced — see services/execution/agentWorkspace.ts.
         if (this.executionManager) {
           try {
+            // Provision the same container that will receive the task prompt.
+            // Without binding first, a fresh API process defaults to sandbox.
+            await bindAgentRunner(this, executor);
             const gitCreds = await resolveAgentGitCredentials(executor);
             const { switched } = await ensureAgentWorkspace(this.executionManager, executor, {
               repo: taskRepo,

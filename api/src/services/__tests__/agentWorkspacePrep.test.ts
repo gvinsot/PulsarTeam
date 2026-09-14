@@ -351,6 +351,60 @@ mock.module('../database.js', {
 });
 
 const { _ensureAgentOnTaskRepo } = await import('../workflow/actionExecutor.js');
+const { ExecutionManager } = await import('../execution/executionManager.js');
+
+for (const runner of [
+  'claudecode',
+  'codex',
+  'hermes',
+  'openclaw',
+  'opencode',
+  'aider',
+  'sandbox',
+]) {
+  test(`workflow provisions ${runner} before injecting a task after an API restart`, async t => {
+    // The production manager has no resolver: its initial route is sandbox.
+    const em = new ExecutionManager();
+    const requests: Array<{ url: string; headers: any; body: any }> = [];
+    t.mock.method(globalThis, 'fetch', async (url: any, init: any) => {
+      requests.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) });
+      return Response.json({ status: 'success' });
+    });
+    const agent: any = {
+      ...agentOnRepo(),
+      runner,
+      ownerId: 'owner-1',
+      llmConfigId: 'llm-1',
+      permissions: { execution: { shellAccess: true } },
+    };
+    const agentManager: any = {
+      executionManager: em,
+      resolveLlmConfig: () => ({ managesContext: runner !== 'sandbox' }),
+    };
+    const result = await _ensureAgentOnTaskRepo(
+      agent,
+      { id: 'task-1', repoFullName: agent.project } as any,
+      null,
+      { agentManager, mode: 'decide', agentId: agent.id }
+    );
+    assert.deepEqual(result, { ok: true });
+    await em.sendTerminalInput(agent.id, 'Implement the task');
+    const prepare = requests.find(r => r.url.endsWith('/projects/ensure'))!;
+    const inject = requests.find(r => r.url.endsWith('/terminal/sessions/agent-1/input'))!;
+    assert.ok(prepare);
+    assert.ok(inject);
+    assert.ok(requests.indexOf(prepare) < requests.indexOf(inject));
+    assert.equal(em.getProviderType(agent.id), runner);
+    assert.equal(new URL(prepare.url).origin, new URL(inject.url).origin);
+    assert.match(prepare.url, /\/projects\/ensure$/);
+    assert.equal(prepare.body.project, agent.project);
+    assert.equal(prepare.body.git_credentials.token, 'gh-token');
+    assert.equal(prepare.headers['X-Owner-Id'], 'owner-1');
+    assert.equal(prepare.headers['X-Agent-Id'], agent.id);
+    assert.deepEqual(JSON.parse(prepare.headers['X-Agent-Permissions']), agent.permissions);
+    assert.match(inject.url, /\/terminal\/sessions\/agent-1\/input$/);
+  });
+}
 
 test('the action executor prepares the runner even with nothing to switch', async () => {
   const em = makeExecutionManager('gvinsot/PulsarTeam');
