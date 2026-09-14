@@ -212,10 +212,11 @@ _DEFAULT_READY_RECIPE = _ReadyRecipe(hints=_INPUT_READY_HINTS)
 # stable sentinel is the status footer, verified on 2.1.258:
 #     cold start / idle  ⏸ manual mode on · ? for shortcuts · ← for agents
 #     mid-response       ⏸ manual mode on · esc to interrupt · ← for agents
-# so `? for shortcuts` marks "ready" and its mid-response replacement is the
-# busy veto (kept explicit even though the two never co-occur today).
+# 2.1.267 omits `? for shortcuts` in bypass mode and instead renders
+# `bypass permissions on (shift+tab to cycle)`. Keep the interrupt veto:
+# permission-mode hints can remain visible while a response is running.
 _CLAUDE_READY_RECIPE = _ReadyRecipe(
-    hints=("? for shortcuts",),
+    hints=("? for shortcuts", "shift+tab to cycle"),
     busy=("esc to interrupt",),
 )
 

@@ -83,6 +83,28 @@ export interface WorkspaceExecutionManager {
   ): Promise<void>;
   installGitCredentials?(agentId: string, creds: AgentGitCredentials | null): Promise<void>;
   getProject?(agentId: string): string | null;
+  getTerminalSession?(agentId: string): Promise<{ alive?: boolean } | null>;
+}
+
+/** A browser attach observes a live session; it must not switch its repo or
+ * fetch/reset the working tree underneath the running CLI. Call after binding
+ * the agent to its runner. With no session, provision the current runtime repo
+ * (if known) before falling back to the persisted agent configuration. */
+export async function ensureTerminalWorkspace(
+  executionManager: WorkspaceExecutionManager,
+  agent: WorkspaceAgent,
+  gitCredentials: AgentGitCredentials | null
+): Promise<void> {
+  const session = await executionManager.getTerminalSession?.(agent.id);
+  if (session?.alive) return;
+  const project = executionManager.getProject?.(agent.id) || agent.project || null;
+  const gitUrl = buildRepoCloneUrl(project);
+  if (gitUrl) {
+    assertAllowedCloneUrl(gitUrl, project);
+    await executionManager.ensureProject?.(agent.id, project, gitUrl, gitCredentials);
+  } else if (gitCredentials?.token) {
+    await executionManager.installGitCredentials?.(agent.id, gitCredentials);
+  }
 }
 
 export interface EnsureAgentWorkspaceOptions {

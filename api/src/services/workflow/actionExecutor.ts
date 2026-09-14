@@ -17,6 +17,7 @@ import { findAgentByRole, findAgentForAssignment, reserveAgentForTask } from './
 import { resolveAutoRole } from './roleRouter.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
 import {
+  saveAgent,
   saveTaskToDb,
   updateTaskExecutionStatus,
   updateTaskFields,
@@ -646,7 +647,14 @@ export async function _ensureAgentOnTaskRepo(
     if (switched && agentManager._switchProjectContext) {
       agentManager._switchProjectContext(agent, agent.project, taskRepo);
     }
-    if (taskRepo) agent.project = taskRepo;
+    if (taskRepo) {
+      agent.project = taskRepo;
+      if (switched) agent.projectChangedAt = new Date().toISOString();
+      // Terminal upgrades read the DB. Commit the task's repo before sending
+      // its prompt, or opening the terminal can restore the previous repo.
+      await saveAgent(agent);
+      agentManager._emit?.('agent:updated', agentManager._sanitize(agent));
+    }
     return { ok: true };
   } catch (switchErr) {
     console.error(

@@ -37,7 +37,7 @@ mock.module('../../routes/github.js', {
   },
 });
 
-const { ensureAgentWorkspace, resolveAgentGitCredentials } =
+const { ensureAgentWorkspace, ensureTerminalWorkspace, resolveAgentGitCredentials } =
   await import('../execution/agentWorkspace.js');
 
 /** Records every call the preparation makes towards the runner. */
@@ -346,12 +346,98 @@ test('a credential lookup failure never aborts the run', async () => {
 // still reach the runner.
 
 const realDb = await import('../database.js');
+let persistAgent = async (_agent: any): Promise<void> => {};
 mock.module('../database.js', {
-  namedExports: { ...realDb, getTaskById: async () => null, getPool: () => null },
+  namedExports: {
+    ...realDb,
+    getTaskById: async () => null,
+    getPool: () => null,
+    saveAgent: (agent: any) => persistAgent(agent),
+  },
+});
+
+beforeEach(() => {
+  persistAgent = async () => {};
 });
 
 const { _ensureAgentOnTaskRepo } = await import('../workflow/actionExecutor.js');
 const { ExecutionManager } = await import('../execution/executionManager.js');
+
+test('a task repo switch is persisted before preparation completes and a browser reads it', async () => {
+  const em = makeExecutionManager('gvinsot/PulsarTeam');
+  const agent: any = agentOnRepo();
+  let storedAgent = structuredClone(agent);
+  let releaseSave!: () => void;
+  let saveStarted!: () => void;
+  const saving = new Promise<void>(resolve => {
+    saveStarted = resolve;
+  });
+  const saveGate = new Promise<void>(resolve => {
+    releaseSave = resolve;
+  });
+  persistAgent = async value => {
+    saveStarted();
+    await saveGate;
+    storedAgent = structuredClone(value);
+  };
+  const agentManager: any = {
+    executionManager: em,
+    _switchProjectContext: mock.fn(),
+    _sanitize: (value: any) => value,
+    _emit: mock.fn(),
+  };
+  let prepared = false;
+  const preparation = _ensureAgentOnTaskRepo(
+    agent,
+    { id: 'task-1', repoFullName: 'gvinsot/Jarvis' } as any,
+    null,
+    { agentManager, mode: 'decide', agentId: agent.id }
+  ).then(result => {
+    prepared = true;
+    return result;
+  });
+  await saving;
+  try {
+    assert.equal(prepared, false, 'prompt injection must wait for the DB write');
+    assert.equal(agentManager._emit.mock.callCount(), 0);
+  } finally {
+    releaseSave();
+  }
+  assert.deepEqual(await preparation, { ok: true });
+  assert.equal(storedAgent.project, 'gvinsot/Jarvis');
+  assert.ok(storedAgent.projectChangedAt);
+  assert.equal(agentManager._emit.mock.callCount(), 1);
+  const browserManager = makeExecutionManager();
+  await ensureTerminalWorkspace(browserManager, storedAgent, creds);
+  assert.equal(browserManager.getProject(), 'gvinsot/Jarvis');
+});
+
+test('opening a live terminal never re-provisions a stale configured repo', async () => {
+  const em = {
+    ...makeExecutionManager('gvinsot/Jarvis'),
+    getTerminalSession: async () => ({ alive: true }),
+  };
+  await ensureTerminalWorkspace(em, agentOnRepo(), creds);
+  assert.deepEqual(em.names(), []);
+  assert.equal(em.getProject(), 'gvinsot/Jarvis');
+});
+
+test('a dead terminal is prepared on the runtime repo even if the DB snapshot is stale', async () => {
+  const em = {
+    ...makeExecutionManager('gvinsot/Jarvis'),
+    getTerminalSession: async () => ({ alive: false }),
+  };
+  await ensureTerminalWorkspace(em, agentOnRepo(), creds);
+  assert.equal(em.calls[0].fn, 'ensureProject');
+  assert.equal(em.calls[0].args[1], 'gvinsot/Jarvis');
+  assert.deepEqual(em.calls[0].args[3], creds);
+});
+
+test('a fresh repo-less terminal still receives git credentials', async () => {
+  const em = makeExecutionManager();
+  await ensureTerminalWorkspace(em, { id: 'agent-1', project: null }, creds);
+  assert.deepEqual(em.names(), ['installGitCredentials']);
+});
 
 for (const runner of [
   'claudecode',

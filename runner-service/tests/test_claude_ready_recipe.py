@@ -8,12 +8,13 @@ Code renders none of the defaults (`▌`, `Type / for commands`, `Try "`):
   • `Try "…"` is a cold-start example prompt — gone once the box has been used,
     and absent entirely when the CLI is logged out.
 
-The frames below are verbatim `tmux capture-pane` output from claude 2.1.258 in
-a runner container. They show the one sentinel that survives every state — the
-status footer — and its mid-response replacement:
+The frames below include `tmux capture-pane` output from claude 2.1.258 and
+2.1.267 in a runner container. In 2.1.258 the status footer changes with a turn:
 
     cold start / idle   ⏸ manual mode on · ? for shortcuts · ← for agents
     mid-response        ⏸ manual mode on · esc to interrupt · ← for agents
+
+In 2.1.267 bypass mode, `shift+tab to cycle` replaces the shortcuts hint.
 
 Re-capturing these is how we notice the CLI moved its chrome again.
 
@@ -90,6 +91,17 @@ CLAUDE_RAW_STREAM_FOOTER = (
     "────⏸manualmodeon·?forshortcuts·←foragentsNotloggedin·Run/login●high·/effort"
 )
 
+# Captured from the affected 2.1.267 session: the shortcuts hint is absent.
+CLAUDE_BYPASS_IDLE = """\
+ ▐▛███▛█   Claude Code v2.1.267
+▝▜██████▀  Opus 5 · Claude API
+  ▝▝ ▝▝    ~/projects/gvinsot/PulsarTeam
+────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+"""
+
 CLAUDE_RECIPE = _ready_recipe(["claude"])
 
 
@@ -104,8 +116,10 @@ def _classify(frame, recipe=None):
         (CLAUDE_IDLE_AFTER_TURN, "idle after turn"),
         (CLAUDE_LOGGED_OUT, "logged out"),
         (CLAUDE_RAW_STREAM_FOOTER, "raw stream, spaces collapsed"),
+        (CLAUDE_BYPASS_IDLE, "2.1.267 bypass mode"),
+        (re.sub(r"\s+", "", CLAUDE_BYPASS_IDLE), "2.1.267 raw stream"),
     ],
-    ids=["cold-start", "idle-after-turn", "logged-out", "raw-stream"],
+    ids=["cold-start", "idle-after-turn", "logged-out", "raw-stream", "bypass", "bypass-raw"],
 )
 def test_ready_frames_are_recognised(frame, label):
     assert _classify(frame), (
@@ -119,6 +133,14 @@ def test_mid_response_is_not_mistaken_for_ready():
     """`wait_until_input_ready` doubles as the "PTY is free" gate: a prompt
     pasted here interleaves into a running turn."""
     assert not _classify(CLAUDE_BUSY)
+
+
+@pytest.mark.parametrize("collapsed", [False, True])
+def test_bypass_hint_does_not_override_a_running_turn(collapsed):
+    frame = CLAUDE_BYPASS_IDLE + "\n  esc to interrupt\n"
+    if collapsed:
+        frame = re.sub(r"\s+", "", frame)
+    assert not _classify(frame)
 
 
 def test_default_hints_only_ever_matched_the_cold_start():
@@ -167,6 +189,21 @@ import glob  # noqa: E402
 import shutil  # noqa: E402
 
 from pty_session import PtySession  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_bypass_idle_repaint_releases_the_input_gate(monkeypatch):
+    session = PtySession(agent_id="bypass-ready", cmd=["claude"], cwd="/tmp", env={})
+    monkeypatch.setattr(session, "is_alive", lambda: True)
+
+    async def repaint():
+        session._maybe_auto_answer_startup_prompt(CLAUDE_BYPASS_IDLE.encode())
+
+    monkeypatch.setattr(session, "request_repaint", repaint)
+    # Exercise the actual gate with a short budget, including a repeat on an
+    # already idle session. Neither call should need the blind-paste fallback.
+    assert await session.wait_until_input_ready(timeout=1.0)
+    assert await session.wait_until_input_ready(timeout=1.0)
 
 LIVE_TIMEOUT = float(os.getenv("CLAUDE_READY_TIMEOUT_SEC", "60"))
 ANSWER_TIMEOUT = float(os.getenv("CLAUDE_ANSWER_TIMEOUT_SEC", "150"))

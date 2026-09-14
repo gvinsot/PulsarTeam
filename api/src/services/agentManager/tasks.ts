@@ -3,6 +3,7 @@ import { isAgentBusy, isTaskRunning, reserveAgentForTask } from '../workflow/age
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
 import {
+  saveAgent,
   saveTaskToDb,
   deleteTaskFromDb,
   deleteTasksByAgent,
@@ -1885,6 +1886,7 @@ export const tasksMethods = {
                 `🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`
               );
               this._switchProjectContext?.(executor, executor.project, taskRepo);
+              executor.projectChangedAt = new Date().toISOString();
             }
           } catch (switchErr: any) {
             console.error(
@@ -1893,7 +1895,11 @@ export const tasksMethods = {
             throw switchErr;
           }
         }
-        if (taskRepo) executor.project = taskRepo;
+        if (taskRepo) {
+          executor.project = taskRepo;
+          await saveAgent(executor);
+          this._emit('agent:updated', this._sanitize(executor));
+        }
 
         clearTaskSignal(task.id, 'completed');
         clearTaskSignal(task.id, 'comment');

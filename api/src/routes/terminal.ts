@@ -36,7 +36,7 @@ import { resolveSessionToken, verifySessionToken } from '../middleware/session.j
 import { getAgentById } from '../services/database.js';
 import { getLlmConfig } from '../services/database/llmConfigs.js';
 import { getGitHubCredentialsForAgent } from './github.js';
-import { buildRepoCloneUrl } from '../services/repoUrl.js';
+import { ensureTerminalWorkspace } from '../services/execution/agentWorkspace.js';
 import { isCliRunner } from '../services/runners.js';
 import { runnerServiceUrlFor } from '../services/execution/runnerRegistry.js';
 
@@ -225,7 +225,8 @@ export function installTerminalProxy(
       return;
     }
 
-    // Provision the agent's execution environment BEFORE opening the PTY so
+    // Reuse a live PTY without touching its project. Otherwise provision the
+    // agent's execution environment BEFORE opening the PTY so
     // the runner's prepare_interactive resolves cwd to the selected repo
     // instead of falling back to CLI_CWD=/app. Mirrors the chat path
     // (agentManager/chat.ts). Best-effort: a failure shouldn't block the
@@ -249,12 +250,7 @@ export function installTerminalProxy(
           permissions: agent.permissions || null,
           llmConfig: runnerContext.llmConfig || null,
         });
-        const gitUrl = buildRepoCloneUrl(agent.project);
-        if (gitUrl && executionManager.ensureProject) {
-          await executionManager.ensureProject(agentId, agent.project, gitUrl, gitCreds);
-        } else if (gitCreds?.token && executionManager.installGitCredentials) {
-          await executionManager.installGitCredentials(agentId, gitCreds);
-        }
+        await ensureTerminalWorkspace(executionManager, agent, gitCreds);
       } catch (err: any) {
         console.warn(
           `[Terminal] Project/credential provisioning failed for agent ${agentId.slice(0, 8)}: ${err.message}`
