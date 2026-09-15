@@ -216,6 +216,17 @@ const MIGRATIONS: Migration[] = [
     'CREATE INDEX IF NOT EXISTS idx_api_keys_board ON api_keys (board_id) WHERE board_id IS NOT NULL',
   ]),
 
+  // Text written outside the tenant (insert keys: webhooks, the public contact
+  // form) is kept inert until a human approves it, and insert keys can be
+  // narrowed to some columns of their board (lib/taskTrust.ts). Existing rows
+  // stay NULL = written inside the tenant: nothing before this migration could
+  // be flagged, and backfilling from `source` would strand live tasks.
+  sqlMigration('202609160001_external_task_trust', 'external task trust and key columns', [
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS trust_level TEXT',
+    "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS security_flags JSONB DEFAULT '[]'",
+    'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS allowed_columns JSONB',
+  ]),
+
   {
     id: '202607010001_remove_legacy_default_boards',
     name: 'remove legacy Default boards',

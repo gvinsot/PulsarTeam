@@ -156,6 +156,11 @@ const TABLES = [
       action_running_mode TEXT,
       pending_on_enter TEXT,
       is_manual BOOLEAN DEFAULT FALSE,
+      -- Provenance of the text (lib/taskTrust.ts): NULL = written inside the
+      -- tenant, 'untrusted' = external (insert key) awaiting human approval,
+      -- 'approved' = external and approved. Set at INSERT only.
+      trust_level TEXT,
+      security_flags JSONB DEFAULT '[]',
       -- Recurring tasks: the rule lives in its own row (is_template), never on a
       -- board column and never executed; each due date spawns an occurrence that
       -- carries template_id + occurrence_seq. Invariant: recurrence IS NOT NULL

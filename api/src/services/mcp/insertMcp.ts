@@ -18,17 +18,18 @@ import { jsonError, jsonOk } from '../mcpResponses.js';
 import { createMcpHttpHandler } from '../mcpHttpHandler.js';
 import type { AgentManager } from '../agentManager/index.js';
 import { scopedBoard, type McpActor, type McpRecord } from './actorScope.js';
-import { createBoardTask, createTaskFieldsShape } from './taskInsertion.js';
+import { allowedBoardColumns, createBoardTask, createTaskFieldsShape } from './taskInsertion.js';
 
-/** What an insert key may learn about its own board. */
-export function insertBoardView(board: McpRecord) {
+/**
+ * What an insert key may learn about its own board: its name and the columns
+ * the key may write to — not the ones it may not.
+ */
+export function insertBoardView(board: McpRecord, allowedColumns?: string[] | null) {
+  const columns = allowedBoardColumns(board, allowedColumns) || board.workflow?.columns || [];
   return {
     id: board.id,
     name: board.name,
-    columns: (board.workflow?.columns || []).map((c: McpRecord) => ({
-      id: c.id,
-      label: c.label,
-    })),
+    columns: columns.map((c: McpRecord) => ({ id: c.id, label: c.label })),
   };
 }
 
@@ -37,6 +38,8 @@ export interface InsertKeyContext {
   apiKeyId: string;
   /** The board the key is bound to. */
   boardId: string;
+  /** Column ids the key may write to; null = every column. */
+  allowedColumns?: string[] | null;
 }
 
 export function createInsertMcpServer(
@@ -53,7 +56,7 @@ export function createInsertMcpServer(
     async () => {
       const board = await scopedBoard(actor, key.boardId, 'edit');
       if (!board.ok) return board.error!;
-      return jsonOk({ board: insertBoardView(board.value) });
+      return jsonOk({ board: insertBoardView(board.value, key.allowedColumns) });
     }
   );
 
@@ -64,11 +67,14 @@ export function createInsertMcpServer(
     async fields => {
       const board = await scopedBoard(actor, key.boardId, 'edit');
       if (!board.ok) return board.error!;
-      const created = await createBoardTask(agentManager, actor, board.value, fields, {
-        type: 'mcp',
-        scope: 'insert',
-        apiKeyId: key.apiKeyId,
-      });
+      const created = await createBoardTask(
+        agentManager,
+        actor,
+        board.value,
+        fields,
+        { type: 'mcp', scope: 'insert', apiKeyId: key.apiKeyId },
+        { allowedColumns: key.allowedColumns }
+      );
       if (!created.ok) return jsonError(created.error || 'Failed to create task.');
       return jsonOk({ success: true, task: created.task });
     }
@@ -86,6 +92,7 @@ export function createInsertMcpHandler(agentManager: AgentManager) {
     return createInsertMcpServer(agentManager, ctx.user, {
       apiKeyId: ctx.apiKey.id,
       boardId: ctx.apiKey.boardId,
+      allowedColumns: ctx.apiKey.allowedColumns ?? null,
     });
   });
 }

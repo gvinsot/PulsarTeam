@@ -10,6 +10,7 @@ import {
   getActiveTasksByAgent,
 } from './database.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
+import { confinedTaskId, isAgentConfined } from './security/externalRunProfile.js';
 
 /**
  * Pulsar Gateway MCP — the SINGLE MCP server injected into every CLI runner
@@ -37,6 +38,10 @@ import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
  * native MCP config at spawn (the gateway is declared agentContext:true in
  * INTERNAL_MCP_SERVERS so those headers always flow).
  */
+
+/** Refusal for MCP access inside the external-task security profile. */
+const CONFINED_MCP_MESSAGE =
+  'MCP servers are disabled while you work on an external task (restricted security profile). Only update_task is available.';
 
 /** The gateway's own server id — never list/proxy itself. */
 const GATEWAY_SERVER_ID = 'mcp-pulsar-gateway';
@@ -156,6 +161,19 @@ export function createPulsarGatewayMcpServer(
         return jsonError('No agent context. update_task is only available to CLI runner agents.');
       }
       let resolvedTaskId = (task_id || '').trim();
+      // Inside the external-task profile the agent may only touch that task —
+      // judged from the DB as well, since this replica's agent copy may be stale.
+      const confinedTo = await confinedTaskId(
+        agentManager.agents.get(callerAgentId) || { id: callerAgentId }
+      );
+      if (confinedTo) {
+        if (resolvedTaskId && !confinedTo.startsWith(resolvedTaskId)) {
+          return jsonError(
+            'Only the external task being worked on can be updated (restricted security profile).'
+          );
+        }
+        resolvedTaskId = confinedTo;
+      }
       if (!resolvedTaskId) {
         const current = await resolveCurrentTaskId(agentManager, callerAgentId);
         if (!current) {
@@ -197,6 +215,9 @@ export function createPulsarGatewayMcpServer(
       }
       const agent = agentManager.agents.get(callerAgentId);
       if (!agent) return jsonError(`Agent not found: ${callerAgentId}`);
+      if (await isAgentConfined(agent)) {
+        return jsonOk({ count: 0, mcps: [], unavailable: [], hint: CONFINED_MCP_MESSAGE });
+      }
 
       const allowedIds = await resolveAvailableServerIds(skillManager, agent, callerBoardId);
       const { tools, unavailable } = await mcpManager.getToolsForAgent(
@@ -253,6 +274,7 @@ export function createPulsarGatewayMcpServer(
       }
       const agent = agentManager.agents.get(callerAgentId);
       if (!agent) return jsonError(`Agent not found: ${callerAgentId}`);
+      if (await isAgentConfined(agent)) return jsonError(CONFINED_MCP_MESSAGE);
 
       const resolvedId = resolveServerId(mcpManager, serverName);
       const allowedIds = await resolveAvailableServerIds(skillManager, agent, callerBoardId);

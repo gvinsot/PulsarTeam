@@ -20,7 +20,7 @@ On success the API sets an `HttpOnly` session cookie and returns `{ csrfToken, u
 The login page also includes:
 - Feature cards explaining the platform's value.
 - A rotating screenshot carousel.
-- A **Contact form** at the bottom (POST `/api/contact`, rate-limited 5 / hour). Submissions are written as tasks on a configured Support board.
+- A **Contact form** at the bottom (POST `/api/contact`, rate-limited 5 / hour). Submissions are written as tasks on the board of the server-held `insert` API key (Docker secret `HOME_FORM_KEY`).
 
 ### 1.3 Static legal pages
 The header links to `/terms` and `/privacy`, which render `TermsPage` and `PrivacyPage` respectively. These are public and authentic-token-independent.

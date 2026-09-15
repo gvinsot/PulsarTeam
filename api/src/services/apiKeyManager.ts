@@ -97,6 +97,8 @@ export interface ResolvedApiKey {
   scope: ApiKeyScope | null;
   /** The board an `insert` key is bound to; NULL for every other kind. */
   boardId: string | null;
+  /** Column ids an `insert` key may write to; null = every column of its board. */
+  allowedColumns: string[] | null;
   /** True for the ownerless instance-wide key — see the module header. */
   legacy: boolean;
 }
@@ -245,7 +247,7 @@ export async function resolveApiKey(key: string): Promise<ResolvedApiKey | null>
   const candidate = hmacKey(key);
 
   const result = await pool.query(
-    `SELECT id, key_hash, user_id, scope, board_id FROM ${TABLE} WHERE hash_version = $1`,
+    `SELECT id, key_hash, user_id, scope, board_id, allowed_columns FROM ${TABLE} WHERE hash_version = $1`,
     [CURRENT_HASH_VERSION]
   );
 
@@ -263,7 +265,14 @@ export async function resolveApiKey(key: string): Promise<ResolvedApiKey | null>
   // Legacy means ALL THREE are absent — nothing else may be read as the
   // ownerless instance-wide key, because that key opens /api/swarm/* unscoped.
   if (!userId && rawScope === null && !boardId) {
-    return { id: matched.id as string, userId: null, scope: null, boardId: null, legacy: true };
+    return {
+      id: matched.id as string,
+      userId: null,
+      scope: null,
+      boardId: null,
+      allowedColumns: null,
+      legacy: true,
+    };
   }
 
   // Scoped means every piece the scope needs is present, and nothing it does
@@ -280,6 +289,10 @@ export async function resolveApiKey(key: string): Promise<ResolvedApiKey | null>
     userId,
     scope: rawScope as ApiKeyScope,
     boardId: rawScope === 'insert' ? boardId : null,
+    allowedColumns:
+      rawScope === 'insert' && Array.isArray(matched.allowed_columns)
+        ? (matched.allowed_columns as unknown[]).filter((c): c is string => typeof c === 'string')
+        : null,
     legacy: false,
   };
 }
@@ -401,10 +414,13 @@ export async function createInsertApiKey({
   userId,
   boardId,
   name,
+  allowedColumns = null,
 }: {
   userId: string;
   boardId: string;
   name?: string | null;
+  /** Column ids the key may write to; null = every column. Validated by the caller. */
+  allowedColumns?: string[] | null;
 }) {
   const pool = getPool();
   if (!pool) throw new Error('Database not available');
@@ -417,12 +433,30 @@ export async function createInsertApiKey({
   const label = (name || '').trim() || 'insert key';
 
   await pool.query(
-    `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version, user_id, scope, name, board_id)
-     VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8)`,
-    [id, keyHash, prefix, CURRENT_HASH_VERSION, userId, 'insert', label, boardId]
+    `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version, user_id, scope, name, board_id, allowed_columns)
+     VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8, $9)`,
+    [
+      id,
+      keyHash,
+      prefix,
+      CURRENT_HASH_VERSION,
+      userId,
+      'insert',
+      label,
+      boardId,
+      allowedColumns ? JSON.stringify(allowedColumns) : null,
+    ]
   );
 
-  return { id, key, prefix, scope: 'insert' as const, name: label, board_id: boardId };
+  return {
+    id,
+    key,
+    prefix,
+    scope: 'insert' as const,
+    name: label,
+    board_id: boardId,
+    allowed_columns: allowedColumns,
+  };
 }
 
 /** The caller's own scoped keys (every kind), metadata only. */
@@ -433,7 +467,7 @@ export async function listApiKeysForUser(userId: string) {
   // board is deleted, so a NULL name here only means the join raced a delete.
   const result = await pool.query(
     `SELECT k.id, k.prefix, k.scope, k.name, k.board_id, b.name AS board_name,
-            k.created_at, k.last_used_at
+            k.allowed_columns, k.created_at, k.last_used_at
      FROM ${TABLE} k LEFT JOIN boards b ON b.id = k.board_id
      WHERE k.user_id = $1 AND k.hash_version = $2
      ORDER BY k.created_at DESC`,

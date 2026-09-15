@@ -58,7 +58,7 @@ export function insertApiRoutes(agentManager: AgentManager) {
       const board = await keyBoard(req);
       if (!board)
         return res.status(403).json({ error: "API key owner can no longer edit this key's board" });
-      res.json({ board: insertBoardView(board) });
+      res.json({ board: insertBoardView(board, req.apiKey!.allowedColumns) });
     })
   );
 
@@ -70,11 +70,14 @@ export function insertApiRoutes(agentManager: AgentManager) {
       if (!board)
         return res.status(403).json({ error: "API key owner can no longer edit this key's board" });
 
-      const created = await createBoardTask(agentManager, req.user!, board, req.body, {
-        type: 'api',
-        scope: 'insert',
-        apiKeyId: req.apiKey!.id,
-      });
+      const created = await createBoardTask(
+        agentManager,
+        req.user!,
+        board,
+        req.body,
+        { type: 'api', scope: 'insert', apiKeyId: req.apiKey!.id },
+        { allowedColumns: req.apiKey!.allowedColumns }
+      );
       if (!created.ok) {
         return res
           .status(created.kind === 'invalid' ? 400 : 500)

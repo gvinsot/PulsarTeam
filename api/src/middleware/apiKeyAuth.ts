@@ -8,7 +8,8 @@ import {
 } from '../services/apiKeyManager.js';
 import { getUserById } from '../services/database.js';
 import { errorMessage } from '../lib/errors.js';
-import { checkBoardAccess } from './authz.js';
+import { checkBoardAccess, type BoardAccessResult } from './authz.js';
+import type { SessionClaims } from './session.js';
 
 /**
  * Express middleware that authenticates requests via API key (Bearer token).
@@ -72,9 +73,127 @@ declare global {
         scope: ApiKeyScope;
         /** The board an `insert` key writes to; null for every other scope. */
         boardId: string | null;
+        /** Column ids an `insert` key may write to; null = every column. */
+        allowedColumns?: string[] | null;
       };
     }
   }
+}
+
+/**
+ * What `authorizeScopedApiKey` hands back. One interface rather than a
+ * discriminated union, because api/'s tsc does not narrow the negative branch.
+ */
+export interface ScopedApiKeyAuthorization {
+  ok: boolean;
+  /** Set when `ok` is false: 403 for a refused key, 503 when the backend failed. */
+  status?: number;
+  error?: string;
+  /** The key's owner, re-read live, in the shape `authenticateToken` publishes. */
+  user?: SessionClaims;
+  apiKey?: NonNullable<Request['apiKey']>;
+  /** The board an `insert` key writes to, as read by the edit check. */
+  board?: BoardAccessResult['board'];
+}
+
+/**
+ * Every check a scoped key must pass, independent of HTTP transport.
+ *
+ * `requireApiKeyScope` runs it on the key a caller presents. The public contact
+ * form (routes/contact.ts) runs it on the key the server holds as a Docker
+ * secret, so a website submission is authorized exactly like
+ * `POST /api/insert/tasks` and cannot drift from it.
+ */
+export async function authorizeScopedApiKey(
+  key: string,
+  required: ApiKeyScope
+): Promise<ScopedApiKeyAuthorization> {
+  const unavailable = { ok: false, status: 503, error: 'Auth backend unavailable' };
+
+  let resolved;
+  try {
+    resolved = await resolveApiKey(key);
+  } catch (err) {
+    console.error('API key validation failed:', errorMessage(err));
+    return unavailable;
+  }
+
+  if (!resolved) {
+    return { ok: false, status: 403, error: 'Invalid API key' };
+  }
+
+  // A legacy key names no owner, so there is no tenant to run these tools in.
+  // Accepting it would reintroduce the ownerless instance-wide access this
+  // surface was built to replace.
+  if (resolved.legacy || !resolved.userId || !resolved.scope) {
+    return {
+      ok: false,
+      status: 403,
+      error:
+        'This endpoint requires a scoped API key. The instance-wide (legacy) key is not accepted here — mint a per-user key from Settings → API keys.',
+    };
+  }
+
+  if (!scopeSatisfies(resolved.scope, required)) {
+    return {
+      ok: false,
+      status: 403,
+      error: `API key scope "${resolved.scope}" does not grant "${required}"`,
+    };
+  }
+
+  // Live re-read: the key carries an owner id and nothing else.
+  let owner;
+  try {
+    owner = await getUserById(resolved.userId);
+  } catch (err) {
+    console.error('API key owner lookup failed:', errorMessage(err));
+    return unavailable;
+  }
+  if (!owner) {
+    return { ok: false, status: 403, error: 'API key owner no longer exists' };
+  }
+
+  // An insert key is only as good as its owner's edit access to its board,
+  // re-read now. Saying so is not an enumeration oracle: the board is the
+  // key's own, not an id the caller chose.
+  let board;
+  if (resolved.scope === 'insert') {
+    let access;
+    try {
+      access = await checkBoardAccess(resolved.boardId, owner.id, owner.role, 'edit');
+    } catch (err) {
+      console.error('API key board lookup failed:', errorMessage(err));
+      return unavailable;
+    }
+    if (!access.ok) {
+      return { ok: false, status: 403, error: "API key owner can no longer edit this key's board" };
+    }
+    board = access.board;
+  }
+
+  // Reporting only — never awaited, never allowed to fail the request.
+  void touchApiKey(resolved.id);
+
+  return {
+    ok: true,
+    user: {
+      userId: owner.id,
+      username: owner.username,
+      role: owner.role,
+      // No cookie, no ambient authority, so nothing for CSRF to protect: this
+      // request authenticated with a bearer secret the browser never attaches
+      // on its own. The claim is required by the SessionClaims shape.
+      csrf: '',
+    },
+    apiKey: {
+      id: resolved.id,
+      scope: resolved.scope,
+      boardId: resolved.boardId,
+      allowedColumns: resolved.allowedColumns,
+    },
+    board,
+  };
 }
 
 /**
@@ -103,75 +222,13 @@ export function requireApiKeyScope(required: ApiKeyScope) {
         .json({ error: 'API key required. Use Authorization: Bearer <api-key>' });
     }
 
-    let resolved;
-    try {
-      resolved = await resolveApiKey(authHeader.slice(7));
-    } catch (err) {
-      console.error('API key validation failed:', errorMessage(err));
-      return res.status(503).json({ error: 'Auth backend unavailable' });
+    const auth = await authorizeScopedApiKey(authHeader.slice(7), required);
+    if (!auth.ok) {
+      return res.status(auth.status!).json({ error: auth.error });
     }
 
-    if (!resolved) {
-      return res.status(403).json({ error: 'Invalid API key' });
-    }
-
-    // A legacy key names no owner, so there is no tenant to run these tools in.
-    // Accepting it would reintroduce the ownerless instance-wide access this
-    // surface was built to replace.
-    if (resolved.legacy || !resolved.userId || !resolved.scope) {
-      return res.status(403).json({
-        error:
-          'This endpoint requires a scoped API key. The instance-wide (legacy) key is not accepted here — mint a per-user key from Settings → API keys.',
-      });
-    }
-
-    if (!scopeSatisfies(resolved.scope, required)) {
-      return res
-        .status(403)
-        .json({ error: `API key scope "${resolved.scope}" does not grant "${required}"` });
-    }
-
-    // Live re-read: the key carries an owner id and nothing else.
-    let owner;
-    try {
-      owner = await getUserById(resolved.userId);
-    } catch (err) {
-      console.error('API key owner lookup failed:', errorMessage(err));
-      return res.status(503).json({ error: 'Auth backend unavailable' });
-    }
-    if (!owner) {
-      return res.status(403).json({ error: 'API key owner no longer exists' });
-    }
-
-    // An insert key is only as good as its owner's edit access to its board,
-    // re-read now. Saying so is not an enumeration oracle: the board is the
-    // key's own, not an id the caller chose.
-    if (resolved.scope === 'insert') {
-      let access;
-      try {
-        access = await checkBoardAccess(resolved.boardId, owner.id, owner.role, 'edit');
-      } catch (err) {
-        console.error('API key board lookup failed:', errorMessage(err));
-        return res.status(503).json({ error: 'Auth backend unavailable' });
-      }
-      if (!access.ok) {
-        return res.status(403).json({ error: "API key owner can no longer edit this key's board" });
-      }
-    }
-
-    req.user = {
-      userId: owner.id,
-      username: owner.username,
-      role: owner.role,
-      // No cookie, no ambient authority, so nothing for CSRF to protect: this
-      // request authenticated with a bearer secret the browser never attaches
-      // on its own. The claim is required by the SessionClaims shape.
-      csrf: '',
-    };
-    req.apiKey = { id: resolved.id, scope: resolved.scope, boardId: resolved.boardId };
-
-    // Reporting only — never awaited, never allowed to fail the request.
-    void touchApiKey(resolved.id);
+    req.user = auth.user;
+    req.apiKey = auth.apiKey;
     next();
   };
   Object.defineProperty(guard, 'name', { value: `requireApiKeyScope(${required})` });

@@ -439,6 +439,10 @@ export interface Agent {
   boardId: string | null;
   /** null until the user saves the Permissions tab once. */
   permissions: AgentPermissions | null;
+  /** Present while the agent works an external (insert-key) task, and until
+   *  its next regular task or a context reload: fresh context, no credentials,
+   *  no MCP. Written by api/src/services/security/externalRunProfile.ts. */
+  securityProfile?: { mode: 'external'; taskId: string; since: string } | null;
   /** RESPONSE shape only ({ hasValue } per credential name). The PUT body expects
    *  Record<string, string> where '' deletes — see AgentCredentialsUpdate. */
   credentials: Record<string, AgentCredentialRef>;

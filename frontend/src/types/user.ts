@@ -281,6 +281,8 @@ export interface ScopedApiKey {
   board_id: string | null;
   /** LEFT JOIN on boards — null for ladder keys. */
   board_name: string | null;
+  /** Insert keys only: column ids the key may write to; null = every column. */
+  allowed_columns: string[] | null;
   created_at: string;
   /** null until the key is used for the first time. */
   last_used_at: string | null;
@@ -307,6 +309,7 @@ export interface ScopedApiKeyCreated {
   board_id: string | null;
   /** Present on an insert key's response only. */
   board_name?: string | null;
+  allowed_columns?: string[] | null;
 }
 
 /**

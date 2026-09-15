@@ -37,7 +37,7 @@ export type McpHandlerContext = {
    * The insert surface reads its board from here — never from X-Board-Id, which
    * the caller chooses.
    */
-  apiKey: { id: string; boardId: string | null } | null;
+  apiKey: { id: string; boardId: string | null; allowedColumns?: string[] | null } | null;
 };
 
 /** First value of a possibly-repeated header, trimmed, or null when absent. */
@@ -120,7 +120,13 @@ export function createMcpHttpHandler(
         agentId,
         boardId,
         user: req.user ?? null,
-        apiKey: req.apiKey ? { id: req.apiKey.id, boardId: req.apiKey.boardId } : null,
+        apiKey: req.apiKey
+          ? {
+              id: req.apiKey.id,
+              boardId: req.apiKey.boardId,
+              allowedColumns: req.apiKey.allowedColumns ?? null,
+            }
+          : null,
       });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);

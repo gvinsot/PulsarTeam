@@ -2,6 +2,14 @@ import { waitForProjectSwitch } from './crud.js';
 import { isAgentBusy, isTaskRunning, reserveAgentForTask } from '../workflow/agentSelector.js';
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
+import { enterRunProfileForTask } from '../security/externalRunProfile.js';
+import {
+  APPROVAL_REQUIRED_MESSAGE,
+  needsApproval,
+  taskContentForPrompt,
+  type SecurityFlag,
+  type TaskTrustLevel,
+} from '../../lib/taskTrust.js';
 import {
   saveAgent,
   saveTaskToDb,
@@ -169,6 +177,8 @@ export const tasksMethods = {
       taskType,
       isManual,
       environment,
+      trustLevel,
+      securityFlags,
     }: {
       boardId?: string;
       repoFullName?: string | null;
@@ -181,6 +191,9 @@ export const tasksMethods = {
       taskType?: string;
       isManual?: boolean;
       environment?: string | null;
+      /** lib/taskTrust.ts — set by the external insert paths only. */
+      trustLevel?: TaskTrustLevel | null;
+      securityFlags?: SecurityFlag[];
     } = {}
   ): Promise<any> {
     // agentId === null → unassigned task: lives on a board, waits to be picked up.
@@ -212,6 +225,8 @@ export const tasksMethods = {
       // replica still picks the task up.
       environment: environment || getCurrentEnvironment(),
       position: Date.now(),
+      trustLevel: trustLevel || null,
+      securityFlags: Array.isArray(securityFlags) ? securityFlags : [],
       createdAt: now,
       history: [{ status, at: now, by: source?.name || source?.type || 'user' }],
     };
@@ -957,6 +972,10 @@ export const tasksMethods = {
         repoProvider: taskToTransfer.repoProvider,
         storagePath: taskToTransfer.storagePath,
         storageProvider: taskToTransfer.storageProvider,
+        // A transfer re-creates the row: without this, handing an external task
+        // to another agent would launder it into a tenant task.
+        trustLevel: taskToTransfer.trustLevel,
+        securityFlags: taskToTransfer.securityFlags,
       }
     );
     if (newTask) {
@@ -985,6 +1004,10 @@ export const tasksMethods = {
     await requireTaskExecutionAccess(this.agents, task, user);
     if (task.isTemplate) throw new Error('Use run_task_template to execute a recurring rule');
     if (task.status === 'done') throw new Error('Task already completed');
+    // An explicit start is not an approval: approving is its own, audited act
+    // (POST /api/tasks/:id/approve), so a click on "run" cannot skip reading
+    // what an outsider wrote.
+    if (needsApproval(task)) throw new Error(APPROVAL_REQUIRED_MESSAGE);
 
     // Check before clearing Stop/watching signals: a rejected resume must not
     // disturb the workflow already owning this task or executor.
@@ -1825,6 +1848,13 @@ export const tasksMethods = {
     task: any,
     reserved?: () => void
   ): Promise<void> {
+    // Last line of defence: every path that sends a task's text to an agent for
+    // execution ends here. The workflow queries already exclude unapproved
+    // external tasks; a stale in-memory copy must not slip past them.
+    if (needsApproval(task)) {
+      reserved?.();
+      throw new Error(APPROVAL_REQUIRED_MESSAGE);
+    }
     const executorId = task.assignee || agentId;
     const executor = this.agents.get(executorId) || agent;
     const releaseRun =
@@ -1834,6 +1864,10 @@ export const tasksMethods = {
     }
 
     try {
+      // Confine (or release) the executor BEFORE anything below reads its history
+      // or sends it the task — see security/externalRunProfile.ts.
+      await enterRunProfileForTask(this, executor, task);
+
       const streamCallback = (chunk: any) => {
         this._emit('agent:stream:chunk', { agentId: executorId, chunk });
         this._emit('agent:thinking', {
@@ -1922,8 +1956,8 @@ export const tasksMethods = {
               msg.content.includes(taskPrefix)
           );
         const messageToSend = alreadySent
-          ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
-          : task.text;
+          ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n${taskContentForPrompt(task, 300)}\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
+          : `Task ID: ${task.id}\n\n${taskContentForPrompt(task)}`;
 
         // CLI runners always resume through their interactive PTY (not headless
         // sendMessage), regardless of the transient agent.status — the runner

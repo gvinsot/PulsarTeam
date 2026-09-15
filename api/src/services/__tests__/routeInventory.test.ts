@@ -440,6 +440,8 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'PUT /api/tasks/:id': ['authenticateToken'],
   'POST /api/tasks/bulk-move': ['authenticateToken'],
   'POST /api/tasks/:id/stop': ['authenticateToken'],
+  // Human-only: the handler also refuses the internal service session by name.
+  'POST /api/tasks/:id/approve': ['authenticateToken'],
   'PATCH /api/tasks/:id/clear-stopped': ['authenticateToken'],
   'DELETE /api/tasks/:id': ['authenticateToken'],
   'GET /api/tasks/deleted': ['authenticateToken', 'requireRole(admin)'],

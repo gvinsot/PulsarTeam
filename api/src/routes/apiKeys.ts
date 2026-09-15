@@ -43,6 +43,8 @@ const createScopedKeySchema = z
     scope: z.enum(API_KEY_SCOPES),
     name: z.string().max(200).optional(),
     board_id: z.string().uuid().optional(),
+    /** Insert keys only: column ids the key may write to. Omit for every column. */
+    allowed_columns: z.array(z.string().min(1).max(100)).min(1).max(100).optional(),
   })
   .superRefine((body, ctx) => {
     // An insert key is nothing without its board; a ladder key has none, and
@@ -52,6 +54,13 @@ const createScopedKeySchema = z
         code: 'custom',
         path: ['board_id'],
         message: 'An insert key needs a board_id',
+      });
+    }
+    if (body.scope !== 'insert' && body.allowed_columns) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['allowed_columns'],
+        message: 'Only an insert key can be narrowed to columns',
       });
     }
     if (body.scope !== 'insert' && body.board_id) {
@@ -96,11 +105,29 @@ router.post(
     if (req.body.scope === 'insert') {
       const access = await checkBoardAccess(req.body.board_id, user.userId, user.role, 'edit');
       if (!access.ok) return res.status(404).json({ error: 'Board not found' });
+
+      // Stored as column ids, checked against the board NOW: a typo would
+      // otherwise mint a key that can insert nowhere.
+      let allowedColumns: string[] | null = null;
+      if (req.body.allowed_columns) {
+        const boardColumnIds = new Set(
+          (access.board.workflow?.columns || []).map((c: { id: string }) => c.id)
+        );
+        const unknown = (req.body.allowed_columns as string[]).filter(c => !boardColumnIds.has(c));
+        if (unknown.length) {
+          return res.status(400).json({
+            error: `Unknown column(s) for this board: ${unknown.join(', ')}`,
+          });
+        }
+        allowedColumns = [...new Set(req.body.allowed_columns as string[])];
+      }
+
       try {
         const result = await createInsertApiKey({
           userId: user.userId,
           boardId: access.board.id,
           name: req.body.name,
+          allowedColumns,
         });
         return res.status(201).json({ ...result, board_name: access.board.name ?? null });
       } catch (err) {

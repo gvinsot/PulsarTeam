@@ -32,8 +32,20 @@ export default function InsertKeysSection({
   const [boardId, setBoardId] = useState('');
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
+  /** Column ids the new key may write to. Empty = every column of the board. */
+  const [allowedColumns, setAllowedColumns] = useState<string[]>([]);
   /** Clear text of the key just minted. Shown once, until the next mint or close. */
   const [fresh, setFresh] = useState<ScopedApiKeyCreated | null>(null);
+
+  const boardColumns = boards.find(b => b.id === boardId)?.workflow?.columns || [];
+  const columnLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const b of boards) for (const c of b.workflow?.columns || []) labels.set(c.id, c.label);
+    return labels;
+  }, [boards]);
+
+  const toggleColumn = (id: string) =>
+    setAllowedColumns(prev => (prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]));
 
   useEffect(() => {
     let cancelled = false;
@@ -71,9 +83,14 @@ export default function InsertKeysSection({
     if (!boardId) return;
     try {
       setCreating(true);
-      const created = await api.createInsertApiKey(boardId, name.trim() || undefined);
+      const created = await api.createInsertApiKey(
+        boardId,
+        name.trim() || undefined,
+        allowedColumns.length ? allowedColumns : undefined
+      );
       setFresh(created);
       setName('');
+      setAllowedColumns([]);
       await onChanged();
       showToast?.('Insert key created', 'success');
     } catch {
@@ -136,7 +153,10 @@ export default function InsertKeysSection({
           />
           <select
             value={boardId}
-            onChange={e => setBoardId(e.target.value)}
+            onChange={e => {
+              setBoardId(e.target.value);
+              setAllowedColumns([]);
+            }}
             aria-label="Board"
             className="sm:w-56 bg-dark-900 border border-dark-700 rounded-lg px-2 py-1.5 text-xs text-dark-200 focus:outline-none focus:border-indigo-500"
           >
@@ -158,6 +178,47 @@ export default function InsertKeysSection({
           </button>
         </div>
       )}
+
+      {boardColumns.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-[11px] text-dark-400">
+            Columns this key may write to —{' '}
+            {allowedColumns.length === 0 ? (
+              <span className="text-dark-300">all of them</span>
+            ) : (
+              <span className="text-sky-300">{allowedColumns.length} selected</span>
+            )}
+            . Prefer a triage column with no automatic agent action: external tasks wait for your
+            approval anyway, but a narrow key limits what a leaked key can reach.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {boardColumns.map(c => {
+              const on = allowedColumns.includes(c.id);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => toggleColumn(c.id)}
+                  aria-pressed={on}
+                  className={`px-2 py-0.5 rounded-full text-[11px] ring-1 transition-colors ${
+                    on
+                      ? 'bg-sky-500/20 text-sky-200 ring-sky-500/40'
+                      : 'bg-dark-900 text-dark-400 ring-dark-700 hover:text-dark-200'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <p className="text-[11px] text-dark-500">
+        Tasks created with an insert key are marked external: no agent works on them until someone
+        approves them from the task, and they then run in a restricted profile (fresh context, no
+        credentials, no MCP).
+      </p>
 
       {fresh && (
         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3 space-y-2">
@@ -186,6 +247,11 @@ export default function InsertKeysSection({
                   </span>
                   <span className="text-dark-500">→</span>
                   <span className="text-sky-300 truncate">{k.board_name || 'unknown board'}</span>
+                  {k.allowed_columns && (
+                    <span className="text-dark-400 truncate">
+                      ({k.allowed_columns.map(id => columnLabels.get(id) || id).join(', ')})
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 text-dark-500 mt-0.5">
                   <code className="font-mono">{k.prefix}</code>

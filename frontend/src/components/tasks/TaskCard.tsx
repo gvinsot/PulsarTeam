@@ -13,6 +13,8 @@ import {
   Play,
   Hand,
   Pause,
+  ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 import type { TaskSocketPayload } from '../../types';
@@ -554,6 +556,28 @@ export default function TaskCard({
           >
             <Repeat className="w-2.5 h-2.5" />
             {task.occurrenceSeq ? `#${task.occurrenceSeq}` : 'recurring'}
+          </span>
+        )}
+        {/* Written outside the organisation (insert key): inert until approved. */}
+        {task.trustLevel === 'untrusted' && (
+          <span
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/30"
+            title="External task — no agent works on it until someone approves it"
+          >
+            <ShieldAlert className="w-2.5 h-2.5" />
+            To approve
+            {(task.securityFlags || []).some(f => f.severity === 'high') && (
+              <span className="ml-0.5 w-1.5 h-1.5 rounded-full bg-red-400" />
+            )}
+          </span>
+        )}
+        {task.trustLevel === 'approved' && (
+          <span
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-sky-500/10 text-sky-400 ring-1 ring-sky-500/20"
+            title="External task, approved — agents run it in a restricted profile"
+          >
+            <ShieldCheck className="w-2.5 h-2.5" />
+            External
           </span>
         )}
         {task.isManual && (

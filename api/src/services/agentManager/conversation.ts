@@ -6,6 +6,7 @@ import {
   getTasksByAssignee,
 } from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
+import { clearRunProfile } from '../security/externalRunProfile.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const conversationMethods = {
@@ -151,6 +152,11 @@ export const conversationMethods = {
 
     // 5. Wipe conversation state (history, runner sessions, task flags…).
     await this.clearHistory(agentId);
+
+    // A reload starts from an empty context, which is exactly what the external-
+    // task profile was protecting: release it so the next CLI spawn gets the
+    // agent's own permissions and credentials back.
+    if (clearRunProfile(agent)) await saveAgent(agent);
 
     // 6-9. Run the four independent teardown steps concurrently (LLM config
     //      refresh, MCP disconnect, file-tree refresh, CLI session close).

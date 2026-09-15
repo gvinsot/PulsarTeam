@@ -33,6 +33,12 @@ import {
 } from './lib/agentStatusHandlers.js';
 import { parseAgentProjection } from '../services/agentManager/projection.js';
 import type { AgentManager } from '../services/agentManager/index.js';
+import {
+  APPROVAL_REQUIRED_MESSAGE,
+  needsApproval,
+  taskContentForPrompt,
+} from '../lib/taskTrust.js';
+import { enterRunProfileForTask } from '../services/security/externalRunProfile.js';
 
 // Mask sensitive fields before sending agent data to the client
 /**
@@ -985,7 +991,15 @@ export function agentRoutes(agentManager: AgentManager) {
         return;
       }
 
-      const prompt = `Refine the following task description. Make it clearer, more actionable, and add acceptance criteria if missing.\n\nTask: ${task.text}\n\nReply ONLY with the improved description (no preamble, no explanation).`;
+      // A refine hands the text to a full agent (tools, credentials): an external
+      // task needs approval first, then runs in the restricted profile.
+      if (needsApproval(task)) {
+        res.status(409).json({ error: APPROVAL_REQUIRED_MESSAGE });
+        return;
+      }
+      await enterRunProfileForTask(agentManager, refineAgent, task);
+
+      const prompt = `Refine the following task description. Make it clearer, more actionable, and add acceptance criteria if missing.\n\n${taskContentForPrompt(task)}\n\nReply ONLY with the improved description (no preamble, no explanation).`;
       const result = await agentManager.sendMessage(refineAgentId, prompt, () => {});
       const refined = (result?.content || result || '').trim();
       if (refined) {

@@ -13,6 +13,7 @@ import {
 } from '../database.js';
 import { setTaskSignal } from './tasks.js';
 import { checkToolHooks } from '../toolHooks.js';
+import { restrictedToolRefusal } from '../security/externalRunProfile.js';
 import { _detectCommitHashes } from './tools/commitDetection.js';
 import { HANDLERS, appendTaskNote, HandlerCtx } from './tools/handlers.js';
 import { enrichAssignee } from '../taskMutations.js';
@@ -371,6 +372,19 @@ export const toolsMethods = {
         // Tools without a handler (read_file/write_file/append_file/search_files/
         // run_command + the list_dir cache pre-check) fall through to the generic
         // executeTool path below.
+        // Restricted profile of an external task (security/externalRunProfile.ts):
+        // checked BEFORE the handler table, because mcp_call, ask_agent and
+        // update_task are handlers and would otherwise never reach the hooks.
+        const profileRefusal = restrictedToolRefusal(agent, call.tool, call.args || []);
+        if (profileRefusal) {
+          console.log(`🛡️ [SecurityProfile] Blocked ${call.tool} for agent "${agent.name}"`);
+          results.push({ tool: call.tool, args: call.args, success: false, error: profileRefusal });
+          if (streamCallback) {
+            streamCallback(`\n✗ ${call.tool} — blocked by the external-task security profile\n`);
+          }
+          continue;
+        }
+
         const handler = HANDLERS[call.tool];
         if (handler) {
           const ctx: HandlerCtx = { mgr: this, agent, agentId, call, streamCallback, dedup, depth };

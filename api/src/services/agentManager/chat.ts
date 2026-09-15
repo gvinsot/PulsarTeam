@@ -18,6 +18,7 @@ import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
 import { getAgentBoardScope, agentsVisibleTo } from '../../lib/agentScope.js';
 import { createHashedEmbedding, cosineSimilarity } from '../codeSearch/embedding.js';
+import { effectiveCredentials, isAgentConfined } from '../security/externalRunProfile.js';
 import {
   agentRosterLines,
   ragDocsSection,
@@ -733,7 +734,8 @@ export const chatMethods = {
       }
     }
 
-    systemContent += credentialsSection(agent.credentials || {});
+    // Empty inside the external-task profile (security/externalRunProfile.ts).
+    systemContent += credentialsSection(effectiveCredentials(agent));
 
     if (allSkillIds.includes('skill-agents-direct-access')) {
       const askableAgents = agentsVisibleTo(agent, Array.from(this.agents.values()), boardScope)
@@ -955,7 +957,9 @@ export const chatMethods = {
       out += pluginsSection(resolvedPlugins);
     }
 
-    out += credentialsSection(agent.credentials || {});
+    // The runner fetches this file at spawn from whichever replica answers, so
+    // confinement is judged from the DB too, not only from this replica's copy.
+    out += credentialsSection((await isAgentConfined(agent)) ? {} : effectiveCredentials(agent));
 
     // Relevant tasks — recency-ranked (kept light: no embedding pass here).
     const activeTasks = (await getTasksByAgent(id)).filter(

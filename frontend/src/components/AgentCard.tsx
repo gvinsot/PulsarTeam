@@ -1,4 +1,4 @@
-import { MessageSquare, Cpu, Zap, FolderOpen, Crown, StopCircle } from 'lucide-react';
+import { MessageSquare, Cpu, Zap, FolderOpen, Crown, StopCircle, ShieldAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Agent, AgentRunner, AgentStatusValue } from '../types';
 
@@ -153,6 +153,14 @@ export default function AgentCard({
             {agent.isLeader && (
               <span title="Leader" className="inline-flex">
                 <Crown className="w-3.5 h-3.5 text-amber-400" />
+              </span>
+            )}
+            {agent.securityProfile?.mode === 'external' && (
+              <span
+                title="Restricted profile: working on an external task — fresh context, no credentials, no MCP servers. Lifted at its next regular task or on a context reload."
+                className="inline-flex"
+              >
+                <ShieldAlert className="w-3.5 h-3.5 text-sky-400" />
               </span>
             )}
             {disabled ? (

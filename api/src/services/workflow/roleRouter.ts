@@ -15,6 +15,7 @@
  */
 
 import { getSettings } from '../configManager.js';
+import { isExternalTask, taskContentForPrompt } from '../../lib/taskTrust.js';
 import { getLlmConfig } from '../database.js';
 import { createProvider } from '../llmProviders.js';
 
@@ -121,10 +122,8 @@ export async function resolveAutoRole(task: any, { agentManager, ownerId }: any)
     'out the task. Reply with ONLY the exact role name copied verbatim from the ' +
     'list — no quotes, no punctuation, no explanation.';
   const user = [
-    `Task title: ${task.title || task.text || '(untitled)'}`,
-    task.title && task.text && task.text !== task.title
-      ? `Task details: ${String(task.text).slice(0, 2000)}`
-      : '',
+    task.title && !isExternalTask(task) ? `Task title: ${task.title}` : '',
+    taskContentForPrompt(task, 2000),
     task.type ? `Task type: ${task.type}` : '',
     task.project ? `Project: ${task.project}` : '',
     '',

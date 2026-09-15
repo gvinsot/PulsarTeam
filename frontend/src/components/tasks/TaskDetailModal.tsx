@@ -26,15 +26,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
-import {
-  SOURCE_META,
-  TASK_TYPES,
-  TASK_TYPE_MAP,
-  buildRecurrence,
-} from './taskConstants';
+import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, buildRecurrence } from './taskConstants';
 import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
+import ExternalTaskPanel from './ExternalTaskPanel';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
 import type { StatusOption } from './taskConstants';
@@ -483,6 +479,9 @@ export default function TaskDetailModal({
 
           {/* Scrollable body */}
           <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+            {/* External provenance: the approval gate (lib/taskTrust.ts) */}
+            <ExternalTaskPanel task={task} onApproved={onRefresh} />
+
             {/* Task text — editable */}
             <div>
               <div className="flex items-center justify-between mb-1.5">

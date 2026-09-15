@@ -15,6 +15,13 @@ import type { WorkflowAction, WorkflowColumn, WorkflowConfig } from './taskState
 import type { Agent } from '../database/agents.js';
 import { findAgentByRole, findAgentForAssignment, reserveAgentForTask } from './agentSelector.js';
 import { resolveAutoRole } from './roleRouter.js';
+import {
+  needsApproval,
+  taskContentForPrompt,
+  wrapUntrusted,
+  isExternalTask,
+} from '../../lib/taskTrust.js';
+import { enterRunProfileForTask } from '../security/externalRunProfile.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
 import {
   saveAgent,
@@ -175,16 +182,16 @@ function formatCommitsContext(task: Task) {
   return `\nAssociated commits:\n${lines.join('\n')}\n`;
 }
 
-function buildTitlePrompt(description: string) {
-  return `Generate a short, concise title (max 20 words) for the following task description. Reply with ONLY the title, nothing else.\n\n${description}`;
+function buildTitlePrompt(description: string, external: boolean) {
+  return `Generate a short, concise title (max 20 words) for the following task description. Reply with ONLY the title, nothing else.\n\n${wrapUntrusted(description, 'task_content', external)}`;
 }
 
-function buildSetTypePrompt(description: string) {
-  return `Classify the following task into exactly one type. The possible types are: bug, feature, technical, improvement, documentation, other.\n\nReply with ONLY the type (a single word, lowercase), nothing else.\n\nTask:\n${description}`;
+function buildSetTypePrompt(description: string, external: boolean) {
+  return `Classify the following task into exactly one type. The possible types are: bug, feature, technical, improvement, documentation, other.\n\nReply with ONLY the type (a single word, lowercase), nothing else.\n\n${wrapUntrusted(description, 'task_content', external)}`;
 }
 
 function buildRefinePrompt(task: Task, instructions: string) {
-  return `Refine the following task:\n\nTask: ${task.text}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved task description.`;
+  return `Refine the following task:\n\n${taskContentForPrompt(task)}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved task description.`;
 }
 
 function nextColumnAfter(status: string, columns: WorkflowColumn[]) {
@@ -226,7 +233,8 @@ function buildInstructionsPrompt(task: Task, instructions: string, columns: Work
 
 Task ID: ${task.id}
 
-Task title: ${task.text}
+Task description:
+${taskContentForPrompt(task)}
 
 Current status: ${task.status}
 ${columnList}
@@ -290,6 +298,13 @@ export async function executeAction(
       );
       return { executed: false, error: true, message: errorMessage(err) };
     }
+  }
+
+  // Defence in depth: processColumnEntry and the recheck already skip an
+  // unapproved external task, but nothing that reaches an agent — including the
+  // Role Router LLM below, which reads the text — may run on one.
+  if (needsApproval(task)) {
+    return { executed: false, skipped: true, reason: 'awaiting-approval' };
   }
 
   switch (action.type) {
@@ -770,6 +785,12 @@ async function executeRunAgent(
     // honored.
     agentManager._clearStopSignal?.(task.id);
 
+    // An external task runs confined, from an empty context; a regular task
+    // run on an agent that was confined releases it, also from an empty context
+    // (security/externalRunProfile.ts). Before any bind, so the runner sees the
+    // narrowed permissions, and before the task text reaches the agent.
+    await enterRunProfileForTask(agentManager, agent, task);
+
     // The outer reservation also covers setup and the entire cleanup below.
     let actualTask;
     let execStartMsgIdx;
@@ -1103,7 +1124,7 @@ async function _runSimpleMode(
   const { buildPrompt, announce, apply } = SIMPLE_MODES[modeName];
   const maxLen = agent.contextLength || 4000;
   const description = (task.text || '').slice(0, maxLen);
-  const prompt = buildPrompt(description);
+  const prompt = buildPrompt(description, isExternalTask(task));
 
   console.log(announce(task, agent.name));
 

@@ -28,6 +28,7 @@ import { checkToolHooks } from '../../toolHooks.js';
 import { getAgentBoardScope, agentsVisibleTo } from '../../../lib/agentScope.js';
 import { findBuiltinMcpServer } from '../../mcpManager.js';
 import { v4 as uuidv4 } from 'uuid';
+import { isExternalTask, listingTaskText } from '../../../lib/taskTrust.js';
 
 export interface HandlerCtx {
   mgr: any;
@@ -529,7 +530,7 @@ const handleListTasks: ToolHandler = async ({ agent, call }) => {
     const lines = (tasks as any[]).map((t: any) => {
       const board = t.boardId ? ` [Board: ${boardName[t.boardId] || t.boardId}]` : '';
       const assigneeInfo = t.assignee ? ` (assignee: ${t.assignee.slice(0, 8)})` : '';
-      return `- [${t.status}] ${t.id.slice(0, 8)} — ${t.text.slice(0, 100)}${board}${assigneeInfo}`;
+      return `- [${t.status}] ${t.id.slice(0, 8)} — ${listingTaskText(t, 100)}${board}${assigneeInfo}`;
     });
     const filterDesc = [
       statusFilter ? `status="${statusFilter}"` : null,
@@ -619,7 +620,7 @@ const handleListMyTasks: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
             ? '[~]'
             : '[ ]';
     const boardInfo = t.boardId ? ` [Board: ${boardNames[t.boardId] || t.boardId}]` : '';
-    return `${icon} ${t.id} — ${t.text}${boardInfo}`;
+    return `${icon} ${t.id} — ${listingTaskText(t)}${boardInfo}`;
   });
   return {
     tool: 'list_my_tasks',
@@ -670,7 +671,7 @@ const handleCheckStatus: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
   const currentTaskInfo = agent.currentTask
     ? agent.currentTask.slice(0, 120)
     : currentActiveTask
-      ? currentActiveTask.text.slice(0, 120)
+      ? listingTaskText(currentActiveTask, 120)
       : 'none';
   const projectAssignedAt = agent.projectChangedAt
     ? new Date(agent.projectChangedAt).toLocaleString()
@@ -700,7 +701,9 @@ const handleCheckStatus: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
     lines.push(`Active tasks:`);
     for (const t of activeTasks.slice(0, 10)) {
       const mark = mgr._isActiveTaskStatus(t.status) ? '~' : t.status === 'error' ? '!' : ' ';
-      lines.push(`  [${mark}] ${t.text.slice(0, 100)}${t.text.length > 100 ? '...' : ''}`);
+      lines.push(
+        `  [${mark}] ${listingTaskText(t, 100)}${!isExternalTask(t) && t.text.length > 100 ? '...' : ''}`
+      );
     }
     if (activeTasks.length > 10) lines.push(`  ... and ${activeTasks.length - 10} more`);
   }

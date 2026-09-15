@@ -63,6 +63,10 @@ export const TASK_VIEW_KEYS = [
   'occurrenceSeq',
   'recurrence',
   'commits',
+  // Provenance (lib/taskTrust.ts): whether the text came from outside, and
+  // what the injection scan found in it.
+  'trustLevel',
+  'securityFlags',
 ] as const;
 
 export function taskView(task: McpRecord) {

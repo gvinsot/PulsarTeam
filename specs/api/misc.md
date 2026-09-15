@@ -92,6 +92,7 @@ Helper endpoints exposed to Swarm Leader agents (and the MCP that wraps them).
 ## 7. Contact — `/api/contact`
 
 ### POST `/api/contact`
-Public contact form. Rate-limited 5 / hour / IP. Submission becomes a task on the configured Support board.
-- **Body**: `{ name, email, phone?, message, type? }`.
+Public contact form. Rate-limited 5 / hour / IP. The visitor is anonymous; the server creates the task with its own `insert` API key, read from the Docker secret `HOME_FORM_KEY`, through the same checks as `POST /api/insert/tasks` (`authorizeScopedApiKey`). The task lands on the key's board, in its "Tickets" column when there is one, with source `{ type: 'website', name }`.
+- **Body**: `{ name?, email, phone, company?, message?, type: 'contact' | 'support' }`.
 - **Response 200**: `{ success: true, message }`.
+- **Response 503**: `HOME_FORM_KEY` missing, revoked, not an `insert` key, or its owner lost edit on the board (the reason is logged, never returned).

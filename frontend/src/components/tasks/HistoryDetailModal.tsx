@@ -17,6 +17,7 @@ import {
   AlertCircle,
   Send,
   Bot,
+  ShieldCheck,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -102,6 +103,7 @@ function renderEntryIcon(entry: TaskHistoryEntry) {
   if (entry.type === 'error') return <XCircle className="w-5 h-5 text-red-400" />;
   if (entry.type === 'stopped') return <Pause className="w-5 h-5 text-yellow-400" />;
   if (entry.type === 'restored') return <RotateCcw className="w-5 h-5 text-teal-400" />;
+  if (entry.type === 'trust_approved') return <ShieldCheck className="w-5 h-5 text-sky-400" />;
   return <ArrowRight className="w-5 h-5 text-dark-400" />;
 }
 
@@ -120,6 +122,8 @@ function renderEntryTitle(entry: TaskHistoryEntry) {
   if (entry.type === 'error') return <span className="text-red-300">Error occurred</span>;
   if (entry.type === 'stopped') return <span className="text-yellow-300">Execution stopped</span>;
   if (entry.type === 'restored') return <span className="text-teal-300">Task restored</span>;
+  if (entry.type === 'trust_approved')
+    return <span className="text-sky-300">External task approved for agents</span>;
   return <span className="text-dark-200">Status change</span>;
 }
 

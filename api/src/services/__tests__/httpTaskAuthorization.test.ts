@@ -70,6 +70,7 @@ const manager = {
   deleteTask,
   _isActiveTaskStatus: (status: string) => status === 'execute',
   _emit: mock.fn(),
+  _checkAutoRefine: mock.fn(),
   _taskResumeFailures: new Map(),
 };
 
@@ -104,6 +105,7 @@ beforeEach(() => {
   shares.clear();
   deleteTask.mock.resetCalls();
   manager._emit.mock.resetCalls();
+  manager._checkAutoRefine.mock.resetCalls();
   manager.agents = makeAgents();
   failBoardLookup = false;
   boards.set('alice-board', { id: 'alice-board', user_id: 'alice' });
@@ -257,4 +259,68 @@ test('revoked board share is checked again even when the caller owns the agent',
   await assertDenied(await harness().get('/task/history'));
   await assertDenied(await harness().del('/task'));
   assert.deepEqual(rows.get('task'), original);
+});
+
+// ── POST /tasks/:id/approve — external tasks need a HUMAN to let agents in ──
+//
+// A task created through an insert key stays inert (lib/taskTrust.ts) until
+// someone who can edit it approves it. The approval is recorded, and the
+// column's on-entry actions — skipped while it waited — are run right then.
+
+function seedExternal(overrides: Record<string, unknown> = {}) {
+  seedTask('alice-board', null);
+  return Object.assign(rows.get('task')!, {
+    trustLevel: 'untrusted',
+    securityFlags: [{ code: 'instruction_override', severity: 'high', label: 'x' }],
+    ...overrides,
+  });
+}
+
+test('an editor approves an external task: recorded, then its column runs', async () => {
+  seedExternal();
+  const res = await harness().post('/task/approve', {});
+  assert.equal(res.status, 200);
+
+  const row = rows.get('task')!;
+  assert.equal(row.trustLevel, 'approved');
+  const entry = row.history.at(-1);
+  assert.equal(entry.type, 'trust_approved');
+  assert.equal(entry.by, 'alice');
+  assert.deepEqual(entry.flags, ['instruction_override'], 'what the approver was shown is kept');
+
+  assert.equal(
+    manager._checkAutoRefine.mock.callCount(),
+    1,
+    'the skipped on-entry actions run now'
+  );
+  assert.equal(manager._checkAutoRefine.mock.calls[0].arguments[0].trustLevel, 'approved');
+});
+
+test('nobody without edit on the task approves it — a read share is not enough', async () => {
+  seedTask('bob-board', null);
+  Object.assign(rows.get('task')!, { trustLevel: 'untrusted' });
+
+  assert.equal((await harness().post('/task/approve', {})).status, 403);
+  shares.set('bob-board:alice', { permission: 'read' });
+  assert.equal((await harness().post('/task/approve', {})).status, 403);
+  assert.equal(rows.get('task')!.trustLevel, 'untrusted');
+  assert.equal(manager._checkAutoRefine.mock.callCount(), 0);
+});
+
+test('the internal service session — what agents and runners hold — cannot approve', async () => {
+  seedExternal();
+  const internal = { username: 'internal-mcp', role: 'admin', internal: true } as any;
+  const res = await harness(internal).post('/task/approve', {});
+  assert.equal(res.status, 403);
+  assert.equal(rows.get('task')!.trustLevel, 'untrusted');
+  assert.equal(manager._checkAutoRefine.mock.callCount(), 0);
+});
+
+test('approving twice, or a task written inside the tenant, is a conflict', async () => {
+  seedExternal({ trustLevel: 'approved' });
+  assert.equal((await harness().post('/task/approve', {})).status, 409);
+
+  seedTask('alice-board', null);
+  assert.equal((await harness().post('/task/approve', {})).status, 409);
+  assert.equal(rows.get('task')!.trustLevel, undefined, 'approval never marks a tenant task');
 });

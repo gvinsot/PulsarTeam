@@ -1,11 +1,22 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { getAllBoards, getAgentsByBoard } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
 import { contactSubmitSchema } from '../schemas/contact.js';
-import { detectEnvironment } from '../lib/environment.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
+import { readSecret } from '../secrets.js';
+import { authorizeScopedApiKey } from '../middleware/apiKeyAuth.js';
+import { createBoardTask } from '../services/mcp/taskInsertion.js';
 
+/**
+ * Public contact form (login page).
+ *
+ * The visitor is anonymous, so the SERVER holds the credential: an `insert`
+ * API key, minted from Settings → API keys against the board that should
+ * receive the requests, and provided as the Docker secret HOME_FORM_KEY
+ * (/run/secrets/HOME_FORM_KEY). The key is checked by the very function that
+ * guards POST /api/insert/tasks, so the target board, the owner's live edit
+ * access and revocation all behave as they do for any other integration.
+ */
 export function contactRoutes(agentManager: any) {
   const router = Router();
 
@@ -34,6 +45,21 @@ export function contactRoutes(agentManager: any) {
           return;
         }
 
+        // The visitor never learns why the key was refused: that is the
+        // operator's problem, and the reason goes to the logs.
+        const contactKey = readSecret('HOME_FORM_KEY');
+        if (!contactKey) {
+          console.error('[Contact] HOME_FORM_KEY is not configured — submission dropped');
+          res.status(503).json({ error: 'The contact form is temporarily unavailable.' });
+          return;
+        }
+        const auth = await authorizeScopedApiKey(contactKey, 'insert');
+        if (!auth.ok) {
+          console.error(`[Contact] HOME_FORM_KEY refused: ${auth.error}`);
+          res.status(503).json({ error: 'The contact form is temporarily unavailable.' });
+          return;
+        }
+
         // Sanitize inputs (prevent injection in task text)
         const sanitize = (s: string) => (s || '').replace(/[<>]/g, '').trim().slice(0, 500);
         const sName = sanitize(name || 'Anonymous');
@@ -49,65 +75,28 @@ export function contactRoutes(agentManager: any) {
         taskText += `\n\nEmail: ${sEmail}\nPhone: ${sPhone}`;
         if (sMessage) taskText += `\n\nMessage:\n${sMessage}`;
 
-        // Find the "Support" board
-        const boards = await getAllBoards();
-        let targetBoard: any = null;
+        // Land in the key board's "Tickets" column when it has one, else in
+        // the board's first column.
+        const board = auth.board!;
+        const ticketsColumn = (board.workflow?.columns || []).find(
+          (c: any) => c.label && c.label.toLowerCase() === 'tickets'
+        );
 
-        for (const board of boards) {
-          if (board.name && board.name.toLowerCase() === 'support') {
-            targetBoard = board;
-            break;
-          }
-        }
+        const created = await createBoardTask(
+          agentManager,
+          auth.user!,
+          board,
+          {
+            task: taskText,
+            task_type: type === 'contact' ? 'feature' : 'bug',
+            ...(ticketsColumn ? { status: ticketsColumn.id } : {}),
+          },
+          { type: 'website', scope: 'insert', apiKeyId: auth.apiKey!.id, name: sName },
+          { allowedColumns: auth.apiKey!.allowedColumns }
+        );
 
-        // Fallback: board containing "support". There is no global default board.
-        if (!targetBoard) {
-          targetBoard = boards.find((b: any) => b.name && b.name.toLowerCase().includes('support'));
-        }
-
-        const targetBoardId = targetBoard?.id || null;
-
-        // Resolve the "Tickets" column from the board's workflow
-        let targetColumn = 'backlog';
-        if (targetBoard?.workflow?.columns) {
-          const ticketsCol = targetBoard.workflow.columns.find(
-            (c: any) => c.label && c.label.toLowerCase() === 'tickets'
-          );
-          if (ticketsCol) targetColumn = ticketsCol.id;
-        }
-
-        // Find an agent assigned to the target board (or any agent)
-        let targetAgentId: string | null = null;
-        if (targetBoardId) {
-          const agents = await getAgentsByBoard(targetBoardId);
-          if (agents.length > 0) {
-            targetAgentId = agents[0].id;
-          }
-        }
-
-        // Fallback: use any available agent from memory
-        if (!targetAgentId) {
-          const allAgents = Array.from<any>(agentManager.agents.values());
-          if (allAgents.length > 0) {
-            targetAgentId = allAgents[0].id;
-          }
-        }
-
-        if (!targetAgentId) {
-          res.status(503).json({ error: 'No agents available to receive the request.' });
-          return;
-        }
-
-        const source = { type: 'website', name: sName };
-        const environment = detectEnvironment(req.hostname);
-        const task = await agentManager.addTask(targetAgentId, taskText, source, targetColumn, {
-          boardId: targetBoardId,
-          skipAutoRefine: true,
-          taskType: type === 'contact' ? 'feature' : 'bug',
-          environment,
-        });
-
-        if (!task) {
+        if (!created.ok) {
+          console.error(`[Contact] Task creation failed: ${created.error}`);
           res.status(500).json({ error: 'Failed to create the request.' });
           return;
         }

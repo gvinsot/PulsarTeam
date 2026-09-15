@@ -1,10 +1,12 @@
 // ── Creating a task on a board, for every key-authenticated surface ─────────
 //
-// Three doors lead here and they must not drift apart:
+// Four doors lead here and they must not drift apart:
 //
 //   • `create_task` on /api/mcp/management  — the board is a tool argument
 //   • `create_task` on /api/mcp/insert      — the board comes from the key
 //   • `POST /api/insert/tasks`              — the board comes from the key
+//   • `POST /api/contact`                   — the board comes from the
+//                                             server-held HOME_FORM_KEY
 //
 // So the field set (`createTaskFieldsShape`), its validation and the write
 // (`createBoardTask`) live once, here. The API documentation is generated from
@@ -23,6 +25,7 @@ import { taskEditShape } from './schemas.js';
 import { editTaskMetadata, taskView } from './taskOperations.js';
 import type { McpActor, McpRecord } from './actorScope.js';
 import { errorMessage } from '../../lib/errors.js';
+import { inspectExternalFields, type SecurityFlag } from '../../lib/taskTrust.js';
 
 /** Every field a caller may set when creating a task, board excluded. */
 export const createTaskFieldsShape = {
@@ -55,9 +58,12 @@ export type CreateTaskFields = z.infer<typeof createTaskFieldsSchema>;
 
 /** Who created the task, as stored on `task.source`. */
 export interface TaskInsertSource {
-  type: 'mcp' | 'api';
+  /** `website`: the public contact form, which inserts with a server-held key. */
+  type: 'mcp' | 'api' | 'website';
   scope: 'management' | 'insert';
   apiKeyId?: string;
+  /** Shown on the card's source badge for a `website` task. */
+  name?: string;
 }
 
 /**
@@ -98,19 +104,55 @@ export function resolveBoardStatus(
   };
 }
 
+export interface CreateBoardTaskOptions {
+  /**
+   * Column ids an insert key may write to (`api_keys.allowed_columns`).
+   * null/undefined = every column of the board.
+   */
+  allowedColumns?: string[] | null;
+}
+
+/**
+ * Restrict a board's columns to a key's allowed set, in board order, dropping
+ * ids that no longer exist (a column renamed or deleted after the key was
+ * minted). null means no restriction.
+ */
+export function allowedBoardColumns(
+  board: McpRecord,
+  allowedColumns: string[] | null | undefined
+): McpRecord[] | null {
+  if (!Array.isArray(allowedColumns)) return null;
+  const wanted = new Set(allowedColumns);
+  return (board?.workflow?.columns || []).filter((c: McpRecord) => wanted.has(c.id));
+}
+
 /**
  * Create one board-level (unassigned) task on `board`.
  *
  * `project`, when given, is the management surface's legacy consistency check
  * against the board's project; the project itself is always inherited.
+ *
+ * A task coming through an INSERT key is external (lib/taskTrust.ts): its text
+ * fields lose their invisible characters, are scanned for injection signals,
+ * and the task is created `untrusted` — inert until a human approves it.
  */
 export async function createBoardTask(
   agentManager: AgentManager,
   actor: McpActor,
   board: McpRecord,
-  fields: CreateTaskFields & { project?: string },
-  source: TaskInsertSource
+  rawFields: CreateTaskFields & { project?: string },
+  source: TaskInsertSource,
+  options: CreateBoardTaskOptions = {}
 ): Promise<TaskInsertResult> {
+  const external = source.scope === 'insert';
+  let securityFlags: SecurityFlag[] = [];
+  let fields = rawFields;
+  if (external) {
+    const inspected = inspectExternalFields(rawFields, ['task', 'title', 'description']);
+    fields = inspected.fields;
+    securityFlags = inspected.flags;
+  }
+
   const {
     task,
     title,
@@ -146,11 +188,29 @@ export async function createBoardTask(
   }
   const storagePath = normalizeStoragePath(storage_path);
 
+  // A key narrowed to some columns resolves the status against those only, so
+  // a caller can neither name nor guess its way into another column — and an
+  // omitted status lands in the first allowed column rather than the default.
+  const allowed = allowedBoardColumns(board, options.allowedColumns);
+  if (allowed && allowed.length === 0) {
+    return {
+      ok: false,
+      kind: 'invalid',
+      error:
+        'None of the columns this API key may write to still exists on its board. Update the key.',
+    };
+  }
+  const statusBoard = allowed
+    ? { ...board, workflow: { ...board.workflow, columns: allowed } }
+    : board;
+
   let resolvedStatus = status;
-  if (status && board?.workflow?.columns?.length) {
-    const resolution = resolveBoardStatus(board, status);
+  if (status && statusBoard?.workflow?.columns?.length) {
+    const resolution = resolveBoardStatus(statusBoard, status);
     if (resolution.error) return { ok: false, kind: 'invalid', error: resolution.error };
     resolvedStatus = resolution.status;
+  } else if (!status && allowed) {
+    resolvedStatus = allowed[0].id;
   }
 
   // Board-level (no owner agent), exactly like the REST create: an API key is
@@ -162,6 +222,7 @@ export async function createBoardTask(
     storagePath,
     storageProvider: storagePath ? storage_provider || 'onedrive' : null,
     skipAutoRefine: true,
+    ...(external ? { trustLevel: 'untrusted' as const, securityFlags } : {}),
   });
   if (!created) return { ok: false, kind: 'failed', error: 'Failed to create task.' };
 

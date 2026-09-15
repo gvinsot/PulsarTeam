@@ -222,7 +222,12 @@ test('the published req.user is the shape every authorization helper expects', a
 test('an insert key opens the insert surface and publishes its board', async () => {
   const { passed, req } = await call('insert', 'Bearer key-insert');
   assert.equal(passed, true);
-  assert.deepEqual(req.apiKey, { id: 'k5', scope: 'insert', boardId: 'board-own' });
+  assert.deepEqual(req.apiKey, {
+    id: 'k5',
+    scope: 'insert',
+    boardId: 'board-own',
+    allowedColumns: undefined,
+  });
   assert.equal(req.user.userId, 'user-a');
 });
 

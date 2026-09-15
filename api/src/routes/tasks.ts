@@ -828,6 +828,57 @@ router.post(
   })
 );
 
+// ── POST /tasks/:id/approve — let agents work on an external task ───────────
+//
+// A task created through an insert key (webhook, integration, public form) is
+// `untrusted`: no workflow action, no execution, no listing reaches an agent
+// until a person reads it and approves it here (lib/taskTrust.ts). Approval
+// does NOT make the text trusted — the task stays external and runs under the
+// restricted security profile (services/security/externalRunProfile.ts).
+//
+// Only a HUMAN session may approve. The internal service session is refused by
+// name: it is what agents and runners hold, and an agent that could approve
+// would approve the very text that told it to.
+router.post(
+  '/:id/approve',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    if (!req.user?.userId || isInternalServiceSession(req.user)) {
+      return res.status(403).json({ error: 'Approving an external task requires a user session' });
+    }
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (task.trustLevel !== 'untrusted') {
+      return res.status(409).json({
+        error:
+          task.trustLevel === 'approved'
+            ? 'Task is already approved'
+            : 'Task was created inside the organisation and needs no approval',
+      });
+    }
+
+    const by = req.user.username || req.user.userId;
+    const flags = (task.securityFlags || []).map(f => f.code);
+    const updated = await updateTaskFields(task.id, {
+      trustLevel: 'approved',
+      history: [
+        ...(task.history || []),
+        { at: new Date().toISOString(), by, type: 'trust_approved', status: task.status, flags },
+      ],
+    });
+    if (!updated) return res.status(500).json({ error: 'Failed to approve task' });
+    await auditLog('task_approved', task.id, req.user.userId, by, { flags });
+
+    mgr._emit('task:updated', { agentId: updated.agentId, task: updated });
+    // The column's on-entry actions were skipped while it waited: run them now.
+    mgr._checkAutoRefine({ ...updated, agentId: updated.agentId }, { by });
+    res.json(updated);
+  })
+);
+
 // ── PATCH /tasks/:id/clear-stopped — clear the "stopped" execution status ───
 router.patch(
   '/:id/clear-stopped',

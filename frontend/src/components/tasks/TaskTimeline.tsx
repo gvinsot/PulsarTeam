@@ -8,6 +8,7 @@ import {
   XCircle,
   Pause,
   ArrowRight,
+  ShieldCheck,
 } from 'lucide-react';
 import { MODE_LABELS, timeAgo, formatDate } from './taskConstants';
 import type { TaskCommit, TaskHistoryEntry } from '../../types';
@@ -194,6 +195,14 @@ export default function TaskTimeline({
                           <span className="text-red-400/70 truncate" title={item.h.error}>
                             {item.h.error.slice(0, 80)}
                           </span>
+                        )}
+                      </>
+                    ) : item.h.type === 'trust_approved' ? (
+                      <>
+                        <ShieldCheck className="w-2.5 h-2.5 text-sky-400 flex-shrink-0" />
+                        <span className="text-sky-300 font-medium">approved for agents</span>
+                        {item.h.by && (
+                          <span className="text-dark-500 truncate">by {item.h.by}</span>
                         )}
                       </>
                     ) : item.h.type === 'stopped' ? (

@@ -26,6 +26,8 @@ type Row = {
   name: string | null;
   // Set on an `insert` key only.
   board_id: string | null;
+  // Insert keys only: column ids, or null for every column.
+  allowed_columns: string[] | null;
   last_used_at: Date | null;
 };
 
@@ -65,16 +67,8 @@ function makeFakePool() {
       }
 
       if (norm.startsWith('INSERT INTO api_keys')) {
-        const [id, key_hash, prefix, hash_version, user_id, scope, name, board_id] = params as [
-          string,
-          string,
-          string,
-          number,
-          string?,
-          string?,
-          string?,
-          string?,
-        ];
+        const [id, key_hash, prefix, hash_version, user_id, scope, name, board_id, allowed] =
+          params as [string, string, string, number, string?, string?, string?, string?, string?];
         rows.push({
           id,
           key_hash,
@@ -85,6 +79,7 @@ function makeFakePool() {
           scope: scope ?? null,
           name: name ?? null,
           board_id: board_id ?? null,
+          allowed_columns: allowed ? JSON.parse(allowed) : null,
           last_used_at: null,
         });
         return { rows: [] };
@@ -139,17 +134,22 @@ function makeFakePool() {
         };
       }
 
-      if (norm.startsWith('SELECT id, key_hash, user_id, scope, board_id FROM api_keys')) {
+      if (
+        norm.startsWith(
+          'SELECT id, key_hash, user_id, scope, board_id, allowed_columns FROM api_keys'
+        )
+      ) {
         const v = params[0] as number;
         return {
           rows: rows
             .filter(r => r.hash_version === v)
-            .map(({ id, key_hash, user_id, scope, board_id }) => ({
+            .map(({ id, key_hash, user_id, scope, board_id, allowed_columns }) => ({
               id,
               key_hash,
               user_id,
               scope,
               board_id,
+              allowed_columns,
             })),
         };
       }
@@ -429,6 +429,7 @@ test('an insert key names its owner, its scope AND its board', async () => {
     userId: 'user-1',
     scope: 'insert',
     boardId: BOARD,
+    allowedColumns: null,
     legacy: false,
   });
   assert.equal(await validateApiKey(created.key), false, 'an insert key must not open /api/swarm');

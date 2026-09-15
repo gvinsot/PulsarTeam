@@ -649,6 +649,9 @@ export const api = {
   // the executor has been recycled and stopAgent returns 404.
   stopTask: (taskId: string) => post<OkAck>(`/tasks/${taskId}/stop`),
 
+  /** Let agents work on an external (insert-key) task. Human sessions only. */
+  approveTask: (taskId: string) => post<MutatedTask>(`/tasks/${taskId}/approve`),
+
   // `response` is whatever agentManager.sendMessage resolved to — a
   // `Promise<any>` in api/src with no declared shape (index.ts:153), so the
   // honest declaration here is unknown, not a string.
@@ -1065,11 +1068,12 @@ export const api = {
    * Mint a NEW insert key bound to `boardId` (never rotates another one). The
    * caller must be able to edit the board — 404 otherwise. Returns the key once.
    */
-  createInsertApiKey: (boardId: string, name?: string) =>
+  createInsertApiKey: (boardId: string, name?: string, allowedColumns?: string[]) =>
     post<ScopedApiKeyCreated>('/settings/api-key/mine', {
       scope: 'insert',
       board_id: boardId,
       name,
+      ...(allowedColumns?.length ? { allowed_columns: allowedColumns } : {}),
     }),
 
   /** The generated OpenAPI 3.1 document of every key-authenticated surface. */

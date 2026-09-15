@@ -77,6 +77,8 @@ export type {
   TaskCommit,
   TaskSecondaryRepo,
   TaskSource,
+  TaskTrustLevel,
+  TaskSecurityFlag,
   TaskRecurrence,
   TaskExecutionMessage,
   TaskHistoryEntry,

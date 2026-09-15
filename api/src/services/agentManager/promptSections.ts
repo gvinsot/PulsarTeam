@@ -7,6 +7,8 @@
 // (URL-doc refresh, plugin MCP-id collection). See the call sites for the
 // deliberate per-surface differences these helpers must NOT erase.
 
+import { listingTaskText } from '../../lib/taskTrust.js';
+
 export const RECENT_TASKS_LIMIT = 3;
 export const TASK_TEXT_MAX_CHARS = 300;
 
@@ -87,7 +89,8 @@ export function relevantTasksSection(
   let out = `\n\n--- Relevant Tasks (${rankedTasks.length} of ${totalActive}) ---\n`;
   for (const task of rankedTasks) {
     const mark = isActive(task.status) ? '~' : '!';
-    const text = String(task.text || '');
+    // External task text never reaches a prompt through this list (lib/taskTrust.ts).
+    const text = listingTaskText(task);
     const truncated =
       text.length > TASK_TEXT_MAX_CHARS ? text.slice(0, TASK_TEXT_MAX_CHARS).trimEnd() + '…' : text;
     out += `- [${mark}] (${task.id.slice(0, 8)}) ${truncated}\n`;

@@ -125,6 +125,17 @@ export const TASK_VIEW_PROPERTIES: Record<(typeof TASK_VIEW_KEYS)[number], JsonO
   occurrenceSeq: nullable('integer', 'Run number within its rule.'),
   recurrence: { type: ['object', 'null'], description: 'Recurrence configuration (rules only).' },
   commits: { type: ['array', 'null'], description: 'Linked commits.' },
+  trustLevel: {
+    type: ['string', 'null'],
+    enum: ['untrusted', 'approved', null],
+    description:
+      'null: written inside the tenant. `untrusted`: created through an insert key — no agent works on it until a human approves it. `approved`: external and approved; it still runs under a restricted security profile.',
+  },
+  securityFlags: {
+    type: ['array', 'null'],
+    description:
+      'Prompt-injection signals detected when the external text arrived: `{ code, severity, label, excerpt }`. Signals, not verdicts.',
+  },
 };
 
 const errorSchema = {
@@ -189,7 +200,7 @@ export const MCP_SURFACES = [
     title: 'Insert MCP',
     summary: "Create tasks on the key's board",
     description:
-      "Two tools: `get_board` (name and columns of the key's board) and `create_task`. The board comes from the key and is never an argument; no task can be read, moved or deleted.",
+      'Two tools: `get_board` (name and columns the key may write to) and `create_task`. The board comes from the key and is never an argument; no task can be read, moved or deleted. Tasks are created `untrusted`: no agent works on them until a human approves them.',
   },
   {
     path: '/api/mcp/management',
@@ -336,7 +347,7 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
           operationId: 'insert_get_board',
           summary: "Describe the key's board",
           description:
-            'Name and workflow columns of the board the key is bound to — use a column label or id as `status` when creating a task. Board metadata only; no task is readable with this key.',
+            'Name of the board the key is bound to and the columns the key may write to (all of them unless the key was narrowed) — use a column label or id as `status`. Board metadata only; no task is readable with this key.',
           security: [{ insertKey: [] }],
           'x-api-key-scope': 'insert',
           responses: {
@@ -362,7 +373,8 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
           operationId: 'insert_create_task',
           summary: "Create a task on the key's board",
           description:
-            'Creates one unassigned task. `status` accepts a column label or id and defaults to the first column; entering a column fires its workflow actions exactly as a task created in the UI would. ' +
+            'Creates one unassigned task. `status` accepts a column label or id among the columns the key may write to, and defaults to the first of them.\n\n' +
+            '**The task is created `untrusted`.** Its text was written outside the organisation, so no workflow action and no agent touches it until a person approves it in the UI; invisible characters are removed on arrival and prompt-injection signals are recorded in `securityFlags` for that person. Once approved it still runs under a restricted profile (fresh context, no credentials, no MCP servers, no other agent).\n\n' +
             "Fields not listed are ignored. The board is always the key's own: a `board_id` in the body has no effect.",
           security: [{ insertKey: [] }],
           'x-api-key-scope': 'insert',
@@ -539,7 +551,7 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
       securitySchemes: {
         insertKey: bearer(
           'Insert',
-          'Bound to one board at mint time; creates tasks there and nothing else. Several may exist per board. The owner must still be able to edit the board on every request.'
+          'Bound to one board at mint time, optionally narrowed to some of its columns; creates tasks there and nothing else. Several may exist per board. The owner must still be able to edit the board on every request. Tasks it creates wait for human approval before any agent sees them.'
         ),
         managementKey: bearer('Management', 'One per user; minting again rotates it.'),
         adminKey: bearer('Admin', 'One per user; also opens the management surface.'),

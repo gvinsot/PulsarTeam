@@ -31,6 +31,7 @@ import { emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
 import { executeAction, recordReassign } from './actionExecutor.js';
 import type { ActionContext, ActionResult } from './actionExecutor.js';
 import { markTaskError } from './taskErrors.js';
+import { needsApproval } from '../../lib/taskTrust.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { errorMessage } from '../../lib/errors.js';
 import {
@@ -113,6 +114,14 @@ export async function processColumnEntry(
 
   if (task.isManual) {
     console.log(`[WorkflowEngine] Skipping — task is manual (no automatic agent processing)`);
+    return;
+  }
+
+  // External text nobody has read yet: no action at all — not even an
+  // auto-assign or a status change — until a human approves it. Approval
+  // re-enters the current column (routes/tasks.ts POST /:id/approve).
+  if (needsApproval(task)) {
+    console.log(`[WorkflowEngine] Skipping — external task awaiting human approval`);
     return;
   }
 
@@ -355,7 +364,7 @@ export async function reArmInterruptedChains(agentManager: AgentManager, ownEnv:
   const candidates = await getInterruptedChainTasks(ownEnv);
   for (const task of candidates) {
     if (_processingTasks.has(task.id)) continue;
-    if (task.status === 'error' || task.isManual) continue;
+    if (task.status === 'error' || task.isManual || needsApproval(task)) continue;
     if (task.executionStatus === 'stopped') continue;
     if (agentManager._isActiveTaskStatus && !agentManager._isActiveTaskStatus(task.status))
       continue;
@@ -423,6 +432,7 @@ function _recheckTask(
 
   if (task.status === 'error') return;
   if (task.isManual) return;
+  if (needsApproval(task)) return;
   if (isTaskRunning(task.id)) return;
   // Don't re-fire on_enter retries or condition transitions for tasks
   // the user has stopped; otherwise the periodic recheck would relaunch

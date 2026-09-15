@@ -63,6 +63,9 @@ services:
       - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
       - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # `insert` API key the public contact form creates its tasks with (the key's
+      # board receives them). Docker secret → /run/secrets/HOME_FORM_KEY.
+      - HOME_FORM_KEY=${HOME_FORM_KEY:-}
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
       - OFFICE_SERVICE_URL=http://office-service:8000
     cap_drop:

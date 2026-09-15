@@ -297,3 +297,85 @@ test('call_mcp_tool blocks a server not in the agent available set', async () =>
   assert.match(parseResult(result).error, /not available to you/);
   assert.equal(mm._calls.callToolByNameForAgent.length, 0);
 });
+
+// ── Restricted profile of an external task ──────────────────────────────────
+//
+// A CLI agent working a task written outside the tenant reaches no MCP server
+// and can only update THAT task (security/externalRunProfile.ts). The gateway
+// judges it from the agent's persisted profile — and from the running task row,
+// because this replica's in-memory agent may be stale.
+
+function confinedGateway(mode: 'profile' | 'db') {
+  const am = makeFakeAgentManager();
+  const mcp = makeFakeMcpManager();
+  if (mode === 'profile') {
+    (am.agents.get('agent-1') as any).securityProfile = {
+      mode: 'external',
+      taskId: 'task-1',
+      since: '',
+    };
+  } else {
+    const row = taskRows.get('task-1');
+    Object.assign(row, {
+      trustLevel: 'approved',
+      actionRunning: true,
+      actionRunningAgentId: 'agent-1',
+    });
+  }
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    mcp as any,
+    fakeSkillManager as any,
+    'agent-1',
+    'board-1'
+  );
+  return { am, mcp, server };
+}
+
+for (const mode of ['profile', 'db'] as const) {
+  test(`a confined agent (${mode}) lists no MCP server and cannot call one`, async () => {
+    const { mcp, server } = confinedGateway(mode);
+
+    const listed = parseResult(await getToolHandler(server, 'list_mcps')({}));
+    assert.equal(listed.count, 0);
+    assert.deepEqual(listed.mcps, []);
+    assert.match(listed.hint, /restricted security profile/);
+
+    const called = await getToolHandler(
+      server,
+      'call_mcp_tool'
+    )({
+      server: 'GitHub',
+      tool: 'create_issue',
+      args: {},
+    });
+    assert.equal(called.isError, true);
+    assert.equal(mcp._calls.callToolByNameForAgent.length, 0, 'nothing is proxied');
+  });
+
+  test(`a confined agent (${mode}) updates its external task and no other`, async () => {
+    const { am, server } = confinedGateway(mode);
+    taskRows.set('task-other', {
+      id: 'task-other',
+      agentId: 'agent-1',
+      text: 'Regular work',
+      status: 'in_progress',
+      boardId: 'board-1',
+    });
+
+    const refused = await getToolHandler(
+      server,
+      'update_task'
+    )({
+      task_id: 'task-other',
+      status: 'done',
+    });
+    assert.equal(refused.isError, true);
+    assert.match(parseResult(refused).error, /Only the external task/);
+    assert.equal(am._calls.setTaskStatus.length, 0);
+
+    const ok = await getToolHandler(server, 'update_task')({ status: 'in_progress' });
+    assert.notEqual(ok.isError, true, JSON.stringify(ok));
+    assert.equal(am._calls.setTaskStatus[0].taskId, 'task-1');
+  });
+}

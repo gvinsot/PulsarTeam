@@ -10,6 +10,7 @@ import { normalizeRepoFullName, normalizeStoragePath } from './taskRepos.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 import type { AgentManager } from './agentManager/index.js';
 import { getAgentBoardScope, agentsVisibleTo } from '../lib/agentScope.js';
+import { isExternalTask, listingTaskText, listingTaskTitle } from '../lib/taskTrust.js';
 
 /**
  * The tenant an MCP call runs in, from the authorized X-Agent-Id.
@@ -490,7 +491,7 @@ export function createSwarmApiMcpServer(
         enabled: agentAny.enabled !== false,
         todoList: (await getTasksByAgent(agentAny.id)).map((t: any) => ({
           id: t.id,
-          text: t.text,
+          text: listingTaskText(t),
           status: t.status,
           project: t.project || null,
           boardId: t.boardId || null,
@@ -516,9 +517,7 @@ export function createSwarmApiMcpServer(
     {},
     async () => {
       const scope = await callerScope(agentManager, callerAgentId);
-      const boards = (await getAllBoards()).filter(
-        (b: any) => !scope || scope.boardIds.has(b.id)
-      );
+      const boards = (await getAllBoards()).filter((b: any) => !scope || scope.boardIds.has(b.id));
       // Hydrate each board with the distinct repos already in use on it. This
       // gives MCP callers a useful picker of valid repo_full_name values
       // without having to scan tasks themselves.
@@ -831,8 +830,9 @@ export function createSwarmApiMcpServer(
 
       const slim = tasks.map((t: any) => ({
         id: t.id,
-        title: t.title || (t.text ? t.text.slice(0, 120) : null),
-        text: t.text || '',
+        title: listingTaskTitle(t) || listingTaskText(t, 120) || null,
+        text: listingTaskText(t),
+        external: isExternalTask(t),
         status: t.status,
         agent_id: t.agentId,
         agent_name: agentNameById.get(t.agentId) || null,

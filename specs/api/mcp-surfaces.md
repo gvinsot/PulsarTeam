@@ -161,6 +161,8 @@ A key bound to **one board** at mint time. It creates tasks there and does nothi
 
 Rate limit: 60 requests/minute **per key** (`routes/insertApi.ts`), on top of the global 300/minute per IP. Created tasks carry `source: { type: 'api' | 'mcp', scope: 'insert', apiKeyId }`.
 
+Tasks created through an insert key are **external**: created `untrusted`, sanitized and scanned, inert until a human approves them, and then run under a restricted profile. Insert keys can also be narrowed to some columns (`allowed_columns`). See [external-tasks.md](external-tasks.md).
+
 Management `create_task`, insert `create_task` and `POST /api/insert/tasks` share one implementation (`services/mcp/taskInsertion.ts`): one field set, one validation, one write.
 
 ---

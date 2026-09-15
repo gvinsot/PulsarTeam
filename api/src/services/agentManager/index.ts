@@ -12,6 +12,7 @@ import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
 import type { Agent } from '../database/agents.js';
 import type { NativeToolCall } from '../nativeTools.js';
 import type { SessionClaims } from '../../middleware/session.js';
+import type { SecurityFlag, TaskTrustLevel } from '../../lib/taskTrust.js';
 
 import { lifecycleMethods } from './lifecycle.js';
 import { chatMethods } from './chat.js';
@@ -326,6 +327,8 @@ export interface AgentManager {
       taskType?: string;
       isManual?: boolean;
       environment?: string | null;
+      trustLevel?: TaskTrustLevel | null;
+      securityFlags?: SecurityFlag[];
     }
   ): Promise<any | null>;
   toggleTask(agentId: string, taskId: string): Promise<any | null>;

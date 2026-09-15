@@ -1,6 +1,7 @@
 import { getPool } from './connection.js';
 import { errorMessage } from '../../lib/errors.js';
 import type { normalizeSecondaryRepos } from '../taskRepos.js';
+import type { SecurityFlag, TaskTrustLevel } from '../../lib/taskTrust.js';
 
 // SELECT clause + joins shared by every task read query.
 // Hydrates `project` (name, derived from board.project_id) so `rowToTask`
@@ -53,6 +54,10 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
   secondaryRepos: 'secondary_repos',
   storageProvider: 'storage_provider',
   storagePath: 'storage_path',
+  // Writable ONLY through updateTaskFields, i.e. deliberately. _doSaveTask sets
+  // both on INSERT and never touches them on UPDATE — see there.
+  trustLevel: 'trust_level',
+  securityFlags: 'security_flags',
 });
 const TASK_COLUMNS = new Set<string>(Object.values(TASK_COLUMN_BY_FIELD));
 
@@ -152,6 +157,10 @@ export interface TaskRow {
   action_running_mode: string | null;
   pending_on_enter: string | null;
   is_manual: boolean | null;
+  /** lib/taskTrust.ts: NULL (tenant), 'untrusted' (external, unapproved), 'approved'. */
+  trust_level: string | null;
+  /** Injection signals recorded when external text arrived (lib/taskTrust.ts). */
+  security_flags: SecurityFlag[] | null;
   /** True on a recurring RULE — never rendered on a board, never executed. */
   is_template: boolean | null;
   /** Set on an occurrence: the rule that spawned it. */
@@ -232,6 +241,8 @@ export function rowToTask(row: TaskRow) {
     actionRunningMode: row.action_running_mode || undefined,
     errorFromStatus: row.error_from_status || undefined,
     isManual: row.is_manual || false,
+    trustLevel: (row.trust_level as TaskTrustLevel | null) || null,
+    securityFlags: Array.isArray(row.security_flags) ? row.security_flags : [],
     isTemplate: row.is_template || false,
     templateId: row.template_id || null,
     occurrenceSeq: row.occurrence_seq != null ? row.occurrence_seq : null,
@@ -425,8 +436,9 @@ async function _doSaveTask(task: TaskWriteInput) {
                           error, created_at, updated_at, completed_at, started_at,
                           execution_status, completed_action_idx, action_running, action_running_agent_id,
                           action_running_mode, error_from_status, is_manual, position, environment,
-                          pending_on_enter, secondary_repos, is_template, template_id, occurrence_seq)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
+                          pending_on_enter, secondary_repos, is_template, template_id, occurrence_seq,
+                          trust_level, security_flags)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, repo_provider = $6, repo_full_name = $7,
          storage_provider = $8, storage_path = $9,
@@ -438,6 +450,12 @@ async function _doSaveTask(task: TaskWriteInput) {
          action_running_mode = $27, error_from_status = $28, is_manual = $29, position = $30,
          pending_on_enter = $32, secondary_repos = $33,
          is_template = $34, template_id = $35, occurrence_seq = $36`,
+      // trust_level / security_flags are NOT in the UPDATE list on purpose. Every
+      // path in the codebase persists a spread of some task object through here,
+      // and plenty of those objects were built before the column existed or
+      // without it: letting them write it would silently turn an external task
+      // into a tenant one. Provenance is set once, here, on INSERT; the only way
+      // to change it afterwards is an explicit updateTaskFields (approval).
       [
         task.id,
         task.agentId,
@@ -475,6 +493,8 @@ async function _doSaveTask(task: TaskWriteInput) {
         task.isTemplate || false,
         task.templateId || null,
         task.occurrenceSeq != null ? task.occurrenceSeq : null,
+        task.trustLevel || null,
+        JSON.stringify(Array.isArray(task.securityFlags) ? task.securityFlags : []),
       ]
     );
   } catch (err) {
@@ -589,6 +609,7 @@ export async function getTasksForResume(environment?: string | null) {
         AND t.status NOT IN ('done', 'backlog', 'error')
         AND (t.execution_status IS NULL OR t.execution_status NOT IN ('watching', 'stopped'))
         AND (t.is_manual IS NULL OR t.is_manual = FALSE)
+        AND t.trust_level IS DISTINCT FROM 'untrusted'
         ${envFilter}
       ORDER BY t.started_at ASC
     `,
@@ -633,6 +654,7 @@ export async function getActiveWorkflowTasks(environment?: string | null) {
         AND ${NOT_TEMPLATE}
         AND t.board_id IS NOT NULL
         AND t.is_manual IS NOT TRUE
+        AND t.trust_level IS DISTINCT FROM 'untrusted'
         AND t.status NOT IN ('done', 'error')
         AND t.action_running IS NOT TRUE
         AND (t.execution_status IS NULL OR t.execution_status NOT IN ('watching', 'stopped'))
@@ -664,6 +686,7 @@ export async function getInterruptedChainTasks(environment?: string | null) {
         AND ${NOT_TEMPLATE}
         AND t.board_id IS NOT NULL
         AND t.is_manual IS NOT TRUE
+        AND t.trust_level IS DISTINCT FROM 'untrusted'
         AND (t.action_running IS TRUE OR t.completed_action_idx IS NOT NULL)
         ${envFilter}
       ORDER BY t.created_at`,

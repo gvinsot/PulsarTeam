@@ -105,7 +105,9 @@ export type TaskHistoryEntryType =
   | 'stopped'
   | 'restored'
   | 'board_move'
-  | 'workflow_column_rename';
+  | 'workflow_column_rename'
+  // POST /api/tasks/:id/approve — a person let agents work on an external task.
+  | 'trust_approved';
 
 /**
  * One git commit linked to a task, as pushed into task.commits.
@@ -138,6 +140,30 @@ export interface TaskSecondaryRepo {
   /** Always a well-formed 'owner/repo'; malformed entries, duplicates and the
    *  primary repo are dropped, and the list is capped at 10. */
   fullName: string;
+}
+
+/**
+ * Who may have written a task's text (api/src/lib/taskTrust.ts). Closed union,
+ * rule 1(b): api/src is the only writer and no update schema accepts it.
+ *   'untrusted' — created through an insert API key (webhook, integration, the
+ *                 public contact form); no agent works on it until approved.
+ *   'approved'  — external and approved by a human; still runs confined.
+ * A task written inside the tenant carries null.
+ */
+export type TaskTrustLevel = 'untrusted' | 'approved';
+
+/**
+ * One prompt-injection signal recorded when external text arrived. A signal for
+ * the approver, not a verdict. Produced by api/src/lib/taskTrust.ts
+ * scanForInjection.
+ */
+export interface TaskSecurityFlag {
+  /** Stable id: instruction_override, role_marker, secret_exfiltration, url, … */
+  code: string;
+  severity: 'high' | 'medium' | 'low';
+  label: string;
+  /** The matched text, truncated. */
+  excerpt?: string;
 }
 
 /**
@@ -392,6 +418,10 @@ export interface Task {
   errorFromStatus?: TaskStatus;
   /** `|| false`. */
   isManual: boolean;
+  /** `|| null` — see TaskTrustLevel. */
+  trustLevel: TaskTrustLevel | null;
+  /** `Array.isArray(...) ? ... : []` — always an array. */
+  securityFlags: TaskSecurityFlag[];
   /** BIGINT NOT NULL DEFAULT 0. node-postgres returns BIGINT as a STRING, hence
    *  the mapper's `parseInt(row.position, 10) || 0` — so this really is a number
    *  on the wire. */
