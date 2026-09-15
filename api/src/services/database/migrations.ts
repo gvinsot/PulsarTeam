@@ -237,6 +237,12 @@ const MIGRATIONS: Migration[] = [
       await removeLegacyDefaultBoards(db);
     },
   },
+  sqlMigration('202609150001_task_human_views', 'track human views of MCP and API tasks', [
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS human_viewed_at TIMESTAMPTZ',
+    `CREATE INDEX IF NOT EXISTS idx_tasks_unseen_board ON tasks (board_id)
+     WHERE human_viewed_at IS NULL AND source->>'type' IN ('mcp', 'api')
+       AND deleted_at IS NULL AND is_template IS NOT TRUE`,
+  ]),
 ];
 
 /**

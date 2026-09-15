@@ -26,6 +26,7 @@ export interface BoardTabsBoard {
  */
 interface BoardTabsProps<B extends BoardTabsBoard> {
   boards: B[];
+  unseenTaskCounts?: Record<string, number>;
   /** null until a board is selected (and while the project filter hides them all). */
   activeBoardId: string | null;
   onSelect: (boardId: string) => void;
@@ -37,6 +38,7 @@ interface BoardTabsProps<B extends BoardTabsBoard> {
 
 export default function BoardTabs<B extends BoardTabsBoard>({
   boards,
+  unseenTaskCounts = {},
   activeBoardId,
   onSelect,
   onCreate,
@@ -132,6 +134,15 @@ export default function BoardTabs<B extends BoardTabsBoard>({
             >
               <KanbanSquare className="w-3.5 h-3.5" />
               {board.name}
+              {(unseenTaskCounts[board.id] || 0) > 0 && (
+                <span
+                  className="min-w-5 rounded-full bg-indigo-500 px-1.5 py-0.5 text-[11px] font-semibold leading-4 text-white tabular-nums"
+                  title="Tasks created via MCP or API that no human has opened yet"
+                  aria-label={`${unseenTaskCounts[board.id]} unseen tasks`}
+                >
+                  {unseenTaskCounts[board.id]}
+                </span>
+              )}
               {board.share_permission && (
                 <span
                   className="text-[10px] text-dark-500 bg-dark-700/50 px-1 py-0.5 rounded"

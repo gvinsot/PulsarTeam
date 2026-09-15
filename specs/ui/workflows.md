@@ -26,6 +26,7 @@ The tab is split into:
 ## 3. Board tabs and creation
 
 - Each tab shows the board name, optionally an indicator of the user's share permission level (read / edit / admin) when the board is shared from another user.
+- A numeric badge beside the board name counts tasks created via MCP or API that no human has opened yet. Opening a task detail in a visible browser tab acknowledges that task individually, including for read-only board members; simply opening the board, listing tasks or reading them through MCP/API does not. The first view is persisted and shared across board members. Counts include all columns regardless of UI filters, exclude deleted tasks and recurring rules, and disappear at zero. Existing MCP/API tasks start unseen when this tracking is introduced.
 - Plus button opens a board creation form: name, optional starting workflow (defaults to a stock 4-column flow: Backlog / In Progress / Review / Done).
 - Board context menu (`...`):
   - **Share** — opens `ShareBoardModal` (admin permission only).

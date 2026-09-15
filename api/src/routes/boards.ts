@@ -1,5 +1,9 @@
 import express from 'express';
 import { asyncHandler } from '../lib/asyncHandler.js';
+import { resolveSessionToken } from '../middleware/session.js';
+import { isInternalServiceSession } from '../lib/agentAccess.js';
+import { getUnseenTaskCounts, markTaskHumanViewed } from '../services/database/taskViews.js';
+import { emitTaskUpdated } from '../services/taskMutations.js';
 import {
   getBoardsByUser,
   createBoard,
@@ -14,6 +18,7 @@ import {
   getAllUsers,
   getAllBoards,
   getTasksByAssignee,
+  getTaskById,
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
@@ -41,6 +46,37 @@ export function boardRoutes(agentManager: AgentManager) {
     asyncHandler(async (req, res) => {
       const boards = await getBoardsByUser(req.user.userId);
       res.json(boards);
+    })
+  );
+
+  // Counts include every column, independently of the active board or UI filters.
+  router.get(
+    '/unseen-task-counts',
+    asyncHandler(async (req, res) => {
+      const boards = await getBoardsByUser(req.user.userId);
+      res.json(await getUnseenTaskCounts(boards.map(board => board.id)));
+    })
+  );
+
+  router.post(
+    '/:id/tasks/:taskId/viewed',
+    authorizeBoardAccess('read'),
+    asyncHandler(async (req, res) => {
+      // API/MCP reads and service credentials cannot acknowledge a human view.
+      if (
+        !req.user.userId ||
+        isInternalServiceSession(req.user) ||
+        resolveSessionToken(req)?.source !== 'cookie'
+      ) {
+        return res.status(403).json({ error: 'A browser session is required' });
+      }
+      const task = await getTaskById(req.params.taskId as string);
+      if (!task || task.boardId !== req.params.id || task.isTemplate) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+      const changed = await markTaskHumanViewed(req.params.id as string, task.id);
+      if (changed) emitTaskUpdated(agentManager, task, { emitAgent: false });
+      res.json({ success: true });
     })
   );
 

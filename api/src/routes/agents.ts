@@ -16,6 +16,7 @@ import {
 import { isValidRepoFullName } from '../services/taskRepos.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { requireRole, sessionUser } from '../middleware/auth.js';
+import { resolveSessionToken } from '../middleware/session.js';
 import { agentAccessMiddleware, type AgentAccessLevel } from '../lib/agentAccess.js';
 import { detectEnvironment } from '../lib/environment.js';
 import { getUserBoardIdSet as getUserBoardIds } from '../lib/boardAccess.js';
@@ -592,7 +593,10 @@ export function agentRoutes(agentManager: AgentManager) {
         res.status(404).json({ error: 'Agent not found' });
         return;
       }
-      const resolvedSource = source || { type: 'user', name: req.user?.username || undefined };
+      const resolvedSource = source || {
+        type: resolveSessionToken(req)?.source === 'bearer' ? 'api' : 'user',
+        name: req.user?.username || undefined,
+      };
       let resolvedStatus = status && typeof status === 'string' ? status : undefined;
       let resolvedBoardId = boardId || undefined;
 

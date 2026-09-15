@@ -1096,6 +1096,11 @@ export const api = {
   // Boards (per-user multi-board)
   getBoards: () => get<BoardListItem[]>('/boards'),
 
+  getUnseenTaskCounts: () => get<Record<string, number>>('/boards/unseen-task-counts'),
+
+  markTaskViewed: (boardId: string, taskId: string) =>
+    post<SuccessAck>(`/boards/${boardId}/tasks/${taskId}/viewed`, {}),
+
   getAllBoardsAdmin: () => get<AdminBoardListItem[]>('/boards/all'),
 
   createBoard: (name?: string, workflow?: BoardWorkflow, filters?: Record<string, unknown>) =>

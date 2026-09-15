@@ -47,6 +47,7 @@ interface TaskDetailModalProps {
   /** The board's refreshAll; it takes an optional new task the modal never
    *  passes, hence the zero-arity signature here. */
   onRefresh: () => void;
+  onViewed?: () => void;
   onDelete: (task: TaskSocketPayload) => void | Promise<void>;
   onStop?: (task: TaskSocketPayload) => void | Promise<void>;
   onResume?: (task: TaskSocketPayload) => void;
@@ -65,6 +66,7 @@ export default function TaskDetailModal({
   agents,
   onClose,
   onRefresh,
+  onViewed,
   onDelete,
   onStop,
   onResume,
@@ -75,6 +77,32 @@ export default function TaskDetailModal({
   activeBoardId,
 }: TaskDetailModalProps) {
   const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!task.boardId || !['mcp', 'api'].includes(task.source?.type || '')) return;
+    const boardId = task.boardId;
+    let viewed = false;
+    let pending = false;
+    const acknowledge = async () => {
+      if (viewed || pending || document.visibilityState !== 'visible') return;
+      pending = true;
+      try {
+        await api.markTaskViewed(boardId, task.id);
+        viewed = true;
+        onViewed?.();
+      } catch (err) {
+        console.error('Failed to mark task as viewed:', err);
+      } finally {
+        pending = false;
+      }
+    };
+    void acknowledge();
+    document.addEventListener('visibilitychange', acknowledge);
+    const retry = setInterval(acknowledge, 15000);
+    return () => {
+      clearInterval(retry);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [task.id, task.boardId, task.source?.type, onViewed]);
   // `?? ''` on every read of `task.text` below: `Task.text` is `row.text || ''`
   // on a GET /tasks row, but the key is genuinely absent on a `task:updated`
   // frame — and these two feed controlled inputs, which need a string.

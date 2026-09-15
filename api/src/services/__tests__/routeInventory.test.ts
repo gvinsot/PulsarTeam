@@ -408,6 +408,8 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
 
   // ── /api/boards ───────────────────────────────────────────────────
   'GET /api/boards': ['authenticateToken'],
+  'GET /api/boards/unseen-task-counts': ['authenticateToken'],
+  'POST /api/boards/:id/tasks/:taskId/viewed': ['authenticateToken', 'authorizeBoardAccess(read)'],
   'GET /api/boards/tasks/by-assignee/:agentId': ['authenticateToken'],
   'GET /api/boards/users': ['authenticateToken'],
   'GET /api/boards/all': ['authenticateToken'],

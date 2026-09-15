@@ -51,6 +51,7 @@ import DeletedTasksPanel from './tasks/DeletedTasksPanel';
 import RecurringTasksPanel from './tasks/RecurringTasksPanel';
 import BoardTabs from './tasks/BoardTabs';
 import BoardPluginsTab from './tasks/BoardPluginsTab';
+import { useUnseenTaskCounts } from '../hooks/useUnseenTaskCounts';
 
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
@@ -130,6 +131,7 @@ export default function TasksBoard({
   const [boards, setBoards] = useState<BoardEntry[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   const [boardsLoaded, setBoardsLoaded] = useState(false);
+  const { counts: unseenTaskCounts, refresh: refreshUnseenTaskCounts } = useUnseenTaskCounts();
 
   // Load boards on mount
   useEffect(() => {
@@ -987,6 +989,7 @@ export default function TasksBoard({
       {/* Board Tabs */}
       {visibleBoards.length > 0 && (
         <BoardTabs
+          unseenTaskCounts={unseenTaskCounts}
           boards={visibleBoards}
           activeBoardId={activeBoardId}
           onSelect={id => {
@@ -1275,6 +1278,7 @@ export default function TasksBoard({
       {/* Task detail modal */}
       {liveSelectedTask && (
         <TaskDetailModal
+          onViewed={refreshUnseenTaskCounts}
           task={liveSelectedTask}
           agents={agents}
           statusOptions={statusOptions}

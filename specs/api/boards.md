@@ -10,6 +10,12 @@ Source: `api/src/routes/boards.ts`. All routes require JWT. Many enforce a per-b
 List boards the caller owns or has been shared.
 - **Response 200**: `Board[]` with `permission` (`read|edit|admin`) and `isOwner` flag.
 
+### GET `/api/boards/unseen-task-counts`
+Returns `{ [boardId]: count }` for the caller's owned and shared boards. Only live, non-template tasks with `source.type` equal to `mcp` or `api` and no recorded human view count. Zero-count boards are omitted. This read has no side effects.
+
+### POST `/api/boards/:id/tasks/:taskId/viewed`
+Requires a browser cookie session and read access to the board. Called only when a human opens an individual task detail in a visible browser tab. Atomically records its first human view, shared across all board members; repeated calls are harmless. Bearer/service credentials are rejected. Returns `{ success: true }`; a task missing from this board returns 404. Viewing does not approve an external task or change its workflow state.
+
 ### GET `/api/boards/:id`
 Single board detail with `permission` and `isOwner`.
 
