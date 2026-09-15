@@ -22,12 +22,22 @@ const CURRENT_HASH_VERSION = 2;
  *    by every endpoint added after them. `listLegacyApiKeys` /
  *    `revokeLegacyApiKeys` exist so an operator can see and retire them.
  *
- *  • SCOPED (`user_id` + `scope` both set). One row per (user, scope), minted
- *    by the user themselves. The key names its owner and its tool set; it does
- *    NOT carry the owner's claims. `resolveApiKey` returns the owner id and
- *    the middleware re-reads the user row on every request, so a demotion or a
- *    deletion restricts the key on its very next use rather than whenever it
- *    happens to be rotated.
+ *  • SCOPED (`user_id` + `scope` both set). Minted by the user themselves. The
+ *    key names its owner and its tool set; it does NOT carry the owner's
+ *    claims. `resolveApiKey` returns the owner id and the middleware re-reads
+ *    the user row on every request, so a demotion or a deletion restricts the
+ *    key on its very next use rather than whenever it happens to be rotated.
+ *
+ *      – `admin` / `management`: one row per (user, scope), `board_id` NULL.
+ *      – `insert`: bound to ONE board (`board_id` set), opens only task
+ *        creation on that board. Several per user — one per integration — so
+ *        each can be revoked on its own. The owner's edit access to the board
+ *        is re-checked on every request too (middleware/apiKeyAuth.ts).
+ *
+ *    A row that is neither cleanly legacy nor cleanly scoped (an owner without
+ *    a scope, an insert key without its board, a ladder key WITH a board…)
+ *    resolves to nothing at all: it is refused everywhere, including on
+ *    `/api/swarm/*`, rather than being read as the ownerless instance-wide key.
  *
  * Storage scheme (v2), identical for both kinds:
  *   key_hash = HMAC-SHA256(api_key, server_secret)
@@ -44,22 +54,37 @@ const CURRENT_HASH_VERSION = 2;
  * SET, and a key holding it is still bounded by what its owner may already
  * administer in the UI. The genuinely instance-wide tools check
  * `role === 'admin'` for themselves.
+ *
+ * `insert` is the narrowest: task creation on the one board the key is bound
+ * to. It is off the ladder — see `scopeSatisfies`.
  */
-export const API_KEY_SCOPES = ['admin', 'management'] as const;
+export const API_KEY_SCOPES = ['admin', 'management', 'insert'] as const;
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
+
+/** The scopes that sit on the ladder: one key per (user, scope), no board. */
+export const LADDER_API_KEY_SCOPES = ['admin', 'management'] as const;
+export type LadderApiKeyScope = (typeof LADDER_API_KEY_SCOPES)[number];
 
 /**
  * The scope ladder, one way only: an `admin` key opens the management surface,
  * a `management` key never opens the admin one.
  */
-const SCOPE_RANK: Record<ApiKeyScope, number> = { management: 0, admin: 1 };
+const SCOPE_RANK: Record<LadderApiKeyScope, number> = { management: 0, admin: 1 };
 
 export function isApiKeyScope(value: unknown): value is ApiKeyScope {
   return typeof value === 'string' && (API_KEY_SCOPES as readonly string[]).includes(value);
 }
 
-/** Does a key granted `granted` satisfy an endpoint demanding `required`? */
+/**
+ * Does a key granted `granted` satisfy an endpoint demanding `required`?
+ *
+ * `insert` is off the ladder in BOTH directions. An insert key opens nothing
+ * but the insert surface, however high the ladder is read. And no ladder key
+ * opens the insert surface — not even `admin`: that surface takes its board
+ * from the key, and a ladder key has none to give.
+ */
 export function scopeSatisfies(granted: ApiKeyScope, required: ApiKeyScope): boolean {
+  if (granted === 'insert' || required === 'insert') return granted === required;
   return SCOPE_RANK[granted] >= SCOPE_RANK[required];
 }
 
@@ -70,6 +95,8 @@ export interface ResolvedApiKey {
   userId: string | null;
   /** NULL only for a legacy row. */
   scope: ApiKeyScope | null;
+  /** The board an `insert` key is bound to; NULL for every other kind. */
+  boardId: string | null;
   /** True for the ownerless instance-wide key — see the module header. */
   legacy: boolean;
 }
@@ -218,7 +245,7 @@ export async function resolveApiKey(key: string): Promise<ResolvedApiKey | null>
   const candidate = hmacKey(key);
 
   const result = await pool.query(
-    `SELECT id, key_hash, user_id, scope FROM ${TABLE} WHERE hash_version = $1`,
+    `SELECT id, key_hash, user_id, scope, board_id FROM ${TABLE} WHERE hash_version = $1`,
     [CURRENT_HASH_VERSION]
   );
 
@@ -230,16 +257,30 @@ export async function resolveApiKey(key: string): Promise<ResolvedApiKey | null>
   if (!matched) return null;
 
   const userId = (matched.user_id as string | null) ?? null;
-  const rawScope = matched.scope;
-  // A row is scoped only if BOTH halves are present. A half-written row (owner
-  // without scope, or the reverse) is treated as legacy, i.e. refused by every
-  // scoped endpoint, rather than silently granted a default tool set.
-  const scoped = !!userId && isApiKeyScope(rawScope);
+  const rawScope = matched.scope ?? null;
+  const boardId = (matched.board_id as string | null) ?? null;
+
+  // Legacy means ALL THREE are absent — nothing else may be read as the
+  // ownerless instance-wide key, because that key opens /api/swarm/* unscoped.
+  if (!userId && rawScope === null && !boardId) {
+    return { id: matched.id as string, userId: null, scope: null, boardId: null, legacy: true };
+  }
+
+  // Scoped means every piece the scope needs is present, and nothing it does
+  // not. An insert key names its board; a ladder key names none.
+  const scoped =
+    !!userId && isApiKeyScope(rawScope) && (rawScope === 'insert' ? !!boardId : !boardId);
+  if (!scoped) {
+    // Half-written: refused everywhere rather than granted a default tool set
+    // or, worse, the instance-wide legacy surface.
+    return null;
+  }
   return {
     id: matched.id as string,
-    userId: scoped ? userId : null,
-    scope: scoped ? (rawScope as ApiKeyScope) : null,
-    legacy: !scoped,
+    userId,
+    scope: rawScope as ApiKeyScope,
+    boardId: rawScope === 'insert' ? boardId : null,
+    legacy: false,
   };
 }
 
@@ -288,8 +329,9 @@ export async function revokeLegacyApiKeys(): Promise<number> {
 }
 
 /**
- * Mint a scoped key for one user. One row per (user, scope): minting again for
- * the same pair REPLACES the previous key, which is also how a user rotates.
+ * Mint a ladder-scoped key for one user. One row per (user, scope): minting
+ * again for the same pair REPLACES the previous key, which is also how a user
+ * rotates.
  *
  * Returns the full key — the only time it is visible in clear.
  */
@@ -299,12 +341,16 @@ export async function createScopedApiKey({
   name,
 }: {
   userId: string;
-  scope: ApiKeyScope;
+  scope: LadderApiKeyScope;
   name?: string | null;
 }) {
   const pool = getPool();
   if (!pool) throw new Error('Database not available');
-  if (!isApiKeyScope(scope)) throw new Error(`Unknown API key scope: ${scope}`);
+  // `insert` is refused here on purpose: it needs a board, and replacing "the"
+  // insert key would silently kill every other integration feeding a board.
+  if (!(LADDER_API_KEY_SCOPES as readonly string[]).includes(scope)) {
+    throw new Error(`Unknown API key scope: ${scope}`);
+  }
 
   const key = generateApiKey();
   const id = crypto.randomUUID();
@@ -337,17 +383,60 @@ export async function createScopedApiKey({
     await replace(pool);
   }
 
-  return { id, key, prefix, scope, name: label };
+  return { id, key, prefix, scope, name: label, board_id: null };
 }
 
-/** The caller's own scoped keys, metadata only. */
+/**
+ * Mint an `insert` key bound to one board. Never replaces anything: a user may
+ * hold several for the same board (one per form, webhook or script), each
+ * revoked on its own with `revokeScopedApiKey`.
+ *
+ * The CALLER must have proven the owner can edit `boardId` — this function
+ * stores, it does not authorize. The proof is repeated on every request the
+ * key makes (middleware/apiKeyAuth.ts), so a later unshare still bites.
+ *
+ * Returns the full key — the only time it is visible in clear.
+ */
+export async function createInsertApiKey({
+  userId,
+  boardId,
+  name,
+}: {
+  userId: string;
+  boardId: string;
+  name?: string | null;
+}) {
+  const pool = getPool();
+  if (!pool) throw new Error('Database not available');
+  if (!boardId) throw new Error('An insert key must be bound to a board');
+
+  const key = generateApiKey();
+  const id = crypto.randomUUID();
+  const prefix = key.slice(0, 12) + '...' + key.slice(-4);
+  const keyHash = hmacKey(key);
+  const label = (name || '').trim() || 'insert key';
+
+  await pool.query(
+    `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version, user_id, scope, name, board_id)
+     VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8)`,
+    [id, keyHash, prefix, CURRENT_HASH_VERSION, userId, 'insert', label, boardId]
+  );
+
+  return { id, key, prefix, scope: 'insert' as const, name: label, board_id: boardId };
+}
+
+/** The caller's own scoped keys (every kind), metadata only. */
 export async function listApiKeysForUser(userId: string) {
   const pool = getPool();
   if (!pool) return [];
+  // LEFT JOIN: the board name is display only. The cascade removes a key whose
+  // board is deleted, so a NULL name here only means the join raced a delete.
   const result = await pool.query(
-    `SELECT id, prefix, scope, name, created_at, last_used_at FROM ${TABLE}
-     WHERE user_id = $1 AND hash_version = $2
-     ORDER BY created_at DESC`,
+    `SELECT k.id, k.prefix, k.scope, k.name, k.board_id, b.name AS board_name,
+            k.created_at, k.last_used_at
+     FROM ${TABLE} k LEFT JOIN boards b ON b.id = k.board_id
+     WHERE k.user_id = $1 AND k.hash_version = $2
+     ORDER BY k.created_at DESC`,
     [userId, CURRENT_HASH_VERSION]
   );
   return result.rows;

@@ -32,6 +32,12 @@ export type McpHandlerContext = {
    * tenant every one of their tools is bounded by.
    */
   user: SessionClaims | null;
+  /**
+   * The scoped API key the request came in on (`requireApiKeyScope`), or null.
+   * The insert surface reads its board from here — never from X-Board-Id, which
+   * the caller chooses.
+   */
+  apiKey: { id: string; boardId: string | null } | null;
 };
 
 /** First value of a possibly-repeated header, trimmed, or null when absent. */
@@ -110,7 +116,12 @@ export function createMcpHttpHandler(
       }
 
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = buildServer({ agentId, boardId, user: req.user ?? null });
+      const server = buildServer({
+        agentId,
+        boardId,
+        user: req.user ?? null,
+        apiKey: req.apiKey ? { id: req.apiKey.id, boardId: req.apiKey.boardId } : null,
+      });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {

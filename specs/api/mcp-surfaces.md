@@ -1,6 +1,6 @@
-# Scoped MCP surfaces — `/api/mcp/*`
+# Scoped key surfaces — `/api/mcp/*`, `/api/insert/*`
 
-Sources: `api/src/middleware/apiKeyAuth.ts`, `api/src/services/apiKeyManager.ts`, `api/src/services/mcp/adminMcp.ts`, `api/src/services/mcp/managementMcp.ts`, `api/src/services/mcp/actorScope.ts`, `api/src/routes/apiKeys.ts`.
+Sources: `api/src/middleware/apiKeyAuth.ts`, `api/src/services/apiKeyManager.ts`, `api/src/services/mcp/adminMcp.ts`, `api/src/services/mcp/managementMcp.ts`, `api/src/services/mcp/insertMcp.ts`, `api/src/services/mcp/taskInsertion.ts`, `api/src/services/mcp/actorScope.ts`, `api/src/routes/apiKeys.ts`, `api/src/routes/insertApi.ts`, `api/src/services/apiDocs.ts`, `api/src/routes/apiDocs.ts`.
 
 ---
 
@@ -19,12 +19,15 @@ Before these surfaces, the only key-authenticated MCP endpoint was `/api/swarm/m
 
 ## 2. API keys
 
-`api_keys` now holds two kinds of row (migration `202609010001_api_keys_user_scope`).
+`api_keys` holds three kinds of row (migrations `202609010001_api_keys_user_scope`, `202609150001_api_keys_insert_scope`).
 
-| | `user_id` | `scope` | Accepted on | Managed from |
-|---|---|---|---|---|
-| **Legacy** | `NULL` | `NULL` | `/api/swarm/*` only | `GET`/`POST`/`DELETE /api/settings/api-key`, `GET`/`DELETE /api/settings/api-key/legacy` (admin) |
-| **Scoped** | set | `admin` \| `management` | `/api/mcp/*` only | `GET`/`POST /api/settings/api-key/mine`, `DELETE /api/settings/api-key/mine/:id` (any user, own keys only) |
+| | `user_id` | `scope` | `board_id` | Accepted on | Managed from |
+|---|---|---|---|---|---|
+| **Legacy** | `NULL` | `NULL` | `NULL` | `/api/swarm/*` only | `GET`/`POST`/`DELETE /api/settings/api-key`, `GET`/`DELETE /api/settings/api-key/legacy` (admin) |
+| **Ladder** | set | `admin` \| `management` | `NULL` | `/api/mcp/admin`, `/api/mcp/management` | `GET`/`POST /api/settings/api-key/mine`, `DELETE /api/settings/api-key/mine/:id` (any user, own keys only) |
+| **Insert** | set | `insert` | set | `/api/insert/*`, `/api/mcp/insert` | same routes; `POST` takes `{ scope: 'insert', board_id, name }` and requires **edit** on the board |
+
+A row that is none of these exactly — an owner without a scope, an insert key without its board, a ladder key with one — resolves to **nothing** and is refused everywhere, `/api/swarm/*` included. It is never read as the legacy key.
 
 Both are stored as `HMAC-SHA256(key, server_secret)`; the plaintext is returned exactly once, at mint time.
 
@@ -35,18 +38,21 @@ Both are stored as `HMAC-SHA256(key, server_secret)`; the plaintext is returned 
 
 Existing integrations therefore keep working, unchanged, and gain nothing new.
 
-### One row per `(user, scope)`
+### One row per `(user, scope)` — ladder scopes only
 
-Minting a scope you already hold **rotates** it: the previous key for that pair stops working immediately. Rotating or revoking the legacy key never touches anybody's scoped keys, and vice versa — each `DELETE` is narrowed by its owner predicate.
+Minting a ladder scope you already hold **rotates** it: the previous key for that pair stops working immediately. Rotating or revoking the legacy key never touches anybody's scoped keys, and vice versa — each `DELETE` is narrowed by its owner predicate.
+
+Insert keys are **not** unique: a user holds as many as they like — one per form, webhook or script — each revoked on its own. Minting one never replaces another, and rotating a ladder key never touches them. `board_id` cascades: deleting the board deletes its insert keys.
 
 ### Scope ladder
 
-`admin` > `management`, one way only.
+`admin` > `management`, one way only. `insert` is **off the ladder in both directions**.
 
-| Key scope | `/api/mcp/management` | `/api/mcp/admin` |
-|---|---|---|
-| `management` | ✅ | ❌ `403` |
-| `admin` | ✅ | ✅ |
+| Key scope | `/api/mcp/management` | `/api/mcp/admin` | `/api/insert/*`, `/api/mcp/insert` |
+|---|---|---|---|
+| `management` | ✅ | ❌ `403` | ❌ `403` |
+| `admin` | ✅ | ✅ | ❌ `403` — the insert surface takes its board from the key, and a ladder key has none |
+| `insert` | ❌ `403` | ❌ `403` | ✅ |
 
 ### Claims are read live, never baked into the key
 
@@ -63,6 +69,7 @@ The key carries an **owner id and nothing else**. `requireApiKeyScope` re-reads 
 | Legacy key on a scoped endpoint | `403` — "requires a scoped API key" |
 | Scope below the rung the mount demands | `403` — `scope "management" does not grant "admin"` |
 | Owner deleted | `403` — "API key owner no longer exists" |
+| Insert key whose owner can no longer **edit** its board (unshared, share demoted to read) | `403` — "can no longer edit this key's board" |
 | Database unreachable | `503` — never falls open |
 
 ---
@@ -140,6 +147,38 @@ Role gates carried over verbatim from the REST routes:
 
 ---
 
+## 4b. Insert surfaces — scope `insert`
+
+A key bound to **one board** at mint time. It creates tasks there and does nothing else: no task can be read, moved, delegated or deleted with it. The board is **never** taken from the request — a `board_id` in a body or tool argument has no effect.
+
+`requireApiKeyScope('insert')` re-runs `checkBoardAccess(board, owner, role, 'edit')` on **every** request, after the live owner re-read. Unsharing the board, or demoting the share to `read`, stops every insert key minted against it on its next call.
+
+| Endpoint | Contract |
+|---|---|
+| `GET /api/insert/board` | `{ board: { id, name, columns: [{ id, label }] } }` — to pick a `status`. Board metadata only. |
+| `POST /api/insert/tasks` | Body `createTaskFieldsSchema`: `task` (required), `title`, `description`, `priority`, `due_date`, `task_type`, `is_manual`, `status` (column label or id, free choice, defaults to the first column — entering a column fires its workflow like a UI-created task), `repo_full_name`, `repo_provider`, `storage_path`, `storage_provider`. Unknown fields are stripped. `201 { success, task }`. `400` = validation, or a value that does not fit the board (nothing written). `500` = server failure; if the row was already written the body carries `task_id` so a retrying caller can avoid a duplicate. |
+| `POST /api/mcp/insert` | MCP with two tools: `get_board`, `create_task` (same fields). |
+
+Rate limit: 60 requests/minute **per key** (`routes/insertApi.ts`), on top of the global 300/minute per IP. Created tasks carry `source: { type: 'api' | 'mcp', scope: 'insert', apiKeyId }`.
+
+Management `create_task`, insert `create_task` and `POST /api/insert/tasks` share one implementation (`services/mcp/taskInsertion.ts`): one field set, one validation, one write.
+
+---
+
+## 4c. Generated documentation — `GET /api/settings/api-docs/openapi.json`
+
+Session-authenticated. An OpenAPI 3.1 document built by `services/apiDocs.ts` and rendered by the **Documentation** tab of the API keys dialog (downloadable as `openapi.json`, with `servers` set to the instance origin).
+
+Nothing that can drift is hand-written:
+
+- request bodies are `z.toJSONSchema` of the zod schemas the routes validate with;
+- each MCP surface's `x-mcp-tools` is the `tools/list` answer of a **real** server instance, over an in-memory MCP transport;
+- the `Task` response covers exactly `TASK_VIEW_KEYS`.
+
+`apiDocs.test.ts` fails when a key-guarded route is mounted but undocumented, when a documented operation is not mounted behind the guard its `security` names, or when a catalogue differs from the registered tools. Operations carry `x-api-key-scope` (`insert` | `management` | `admin` | `legacy`).
+
+---
+
 ## 5. How authorization is decided
 
 Neither surface implements an access rule. `services/mcp/actorScope.ts` calls the same helpers the REST routes call:
@@ -168,6 +207,10 @@ A `403` on a resource you may not touch **confirms it exists**. On a machine-dri
 ```json
 {
   "mcpServers": {
+    "pulsar-insert": {
+      "url": "https://<your-host>/api/mcp/insert",
+      "headers": { "Authorization": "Bearer <your-insert-key>" }
+    },
     "pulsar-management": {
       "url": "https://<your-host>/api/mcp/management",
       "headers": { "Authorization": "Bearer <your-management-key>" }
@@ -180,7 +223,16 @@ A `403` on a resource you may not touch **confirms it exists**. On a machine-dri
 }
 ```
 
-Keys are minted from the UI's **MCP API Keys** modal, which also warns — with a banner — whenever a legacy instance-wide key is still outstanding, and offers to retire it.
+```bash
+curl -X POST 'https://<your-host>/api/insert/tasks' \
+  -H 'Authorization: Bearer <your-insert-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"The CSV export times out","priority":"high","status":"Backlog"}'
+```
+
+The MCP transport is stateless Streamable HTTP: send `Accept: application/json, text/event-stream` (otherwise `406`); the answer comes back as an event stream.
+
+Keys are minted from the UI's **API keys & documentation** dialog, which also warns — with a banner — whenever a legacy instance-wide key is still outstanding, and offers to retire it.
 
 ---
 
@@ -188,8 +240,10 @@ Keys are minted from the UI's **MCP API Keys** modal, which also warns — with 
 
 | File | Covers |
 |---|---|
-| `api/src/services/__tests__/apiKeyManager.test.ts` | HMAC storage, timing-safe validation, the legacy/scoped split, rotation, cross-user revoke |
-| `api/src/services/__tests__/apiKeyScopeMiddleware.test.ts` | The scope ladder, legacy refusal, live demotion/deletion, 401 vs 403 vs 503, guard naming |
-| `api/src/services/__tests__/scopedMcpSurfaces.test.ts` | Cross-tenant read / write / delegate / search on both surfaces, "not found" wording, role-gated tools, the exact tool list of each surface |
-| `api/src/services/__tests__/routeInventory.test.ts` | That both mounts carry `requireApiKeyScope(<scope>)` and cannot be silently downgraded |
+| `api/src/services/__tests__/apiKeyManager.test.ts` | HMAC storage, timing-safe validation, the legacy/ladder/insert split, half-written rows refused everywhere, rotation, insert keys accumulating, cross-user revoke |
+| `api/src/services/__tests__/apiKeyScopeMiddleware.test.ts` | The scope ladder, `insert` off the ladder both ways, live board-edit re-check, legacy refusal, live demotion/deletion, 401 vs 403 vs 503, guard naming |
+| `api/src/services/__tests__/scopedMcpSurfaces.test.ts` | Cross-tenant read / write / delegate / search, "not found" wording, role-gated tools, the exact tool list of each surface, insert server pinned to its board |
+| `api/src/services/__tests__/routeInventory.test.ts` | That every mount carries `requireApiKeyScope(<scope>)` and cannot be silently downgraded |
+| `api/src/services/__tests__/apiDocs.test.ts` | Generated docs ⇔ mounted routes and guards, live tool catalogues, request/response schemas |
+| `frontend/src/components/apiKeys/__tests__/apiDocsModel.test.ts` | Reading zod JSON Schema for display, valid shell in curl snippets, SSE header on MCP calls |
 | `api/src/services/__tests__/mcpOperations.test.ts` | MCP discovery/schema validation, complete configuration without secrets, workflow round trips and task migration, metadata persistence, explicit execution/stop/resume, recurrence lifecycle and cross-tenant denials. |

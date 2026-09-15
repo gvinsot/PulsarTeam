@@ -199,6 +199,7 @@ export type {
   ApiKeyInfoResponse,
   ApiKeyCreated,
   ApiKeyScope,
+  LadderApiKeyScope,
   ScopedApiKey,
   ScopedApiKeyListResponse,
   ScopedApiKeyCreated,
@@ -278,6 +279,18 @@ export type {
   RepoExplorerFileState,
   GitHubActivityTarget,
 } from './code';
+
+// ── api docs: the generated OpenAPI document ───────────────────────────────
+export type {
+  JsonSchema,
+  McpToolDoc,
+  OpenApiDocument,
+  OpenApiExample,
+  OpenApiMethod,
+  OpenApiOperation,
+  OpenApiParameter,
+  OpenApiResponse,
+} from './apiDocs';
 
 // ── ui ─────────────────────────────────────────────────────────────────────
 export type { ToastType, Toast, ShowToastFn } from './ui';

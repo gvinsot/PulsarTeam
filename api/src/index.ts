@@ -57,6 +57,8 @@ import { slackRoutes, slackOAuthRedirectRouter } from './routes/slack.js';
 import { createSlackMcpHandler } from './services/slackMcp.js';
 import { createAutoLearnMcpHandler } from './services/autoLearnMcp.js';
 import { apiKeyRoutes } from './routes/apiKeys.js';
+import { apiDocsRoutes } from './routes/apiDocs.js';
+import { insertApiRoutes } from './routes/insertApi.js';
 import { settingsRoutes } from './routes/settings.js';
 import { createSwarmApiMcpHandler } from './services/swarmApiMcp.js';
 import { createPulsarGatewayMcpHandler } from './services/pulsarGatewayMcp.js';
@@ -64,6 +66,7 @@ import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey, requireApiKeyScope } from './middleware/apiKeyAuth.js';
 import { createAdminMcpHandler } from './services/mcp/adminMcp.js';
 import { createManagementMcpHandler } from './services/mcp/managementMcp.js';
+import { createInsertMcpHandler } from './services/mcp/insertMcp.js';
 import { authenticateCoderApiKey } from './middleware/coderApiKeyAuth.js';
 import { internalClaudeTokenRoutes } from './routes/internalClaudeTokens.js';
 import { internalCodexTokenRoutes } from './routes/internalCodexTokens.js';
@@ -246,6 +249,11 @@ app.use('/api/external-voice', authenticateToken, externalVoiceRoutes(agentManag
 app.use('/api/leader-tools', authenticateToken, leaderToolsRoutes(agentManager));
 app.use('/api/budget', authenticateToken, budgetRoutes);
 app.use('/api/settings/api-key', authenticateToken, apiKeyRoutes);
+app.use(
+  '/api/settings/api-docs',
+  authenticateToken,
+  apiDocsRoutes({ agentManager, mcpManager, skillManager })
+);
 app.use('/api/llm-configs', authenticateToken, llmConfigRoutes(agentManager));
 app.use('/api/settings/general', authenticateToken, settingsRoutes());
 app.use('/api/jira', authenticateToken, jiraRoutes());
@@ -339,6 +347,15 @@ app.all('/api/mcp/admin', requireApiKeyScope('admin'), (req, res) => adminMcpHan
 app.all('/api/mcp/management', requireApiKeyScope('management'), (req, res) =>
   managementMcpHandler(req, res)
 );
+
+// ── Insert surfaces — board-bound `insert` keys ────────────────────────────
+//
+// Off the ladder: only an insert key opens these, and it opens nothing else.
+// The guard re-proves on every request that the key owner can still edit the
+// board the key was minted for; the board is never read from the request.
+const insertMcpHandler = createInsertMcpHandler(agentManager);
+app.all('/api/mcp/insert', requireApiKeyScope('insert'), (req, res) => insertMcpHandler(req, res));
+app.use('/api/insert', requireApiKeyScope('insert'), insertApiRoutes(agentManager));
 
 // Public liveness/readiness probe — unauthenticated, because it is what Docker,
 // Swarm and Traefik poll.

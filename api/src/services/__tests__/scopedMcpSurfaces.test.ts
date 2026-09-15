@@ -153,6 +153,7 @@ mock.module('../database/boardRepos.js', {
 
 const { createManagementMcpServer } = await import('../mcp/managementMcp.js');
 const { createAdminMcpServer } = await import('../mcp/adminMcp.js');
+const { createInsertMcpServer } = await import('../mcp/insertMcp.js');
 
 // ── Fakes for the managers the surfaces drive ───────────────────────────────
 
@@ -245,6 +246,9 @@ function management(actor: any) {
 }
 function admin(actor: any, mgr = makeAgentManager()) {
   return createAdminMcpServer(mgr, mcpManagerFake, skillManagerFake, actor as any);
+}
+function insert(actor: any, boardId: string, mgr = makeAgentManager()) {
+  return createInsertMcpServer(mgr, actor as any, { apiKeyId: 'key-insert', boardId });
 }
 
 // ── Management surface: listing is bounded by the caller's boards ───────────
@@ -639,4 +643,69 @@ test('the admin surface exposes the declared administrative tool set', async () 
     'update_board',
     'update_project',
   ]);
+});
+
+// ── Insert surface: one board, task creation only ───────────────────────────
+
+test('the insert surface exposes get_board and create_task, nothing else', async () => {
+  const names = Object.keys((insert(ALICE, BOARD_A) as any)._registeredTools);
+  assert.deepEqual(
+    names.sort(),
+    ['create_task', 'get_board'],
+    'an insert key must not be able to read, move or delete tasks'
+  );
+});
+
+test('insert create_task files the task on the key board, whatever the arguments say', async () => {
+  const mgr = makeAgentManager();
+  const result = await tool(
+    insert(ALICE, BOARD_A, mgr),
+    'create_task'
+  )({
+    task: 'From a webhook',
+    // Not part of the schema: stripped by the real MCP transport, and ignored
+    // by the handler even when a caller reaches it directly.
+    board_id: BOARD_B,
+    status: 'Doing',
+  });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  assert.equal(mgr.created.length, 1);
+  assert.equal(mgr.created[0].boardId, BOARD_A);
+  assert.equal(mgr.created[0].status, 'doing', 'a column label resolves to its id');
+  assert.equal(body(result).task.boardId, BOARD_A);
+});
+
+test('insert create_task rejects a column the board does not have', async () => {
+  const mgr = makeAgentManager();
+  const result = await tool(
+    insert(ALICE, BOARD_A, mgr),
+    'create_task'
+  )({
+    task: 'x',
+    status: 'Nope',
+  });
+  assert.equal(result.isError, true);
+  assert.match(body(result).error, /Invalid status/);
+  assert.equal(mgr.created.length, 0);
+});
+
+test('an insert server bound to a board its owner cannot edit creates nothing', async () => {
+  // The guard refuses such a key first; the server still fails closed without it.
+  const mgr = makeAgentManager();
+  assertNotFound(await tool(insert(ALICE, BOARD_B, mgr), 'create_task')({ task: 'x' }), 'Board');
+  assertNotFound(await tool(insert(ALICE, BOARD_B, mgr), 'get_board')({}), 'Board');
+  assert.equal(mgr.created.length, 0);
+});
+
+test('insert get_board shows the columns and no task', async () => {
+  const board = body(await tool(insert(ALICE, BOARD_A), 'get_board')({})).board;
+  assert.deepEqual(board, {
+    id: BOARD_A,
+    name: "Alice's board",
+    columns: [
+      { id: 'backlog', label: 'Backlog' },
+      { id: 'doing', label: 'Doing' },
+      { id: 'done', label: 'Done' },
+    ],
+  });
 });

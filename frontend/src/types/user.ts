@@ -255,19 +255,32 @@ export interface ApiKeyCreated {
  * instance-wide tools re-check the owner's role server-side.
  *
  * The ladder is one-way — `admin` also opens the management surface,
- * `management` never opens the admin one.
+ * `management` never opens the admin one. `insert` is OFF the ladder: bound to
+ * one board, it opens /api/insert/* and /api/mcp/insert and nothing else, and
+ * no ladder key opens those.
+ * Closed union, rule 1(a): `z.enum(API_KEY_SCOPES)` in api/src/routes/apiKeys.ts.
  */
-export type ApiKeyScope = 'admin' | 'management';
+export type ApiKeyScope = 'admin' | 'management' | 'insert';
+
+/** The scopes on the ladder: one key per (user, scope), never bound to a board. */
+export type LadderApiKeyScope = Exclude<ApiKeyScope, 'insert'>;
 
 /**
- * One of the caller's OWN scoped keys — one row per (user, scope).
- * Produced by api/src/services/apiKeyManager.ts listApiKeysForUser.
+ * One of the caller's OWN scoped keys. Produced by
+ * api/src/services/apiKeyManager.ts listApiKeysForUser.
+ *
+ * Ladder scopes hold one row per (user, scope); `insert` keys may be many, each
+ * bound to a board.
  */
 export interface ScopedApiKey {
   id: string;
   prefix: string;
   scope: ApiKeyScope;
   name: string | null;
+  /** Set on an `insert` key only. */
+  board_id: string | null;
+  /** LEFT JOIN on boards — null for ladder keys. */
+  board_name: string | null;
   created_at: string;
   /** null until the key is used for the first time. */
   last_used_at: string | null;
@@ -280,8 +293,9 @@ export interface ScopedApiKeyListResponse {
 
 /**
  * Body of POST /api/settings/api-key/mine — the ONLY response carrying the
- * clear-text scoped key. Minting a scope twice ROTATES it: the previous key for
- * that (user, scope) stops working immediately.
+ * clear-text scoped key. Minting a ladder scope twice ROTATES it: the previous
+ * key for that (user, scope) stops working immediately. Minting an insert key
+ * never replaces anything.
  */
 export interface ScopedApiKeyCreated {
   id: string;
@@ -290,6 +304,9 @@ export interface ScopedApiKeyCreated {
   prefix: string;
   scope: ApiKeyScope;
   name: string;
+  board_id: string | null;
+  /** Present on an insert key's response only. */
+  board_name?: string | null;
 }
 
 /**

@@ -12,16 +12,33 @@ export const agentUpdatesSchema = updateAgentSchema.describe(
 export const recurrenceSchema = updateTemplateSchema.shape.recurrence.unwrap();
 
 export const taskEditShape = {
-  title: z.string().max(2000).nullable().optional(),
-  description: z.string().max(20000).nullable().optional(),
-  priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable().optional(),
+  title: z.string().max(2000).nullable().optional().describe('Short title shown on the card.'),
+  description: z
+    .string()
+    .max(20000)
+    .nullable()
+    .optional()
+    .describe('Full task description (markdown). Replaces the task text when set.'),
+  priority: z
+    .enum(['low', 'medium', 'high', 'urgent'])
+    .nullable()
+    .optional()
+    .describe('Priority. null clears it.'),
   due_date: z
     .union([z.iso.date(), z.iso.datetime({ offset: true })])
     .nullable()
     .optional()
     .describe('ISO date or timestamp with timezone. null clears the deadline.'),
-  task_type: z.string().max(50).nullable().optional(),
-  is_manual: z.boolean().optional(),
+  task_type: z
+    .string()
+    .max(50)
+    .nullable()
+    .optional()
+    .describe('Free-form task type, e.g. bug, feature, chore.'),
+  is_manual: z
+    .boolean()
+    .optional()
+    .describe('True keeps the workflow from running agents on this task.'),
 };
 
 export const workflowColumnSchema = z

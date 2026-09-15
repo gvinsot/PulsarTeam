@@ -9,7 +9,8 @@ import type {
   AgentTimeSeries,
   ApiKeyCreated,
   ApiKeyInfoResponse,
-  ApiKeyScope,
+  LadderApiKeyScope,
+  OpenApiDocument,
   ScopedApiKeyCreated,
   ScopedApiKeyListResponse,
   LegacyApiKeyListResponse,
@@ -1050,14 +1051,29 @@ export const api = {
   /** Retire every ownerless key at once — admin only. */
   revokeLegacyApiKeys: () => del<LegacyApiKeyRevokeResponse>('/settings/api-key/legacy'),
 
-  // …and these manage the caller's OWN scoped keys, one per (user, scope).
-  // Available to every authenticated user: they are personal credentials, and
-  // the owner is part of every server-side predicate.
+  // …and these manage the caller's OWN scoped keys: one per (user, scope) on
+  // the ladder, any number of board-bound insert keys. Available to every
+  // authenticated user: they are personal credentials, and the owner is part of
+  // every server-side predicate.
   listMyApiKeys: () => get<ScopedApiKeyListResponse>('/settings/api-key/mine'),
 
-  /** Mint or ROTATE the caller's key for one scope. Returns the key once. */
-  createMyApiKey: (scope: ApiKeyScope, name?: string) =>
+  /** Mint or ROTATE the caller's key for one ladder scope. Returns the key once. */
+  createMyApiKey: (scope: LadderApiKeyScope, name?: string) =>
     post<ScopedApiKeyCreated>('/settings/api-key/mine', { scope, name }),
+
+  /**
+   * Mint a NEW insert key bound to `boardId` (never rotates another one). The
+   * caller must be able to edit the board — 404 otherwise. Returns the key once.
+   */
+  createInsertApiKey: (boardId: string, name?: string) =>
+    post<ScopedApiKeyCreated>('/settings/api-key/mine', {
+      scope: 'insert',
+      board_id: boardId,
+      name,
+    }),
+
+  /** The generated OpenAPI 3.1 document of every key-authenticated surface. */
+  getApiDocs: () => get<OpenApiDocument>('/settings/api-docs/openapi.json'),
 
   revokeMyApiKey: (id: string) =>
     del<SuccessAck>(`/settings/api-key/mine/${encodeURIComponent(id)}`),

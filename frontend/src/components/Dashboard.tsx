@@ -438,7 +438,7 @@ export default function Dashboard({
             <button
               onClick={() => setShowApiKeyModal(true)}
               className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
-              title="MCP API Key"
+              title="API keys & documentation"
             >
               <Key className="w-4 h-4" />
             </button>

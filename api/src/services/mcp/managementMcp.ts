@@ -18,7 +18,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getBoardsByUser, searchTasks, getProjectById } from '../database.js';
+import { getBoardsByUser, searchTasks } from '../database.js';
 import {
   getTaskByIdPrefix,
   getTasksByStatusAndBoards,
@@ -26,8 +26,6 @@ import {
 } from '../database/tasks.js';
 import { getReposForBoard } from '../database/boardRepos.js';
 import { emitTaskUpdated } from '../taskMutations.js';
-import { resolveWorkflowStatus } from '../workflow/columnIds.js';
-import { normalizeRepoFullName, normalizeStoragePath } from '../taskRepos.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from '../mcpResponses.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { createMcpHttpHandler } from '../mcpHttpHandler.js';
@@ -44,23 +42,8 @@ import {
 import type { AgentManager } from '../agentManager/index.js';
 import { registerTaskOperations, taskView, editTaskMetadata } from './taskOperations.js';
 import { taskEditShape } from './schemas.js';
+import { createBoardTask, createTaskFieldsShape } from './taskInsertion.js';
 import { errorMessage } from '../../lib/errors.js';
-
-/**
- * Resolve a caller-supplied status against a board's workflow columns. Labels
- * win over ids so a caller can pass the user-facing column name, matching what
- * the swarm surface already accepts.
- */
-function resolveBoardStatus(board: McpRecord, status: string): { status?: string; error?: string } {
-  const columns = board?.workflow?.columns || [];
-  const match = resolveWorkflowStatus(columns, status);
-  if (match) return { status: match.id };
-  return {
-    error: `Invalid status "${status}" for board "${board?.name || board?.id}". Valid columns: ${columns
-      .map((c: McpRecord) => c.id)
-      .join(', ')}`,
-  };
-}
 
 export function createManagementMcpServer(agentManager: AgentManager, actor: McpActor) {
   const server = new McpServer({ name: 'PulsarTeam Management', version: '1.0.0' });
@@ -139,15 +122,8 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
     'create_task',
     'Create a task on a board you can edit. board_id is mandatory — use list_boards to discover it. The task is created unassigned; use delegate_task to give it to an agent.',
     {
-      task: z.string().min(1).max(5000).describe('The task description'),
       board_id: z.string().describe('REQUIRED. Board UUID — see list_boards.'),
-      ...taskEditShape,
-      status: z
-        .string()
-        .optional()
-        .describe(
-          'Initial column — workflow column label preferred, column id also accepted. Defaults to the board first column.'
-        ),
+      ...createTaskFieldsShape,
       project: z
         .string()
         .max(200)
@@ -155,100 +131,18 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
         .describe(
           'Optional consistency check: must match the board project. The project is inherited from the board.'
         ),
-      repo_full_name: z
-        .string()
-        .optional()
-        .describe('Repository the task targets, in "owner/repo" format.'),
-      repo_provider: z.string().optional().describe('Defaults to "github" when a repo is set.'),
-      storage_path: z.string().optional().describe('Storage location the task should target.'),
-      storage_provider: z
-        .string()
-        .optional()
-        .describe('Defaults to "onedrive" when a storage path is set.'),
     },
-    async ({
-      task,
-      board_id,
-      title,
-      description,
-      priority,
-      due_date,
-      task_type,
-      is_manual,
-      status,
-      project,
-      repo_full_name,
-      repo_provider,
-      storage_path,
-      storage_provider,
-    }) => {
+    async ({ board_id, ...fields }) => {
       // 'edit' on the board, i.e. the same level POST /api/tasks demands.
       const board = await scopedBoard(actor, board_id, 'edit');
       if (!board.ok) return board.error!;
 
-      const boardProject = board.value.project_id
-        ? await getProjectById(board.value.project_id)
-        : null;
-      if (project && project !== boardProject?.name)
-        return jsonError(
-          'project must match the board project; attach the board to the project first.'
-        );
-
-      const repoFullName = normalizeRepoFullName(repo_full_name);
-      if (repo_full_name && !repoFullName) {
-        return jsonError(
-          `Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format.`
-        );
-      }
-      const storagePath = normalizeStoragePath(storage_path);
-
-      let resolvedStatus = status;
-      if (status && board.value?.workflow?.columns?.length) {
-        const resolution = resolveBoardStatus(board.value, status);
-        if (resolution.error) return jsonError(resolution.error);
-        resolvedStatus = resolution.status;
-      }
-
-      // Board-level (no owner agent), exactly like the REST create: an API key
-      // is not an agent, so there is no agent to own the task.
-      const created = await agentManager.addTask(
-        null,
-        description ?? task,
-        { type: 'mcp', scope: 'management' },
-        resolvedStatus,
-        {
-          boardId: board.value.id,
-          repoFullName,
-          repoProvider: repoFullName ? repo_provider || 'github' : null,
-          storagePath,
-          storageProvider: storagePath ? storage_provider || 'onedrive' : null,
-          skipAutoRefine: true,
-        }
-      );
-      if (!created) return jsonError('Failed to create task.');
-
-      if (
-        title !== undefined ||
-        priority !== undefined ||
-        due_date !== undefined ||
-        task_type !== undefined ||
-        is_manual !== undefined
-      ) {
-        const fields: Record<string, unknown> = {};
-        if (title !== undefined) fields.title = title;
-        if (priority !== undefined) fields.priority = priority;
-        if (due_date !== undefined) fields.dueDate = due_date;
-        if (task_type !== undefined) fields.taskType = task_type;
-        if (is_manual !== undefined) fields.isManual = is_manual;
-        try {
-          Object.assign(created, await editTaskMetadata(agentManager, created, fields, actor));
-        } catch (err) {
-          return jsonError(errorMessage(err));
-        }
-      }
-
-      created.project = boardProject?.name || null;
-      return jsonOk({ success: true, task: taskView(created) });
+      const created = await createBoardTask(agentManager, actor, board.value, fields, {
+        type: 'mcp',
+        scope: 'management',
+      });
+      if (!created.ok) return jsonError(created.error || 'Failed to create task.');
+      return jsonOk({ success: true, task: created.task });
     }
   );
 

@@ -8,6 +8,7 @@ import {
 } from '../services/apiKeyManager.js';
 import { getUserById } from '../services/database.js';
 import { errorMessage } from '../lib/errors.js';
+import { checkBoardAccess } from './authz.js';
 
 /**
  * Express middleware that authenticates requests via API key (Bearer token).
@@ -32,6 +33,13 @@ import { errorMessage } from '../lib/errors.js';
  * The re-read is the point, and it is why claims are NOT baked into the key:
  * a demotion from admin, or a deleted account, restricts every key that user
  * holds on its very next request instead of whenever the key is next rotated.
+ *
+ * ── The INSERT path ─────────────────────────────────────────────────────────
+ * `requireApiKeyScope('insert')` guards `/api/insert/*` and `/api/mcp/insert`.
+ * On top of the above it re-proves, on every request, that the owner can still
+ * EDIT the board the key is bound to — the same `checkBoardAccess` POST
+ * /api/tasks relies on. Unsharing the board, or demoting the share to read,
+ * therefore stops every insert key minted against it on its next use.
  */
 export async function authenticateApiKey(
   req: Request,
@@ -59,7 +67,12 @@ export async function authenticateApiKey(
 declare global {
   namespace Express {
     interface Request {
-      apiKey?: { id: string; scope: ApiKeyScope };
+      apiKey?: {
+        id: string;
+        scope: ApiKeyScope;
+        /** The board an `insert` key writes to; null for every other scope. */
+        boardId: string | null;
+      };
     }
   }
 }
@@ -130,6 +143,22 @@ export function requireApiKeyScope(required: ApiKeyScope) {
       return res.status(403).json({ error: 'API key owner no longer exists' });
     }
 
+    // An insert key is only as good as its owner's edit access to its board,
+    // re-read now. Saying so is not an enumeration oracle: the board is the
+    // key's own, not an id the caller chose.
+    if (resolved.scope === 'insert') {
+      let access;
+      try {
+        access = await checkBoardAccess(resolved.boardId, owner.id, owner.role, 'edit');
+      } catch (err) {
+        console.error('API key board lookup failed:', errorMessage(err));
+        return res.status(503).json({ error: 'Auth backend unavailable' });
+      }
+      if (!access.ok) {
+        return res.status(403).json({ error: "API key owner can no longer edit this key's board" });
+      }
+    }
+
     req.user = {
       userId: owner.id,
       username: owner.username,
@@ -139,7 +168,7 @@ export function requireApiKeyScope(required: ApiKeyScope) {
       // on its own. The claim is required by the SessionClaims shape.
       csrf: '',
     };
-    req.apiKey = { id: resolved.id, scope: resolved.scope };
+    req.apiKey = { id: resolved.id, scope: resolved.scope, boardId: resolved.boardId };
 
     // Reporting only — never awaited, never allowed to fail the request.
     void touchApiKey(resolved.id);

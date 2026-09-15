@@ -18,19 +18,49 @@
  *     id and nothing else; the role comes from a fresh database read on every
  *     request. That is what makes a demotion or a deletion take effect on the
  *     next call instead of at the next key rotation.
+ *
+ *  4. `insert` IS OFF THE LADDER. An insert key opens the insert surface and
+ *     nothing else; no ladder key — not even admin — opens the insert surface.
+ *     And the owner's edit access to the key's board is re-proved live.
  */
 
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 // ── The key store, faked at the resolve boundary ────────────────────────────
-type Resolved = { id: string; userId: string | null; scope: string | null; legacy: boolean };
+type Resolved = {
+  id: string;
+  userId: string | null;
+  scope: string | null;
+  boardId: string | null;
+  legacy: boolean;
+};
 
 const KEYS: Record<string, Resolved> = {
-  'key-admin': { id: 'k1', userId: 'user-a', scope: 'admin', legacy: false },
-  'key-management': { id: 'k2', userId: 'user-a', scope: 'management', legacy: false },
-  'key-orphan': { id: 'k3', userId: 'user-gone', scope: 'admin', legacy: false },
-  'key-legacy': { id: 'k4', userId: null, scope: null, legacy: true },
+  'key-admin': { id: 'k1', userId: 'user-a', scope: 'admin', boardId: null, legacy: false },
+  'key-management': {
+    id: 'k2',
+    userId: 'user-a',
+    scope: 'management',
+    boardId: null,
+    legacy: false,
+  },
+  'key-orphan': { id: 'k3', userId: 'user-gone', scope: 'admin', boardId: null, legacy: false },
+  'key-legacy': { id: 'k4', userId: null, scope: null, boardId: null, legacy: true },
+  'key-insert': {
+    id: 'k5',
+    userId: 'user-a',
+    scope: 'insert',
+    boardId: 'board-own',
+    legacy: false,
+  },
+  'key-insert-shared': {
+    id: 'k6',
+    userId: 'user-a',
+    scope: 'insert',
+    boardId: 'board-shared',
+    legacy: false,
+  },
 };
 
 const touched: string[] = [];
@@ -59,9 +89,22 @@ const USERS: Record<string, any> = {
   'user-a': { id: 'user-a', username: 'alice', role: 'admin' },
 };
 
+// The boards the insert keys are bound to. `checkBoardAccess` itself is real —
+// only the rows it reads are faked. `SHARES` is what the unshare test edits.
+const BOARDS: Record<string, any> = {
+  'board-own': { id: 'board-own', name: 'Own', user_id: 'user-a' },
+  'board-shared': { id: 'board-shared', name: 'Shared', user_id: 'user-b' },
+};
+const SHARES: Record<string, string | undefined> = { 'board-shared': 'edit' };
+
 mock.module('../../services/database.js', {
   namedExports: {
     getUserById: async (id: string) => USERS[id] || null,
+    getBoardById: async (id: string) => BOARDS[id] || null,
+    getBoardShare: async (boardId: string) =>
+      SHARES[boardId] ? { board_id: boardId, permission: SHARES[boardId] } : null,
+    getProjectById: async () => null,
+    hasProjectBoardAccess: async () => false,
   },
 });
 
@@ -89,7 +132,7 @@ function exchange(authorization?: string) {
   return { req, res, next, called: () => nexted };
 }
 
-async function call(scope: 'admin' | 'management', authorization?: string) {
+async function call(scope: 'admin' | 'management' | 'insert', authorization?: string) {
   const ex = exchange(authorization);
   await requireApiKeyScope(scope)(ex.req, ex.res, ex.next);
   return { ...ex, passed: ex.called() };
@@ -174,6 +217,61 @@ test('the published req.user is the shape every authorization helper expects', a
   });
 });
 
+// ── 4. Insert keys ──────────────────────────────────────────────────────────
+
+test('an insert key opens the insert surface and publishes its board', async () => {
+  const { passed, req } = await call('insert', 'Bearer key-insert');
+  assert.equal(passed, true);
+  assert.deepEqual(req.apiKey, { id: 'k5', scope: 'insert', boardId: 'board-own' });
+  assert.equal(req.user.userId, 'user-a');
+});
+
+test('an insert key opens NOTHING on the ladder', async () => {
+  for (const scope of ['management', 'admin'] as const) {
+    const { passed, res } = await call(scope, 'Bearer key-insert');
+    assert.equal(passed, false, `an insert key must not open ${scope}`);
+    assert.equal(res.statusCode, 403);
+    assert.match(res.body.error, /scope "insert" does not grant/);
+  }
+});
+
+test('no ladder key opens the insert surface — not even admin', async () => {
+  // The insert surface takes its board from the key; a ladder key has none.
+  for (const key of ['key-admin', 'key-management']) {
+    const { passed, res } = await call('insert', `Bearer ${key}`);
+    assert.equal(passed, false, `${key} must not open the insert surface`);
+    assert.equal(res.statusCode, 403);
+  }
+  const legacy = await call('insert', 'Bearer key-legacy');
+  assert.equal(legacy.passed, false);
+});
+
+test('an insert key stops working as soon as its owner loses edit on the board', async () => {
+  // The owner is NOT an admin here: an admin reaches every board by role.
+  USERS['user-a'].role = 'advanced';
+  try {
+    SHARES['board-shared'] = 'edit';
+    assert.equal((await call('insert', 'Bearer key-insert-shared')).passed, true);
+
+    SHARES['board-shared'] = 'read';
+    const demoted = await call('insert', 'Bearer key-insert-shared');
+    assert.equal(demoted.passed, false, 'a read-only share cannot insert');
+    assert.equal(demoted.res.statusCode, 403);
+    assert.match(demoted.res.body.error, /can no longer edit/);
+
+    SHARES['board-shared'] = undefined;
+    const unshared = await call('insert', 'Bearer key-insert-shared');
+    assert.equal(unshared.passed, false, 'an unshared board cannot be inserted into');
+
+    touched.length = 0;
+    await call('insert', 'Bearer key-insert-shared');
+    assert.deepEqual(touched, [], 'a key refused for its board must not look used');
+  } finally {
+    USERS['user-a'].role = 'admin';
+    SHARES['board-shared'] = 'edit';
+  }
+});
+
 // ── Presentation and failure modes ──────────────────────────────────────────
 
 test('a missing or malformed Authorization header is a 401, not a 403', async () => {
@@ -221,4 +319,5 @@ test('the guard is named with the scope it demands, so the route inventory sees 
   // an `admin` mount could be downgraded to `management` unnoticed.
   assert.equal(requireApiKeyScope('admin').name, 'requireApiKeyScope(admin)');
   assert.equal(requireApiKeyScope('management').name, 'requireApiKeyScope(management)');
+  assert.equal(requireApiKeyScope('insert').name, 'requireApiKeyScope(insert)');
 });

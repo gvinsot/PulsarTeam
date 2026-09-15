@@ -29,42 +29,44 @@ import { recurrenceSchema } from './schemas.js';
 const taskId = z.string().min(1).describe('Task UUID or unique prefix.');
 const templateId = z.string().min(1).describe('Recurring rule UUID or unique prefix.');
 
+/** The task fields every key-authenticated surface returns (see services/apiDocs.ts). */
+export const TASK_VIEW_KEYS = [
+  'id',
+  'title',
+  'text',
+  'status',
+  'boardId',
+  'agentId',
+  'assignee',
+  'project',
+  'taskType',
+  'priority',
+  'dueDate',
+  'isManual',
+  'repoFullName',
+  'repoProvider',
+  'secondaryRepos',
+  'storagePath',
+  'storageProvider',
+  'createdAt',
+  'updatedAt',
+  'startedAt',
+  'completedAt',
+  'executionStatus',
+  'actionRunning',
+  'actionRunningAgentId',
+  'actionRunningMode',
+  'error',
+  'errorFromStatus',
+  'isTemplate',
+  'templateId',
+  'occurrenceSeq',
+  'recurrence',
+  'commits',
+] as const;
+
 export function taskView(task: McpRecord) {
-  const keys = [
-    'id',
-    'title',
-    'text',
-    'status',
-    'boardId',
-    'agentId',
-    'assignee',
-    'project',
-    'taskType',
-    'priority',
-    'dueDate',
-    'isManual',
-    'repoFullName',
-    'repoProvider',
-    'secondaryRepos',
-    'storagePath',
-    'storageProvider',
-    'createdAt',
-    'updatedAt',
-    'startedAt',
-    'completedAt',
-    'executionStatus',
-    'actionRunning',
-    'actionRunningAgentId',
-    'actionRunningMode',
-    'error',
-    'errorFromStatus',
-    'isTemplate',
-    'templateId',
-    'occurrenceSeq',
-    'recurrence',
-    'commits',
-  ];
-  return Object.fromEntries(keys.map(key => [key, task[key] ?? null]));
+  return Object.fromEntries(TASK_VIEW_KEYS.map(key => [key, task[key] ?? null]));
 }
 
 export function registerTaskOperations(server: McpServer, mgr: AgentManager, actor: McpActor) {

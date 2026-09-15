@@ -56,7 +56,7 @@ type RoutePolicy = typeof PUBLIC | readonly string[];
  * recognizable only if it has a name. The four factories that used to return
  * anonymous functions now name what they return, permission level included:
  *   requireRole(admin) / requireRole(admin|advanced)  — middleware/auth.ts
- *   requireApiKeyScope(admin|management)              — middleware/apiKeyAuth.ts
+ *   requireApiKeyScope(admin|management|insert)       — middleware/apiKeyAuth.ts
  *   authorizeBoardAccess(read|edit|admin)             — middleware/authz.ts
  *   authorizeProjectAccess(read|edit|admin)           — middleware/authz.ts
  *   agentAccess(read|edit)                            — lib/agentAccess.ts
@@ -367,6 +367,8 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'GET /api/settings/api-key/mine': ['authenticateToken'],
   'POST /api/settings/api-key/mine': ['authenticateToken'],
   'DELETE /api/settings/api-key/mine/:id': ['authenticateToken'],
+  // Generated OpenAPI document: shapes only, no tenant data.
+  'GET /api/settings/api-docs/openapi.json': ['authenticateToken'],
 
   // ── /api/llm-configs ──────────────────────────────────────────────
   'GET /api/llm-configs': ['authenticateToken'],
@@ -532,6 +534,15 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'ALL /api/mcp/admin': ['requireApiKeyScope(admin)'],
   'ALL /api/mcp/management': ['requireApiKeyScope(management)'],
 
+  // ── /api/mcp/insert, /api/insert ──────────────────────────────────
+  // Board-bound insert keys, OFF the ladder: only `requireApiKeyScope(insert)`
+  // lets an insert key in, and no admin or management key satisfies it. The
+  // guard also re-proves the owner's edit access to the key's board. Swapping
+  // it for a ladder guard would let every insert key reach task management.
+  'ALL /api/mcp/insert': ['requireApiKeyScope(insert)'],
+  'GET /api/insert/board': ['requireApiKeyScope(insert)'],
+  'POST /api/insert/tasks': ['requireApiKeyScope(insert)'],
+
   // ── /api/swarm ────────────────────────────────────────────────────
   // Legacy key only (middleware/apiKeyAuth.ts): this surface runs unscoped, so
   // a scoped key is refused here rather than escaping its own scope.
@@ -660,6 +671,7 @@ test('authorization guards are still identifiable by name', async () => {
     'authorizeProjectAccess(read)',
     'agentAccess(edit)',
     'requireApiKeyScope(admin)',
+    'requireApiKeyScope(insert)',
   ]) {
     assert.ok(
       vocabulary.has(guard),

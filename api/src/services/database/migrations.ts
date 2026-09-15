@@ -200,6 +200,22 @@ const MIGRATIONS: Migration[] = [
     'CREATE INDEX IF NOT EXISTS idx_tasks_occurrences ON tasks(template_id, created_at) WHERE template_id IS NOT NULL',
   ]),
 
+  // A third key kind: `insert`, bound to ONE board, able to create tasks there
+  // and nothing else (services/apiKeyManager.ts). Unlike the ladder scopes a
+  // user may hold several — one per integration feeding a board — so the
+  // one-row-per-(user, scope) index is narrowed to the ladder scopes.
+  //
+  // ON DELETE CASCADE on the board for the same reason as on the user: a key
+  // whose board is gone must stop existing, not survive board-less (a row
+  // without its board is refused everywhere, but it has no reason to linger).
+  sqlMigration('202609150001_api_keys_insert_scope', 'board-bound insert API keys', [
+    'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS board_id UUID REFERENCES boards(id) ON DELETE CASCADE',
+    'DROP INDEX IF EXISTS uniq_api_keys_user_scope',
+    `CREATE UNIQUE INDEX IF NOT EXISTS uniq_api_keys_user_scope
+       ON api_keys (user_id, scope) WHERE user_id IS NOT NULL AND scope IN ('admin', 'management')`,
+    'CREATE INDEX IF NOT EXISTS idx_api_keys_board ON api_keys (board_id) WHERE board_id IS NOT NULL',
+  ]),
+
   {
     id: '202607010001_remove_legacy_default_boards',
     name: 'remove legacy Default boards',

@@ -11,7 +11,7 @@ import { detectEnvironment } from '../lib/environment.js';
 import type { WorkflowColumn } from '../services/workflow/taskStateMachine.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 
-const createTaskSchema = z.object({
+export const swarmCreateTaskSchema = z.object({
   task: z.string().min(1).max(5000),
   project: z.string().min(1).max(200),
   status: z.string().optional(),
@@ -136,7 +136,7 @@ export function swarmApiRoutes(agentManager: any) {
       );
       let task, project, status, board_id;
       try {
-        ({ task, project, status, board_id } = createTaskSchema.parse(req.body));
+        ({ task, project, status, board_id } = swarmCreateTaskSchema.parse(req.body));
       } catch (err) {
         console.warn(
           `\u26A0\uFE0F [SwarmAPI] Task validation failed for agent "${req.params.id}":`,

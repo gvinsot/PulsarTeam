@@ -24,6 +24,8 @@ type Row = {
   user_id: string | null;
   scope: string | null;
   name: string | null;
+  // Set on an `insert` key only.
+  board_id: string | null;
   last_used_at: Date | null;
 };
 
@@ -63,11 +65,12 @@ function makeFakePool() {
       }
 
       if (norm.startsWith('INSERT INTO api_keys')) {
-        const [id, key_hash, prefix, hash_version, user_id, scope, name] = params as [
+        const [id, key_hash, prefix, hash_version, user_id, scope, name, board_id] = params as [
           string,
           string,
           string,
           number,
+          string?,
           string?,
           string?,
           string?,
@@ -81,6 +84,7 @@ function makeFakePool() {
           user_id: user_id ?? null,
           scope: scope ?? null,
           name: name ?? null,
+          board_id: board_id ?? null,
           last_used_at: null,
         });
         return { rows: [] };
@@ -116,29 +120,37 @@ function makeFakePool() {
       }
 
       if (
-        norm.startsWith('SELECT id, prefix, scope, name, created_at, last_used_at FROM api_keys')
+        norm.startsWith('SELECT k.id, k.prefix, k.scope, k.name, k.board_id, b.name AS board_name')
       ) {
         const [userId, v] = params as [string, number];
         return {
           rows: rows
             .filter(r => r.user_id === userId && r.hash_version === v)
-            .map(({ id, prefix, scope, name, created_at, last_used_at }) => ({
+            .map(({ id, prefix, scope, name, board_id, created_at, last_used_at }) => ({
               id,
               prefix,
               scope,
               name,
+              board_id,
+              board_name: board_id ? `Board ${board_id}` : null,
               created_at,
               last_used_at,
             })),
         };
       }
 
-      if (norm.startsWith('SELECT id, key_hash, user_id, scope FROM api_keys')) {
+      if (norm.startsWith('SELECT id, key_hash, user_id, scope, board_id FROM api_keys')) {
         const v = params[0] as number;
         return {
           rows: rows
             .filter(r => r.hash_version === v)
-            .map(({ id, key_hash, user_id, scope }) => ({ id, key_hash, user_id, scope })),
+            .map(({ id, key_hash, user_id, scope, board_id }) => ({
+              id,
+              key_hash,
+              user_id,
+              scope,
+              board_id,
+            })),
         };
       }
 
@@ -162,6 +174,7 @@ const {
   revokeApiKey,
   resolveApiKey,
   createScopedApiKey,
+  createInsertApiKey,
   listApiKeysForUser,
   revokeScopedApiKey,
   listLegacyApiKeys,
@@ -386,18 +399,95 @@ test('the scope ladder is one-way: admin opens management, never the reverse', (
   assert.equal(scopeSatisfies('management', 'admin'), false);
 });
 
-test('a half-written row (owner without scope) is treated as legacy, not granted a default', async () => {
+test('a half-written row (owner without scope) is refused everywhere, not granted anything', async () => {
   reset();
   await ensureApiKeysTable();
   const { key } = await generateNewApiKey();
   // Simulate a row that acquired an owner but no scope — e.g. a partial
-  // backfill. Defaulting it to any tool set would be a silent grant.
+  // backfill. Defaulting it to any tool set would be a silent grant, and
+  // reading it as LEGACY would be worse: that opens /api/swarm/* unscoped.
   rows[0].user_id = 'user-1';
 
-  const resolved = await resolveApiKey(key);
-  assert.equal(resolved?.legacy, true);
-  assert.equal(resolved?.scope, null);
-  assert.equal(resolved?.userId, null);
+  assert.equal(await resolveApiKey(key), null);
+  assert.equal(await validateApiKey(key), false, 'a half-written row must not open /api/swarm');
+});
+
+// ── Insert keys ─────────────────────────────────────────────────────────────
+
+const BOARD = '11111111-1111-4111-8111-111111111111';
+
+test('an insert key names its owner, its scope AND its board', async () => {
+  reset();
+  await ensureApiKeysTable();
+  const created = await createInsertApiKey({ userId: 'user-1', boardId: BOARD, name: 'form' });
+  assert.equal(created.scope, 'insert');
+  assert.equal(created.board_id, BOARD);
+
+  const resolved = await resolveApiKey(created.key);
+  assert.deepEqual(resolved, {
+    id: created.id,
+    userId: 'user-1',
+    scope: 'insert',
+    boardId: BOARD,
+    legacy: false,
+  });
+  assert.equal(await validateApiKey(created.key), false, 'an insert key must not open /api/swarm');
+});
+
+test('insert keys accumulate: minting another never kills the first', async () => {
+  reset();
+  await ensureApiKeysTable();
+  const form = await createInsertApiKey({ userId: 'user-1', boardId: BOARD, name: 'form' });
+  const webhook = await createInsertApiKey({ userId: 'user-1', boardId: BOARD, name: 'webhook' });
+  const ladder = await createScopedApiKey({ userId: 'user-1', scope: 'management' });
+
+  assert.ok(await resolveApiKey(form.key), 'one integration per key: the first survives');
+  assert.ok(await resolveApiKey(webhook.key));
+  assert.ok(await resolveApiKey(ladder.key), 'insert keys do not touch the ladder keys');
+
+  // …and rotating a ladder key leaves every insert key alone.
+  await createScopedApiKey({ userId: 'user-1', scope: 'management' });
+  assert.ok(await resolveApiKey(form.key));
+
+  const mine = await listApiKeysForUser('user-1');
+  assert.equal(mine.filter((k: any) => k.scope === 'insert').length, 2);
+  assert.equal(mine.find((k: any) => k.id === form.id).board_id, BOARD);
+
+  assert.equal(await revokeScopedApiKey(form.id, 'user-1'), true);
+  assert.equal(await resolveApiKey(form.key), null);
+  assert.ok(await resolveApiKey(webhook.key), 'revoking one insert key spares the others');
+});
+
+test('an insert row without its board, or a ladder row with one, resolves to nothing', async () => {
+  reset();
+  await ensureApiKeysTable();
+  const insert = await createInsertApiKey({ userId: 'user-1', boardId: BOARD });
+  const ladder = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
+  rows.find(r => r.id === insert.id)!.board_id = null;
+  rows.find(r => r.id === ladder.id)!.board_id = BOARD;
+
+  assert.equal(await resolveApiKey(insert.key), null);
+  assert.equal(await validateApiKey(insert.key), false);
+  assert.equal(await resolveApiKey(ladder.key), null);
+});
+
+test('createScopedApiKey refuses the insert scope — it needs a board', async () => {
+  reset();
+  await ensureApiKeysTable();
+  await assert.rejects(
+    createScopedApiKey({ userId: 'user-1', scope: 'insert' as any }),
+    /Unknown API key scope/
+  );
+  await assert.rejects(createInsertApiKey({ userId: 'user-1', boardId: '' }), /bound to a board/);
+  assert.equal(rows.length, 0);
+});
+
+test('insert is off the ladder in both directions', () => {
+  assert.equal(scopeSatisfies('insert', 'insert'), true);
+  assert.equal(scopeSatisfies('insert', 'management'), false);
+  assert.equal(scopeSatisfies('insert', 'admin'), false);
+  assert.equal(scopeSatisfies('admin', 'insert'), false);
+  assert.equal(scopeSatisfies('management', 'insert'), false);
 });
 
 test('listLegacyApiKeys / revokeLegacyApiKeys see only the ownerless rows', async () => {

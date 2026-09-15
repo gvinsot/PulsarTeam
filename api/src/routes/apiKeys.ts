@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { errorMessage } from '../lib/errors.js';
 import {
   API_KEY_SCOPES,
+  createInsertApiKey,
   createScopedApiKey,
   generateNewApiKey,
   getApiKeyInfo,
@@ -11,9 +12,10 @@ import {
   revokeApiKey,
   revokeLegacyApiKeys,
   revokeScopedApiKey,
-  type ApiKeyScope,
+  type LadderApiKeyScope,
 } from '../services/apiKeyManager.js';
 import { requireRole, sessionUser } from '../middleware/auth.js';
+import { checkBoardAccess } from '../middleware/authz.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { validateBody } from '../lib/validate.js';
 
@@ -26,18 +28,40 @@ import { validateBody } from '../lib/validate.js';
  *    `/legacy` pair exists so an operator can see that such a key is still
  *    outstanding and retire it once the integrations have moved.
  *
- *  • `/mine` is for EVERY authenticated user and manages their own scoped keys,
- *    one per (user, scope). These are what open /api/mcp/admin and
- *    /api/mcp/management. They are personal credentials: an admin cannot list,
- *    mint or read another user's keys through this router, which is the whole
- *    point of replacing the shared secret.
+ *  • `/mine` is for EVERY authenticated user and manages their own scoped keys:
+ *    one per (user, scope) for `admin` / `management` (what open /api/mcp/admin
+ *    and /api/mcp/management), and any number of board-bound `insert` keys
+ *    (what open /api/insert/* and /api/mcp/insert). They are personal
+ *    credentials: an admin cannot list, mint or read another user's keys
+ *    through this router, which is the whole point of replacing the shared
+ *    secret.
  */
 const router = express.Router();
 
-const createScopedKeySchema = z.object({
-  scope: z.enum(API_KEY_SCOPES),
-  name: z.string().max(200).optional(),
-});
+const createScopedKeySchema = z
+  .object({
+    scope: z.enum(API_KEY_SCOPES),
+    name: z.string().max(200).optional(),
+    board_id: z.string().uuid().optional(),
+  })
+  .superRefine((body, ctx) => {
+    // An insert key is nothing without its board; a ladder key has none, and
+    // accepting one silently would suggest a board bound it does not have.
+    if (body.scope === 'insert' && !body.board_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['board_id'],
+        message: 'An insert key needs a board_id',
+      });
+    }
+    if (body.scope !== 'insert' && body.board_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['board_id'],
+        message: `A ${body.scope} key is not bound to a board`,
+      });
+    }
+  });
 
 // ── Per-user scoped keys ────────────────────────────────────────────────────
 // Mounted BEFORE the admin gate below, so a non-admin can still reach them.
@@ -57,18 +81,38 @@ router.get(
   })
 );
 
-// POST /api/settings/api-key/mine — mint (or rotate) one scope's key.
-// Returns the full key ONCE; minting again for the same scope replaces it.
+// POST /api/settings/api-key/mine — mint a key. Returns the full key ONCE.
+//  • admin / management: minting again for the same scope ROTATES it.
+//  • insert: always a new key, bound to `board_id`, which the caller must be
+//    able to edit — the same level POST /api/tasks demands. The middleware
+//    re-checks that level on every request the key later makes.
 router.post(
   '/mine',
   validateBody(createScopedKeySchema),
   asyncHandler(async (req, res) => {
     const user = sessionUser(req, res);
     if (!user) return;
+
+    if (req.body.scope === 'insert') {
+      const access = await checkBoardAccess(req.body.board_id, user.userId, user.role, 'edit');
+      if (!access.ok) return res.status(404).json({ error: 'Board not found' });
+      try {
+        const result = await createInsertApiKey({
+          userId: user.userId,
+          boardId: access.board.id,
+          name: req.body.name,
+        });
+        return res.status(201).json({ ...result, board_name: access.board.name ?? null });
+      } catch (err) {
+        console.error('Failed to create insert API key:', errorMessage(err));
+        return res.status(500).json({ error: 'Failed to create API key' });
+      }
+    }
+
     try {
       const result = await createScopedApiKey({
         userId: user.userId,
-        scope: req.body.scope as ApiKeyScope,
+        scope: req.body.scope as LadderApiKeyScope,
         name: req.body.name,
       });
       res.status(201).json(result);
