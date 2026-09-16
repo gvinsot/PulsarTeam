@@ -31,6 +31,7 @@ built by `command_security.sanitize_env()` in the backend's launch recipe.
 from __future__ import annotations
 
 import os
+import errno
 import pty
 import json
 import fcntl
@@ -71,6 +72,7 @@ IDLE_TIMEOUT_SEC = int(os.getenv("TERMINAL_IDLE_TIMEOUT_SEC", str(60 * 60)))    
 # RST) blocks send_bytes on flow-control drain; without a bound, one such
 # client stalls PTY fan-out for everyone and back-pressures the CLI.
 CLIENT_SEND_TIMEOUT_SEC = float(os.getenv("TERMINAL_CLIENT_SEND_TIMEOUT_SEC", "5"))
+INPUT_WRITE_TIMEOUT_SEC = float(os.getenv("TERMINAL_INPUT_WRITE_TIMEOUT_SEC", "5"))
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 40
 READ_CHUNK = 4096
@@ -1510,26 +1512,40 @@ class PtySession:
         """Administrator input wins: invalidate any pending automatic injection.
 
         Do not take _input_lock here; typing/Stop must cancel the workflow rather
-        than wait behind it. The low-level write has no await while emitting bytes.
+        than wait behind it. A stalled write checks its epoch before resuming.
         """
         if data:
             self._input_epoch += 1
         return await self._write_input(data)
 
     async def _write_input(self, data: bytes) -> bool:
-        """Write a complete byte sequence; internal callers own epoch checks."""
+        """Resume temporary PTY backpressure without replaying accepted bytes."""
         if self.master_fd < 0 or self._closed:
             return False
-        try:
-            pending = memoryview(data)
-            while pending:
-                written = os.write(self.master_fd, pending)
+        fd, epoch = self.master_fd, self._input_epoch
+        deadline = time.monotonic() + INPUT_WRITE_TIMEOUT_SEC
+        pending = memoryview(data)
+        while pending:
+            # Retrying yields to Stop, administrator input and session closure.
+            # Never resume a stale paste or write into a replacement terminal.
+            if epoch != self._input_epoch:
+                raise InterruptedError("Terminal input interrupted or changed by another writer")
+            if self._closed or self.master_fd != fd:
+                return False
+            try:
+                written = os.write(fd, pending)
                 if written <= 0:
                     raise OSError("PTY write made no progress")
                 pending = pending[written:]
-        except OSError as e:
-            logger.warning(f"[Terminal] write to {self.agent_id} failed: {e}")
-            return False
+            except OSError as e:
+                remaining = deadline - time.monotonic()
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR) and remaining > 0:
+                    # Yield so tmux and the output reader can drain their buffers.
+                    # A recovered write is successful and produces no error log.
+                    await asyncio.sleep(min(0.01, remaining))
+                    continue
+                logger.warning(f"[Terminal] write to {self.agent_id} failed: {e}")
+                return False
         # A headless write (workflow prompt injection with no attached viewer)
         # restarts the idle countdown so the freshly started task isn't reaped
         # at a timer that began ticking at spawn.
