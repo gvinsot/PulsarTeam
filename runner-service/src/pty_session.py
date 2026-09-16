@@ -990,19 +990,15 @@ class PtySession:
             # Drop the cut line: truncating away its code/diff prefix could
             # otherwise turn a quoted phrase into an apparent CLI banner.
             tail = tail[-4096:].partition("\n")[2]
+        # find_auth_error_line already returns the diagnostic line carrying the
+        # match, which is what the API surfaces as the task error.
         line = find_auth_error_line(tail)
         if line is None:
             return
-        self.auth_error = line[:300]
-        # Capture the line carrying the match for a useful API-side message.
-        line = ""
-        for raw_line in tail.splitlines():
-            if _AUTH_ERROR_RE.search(raw_line) or _AUTH_ERROR_401_RE.search(raw_line):
-                line = raw_line.strip()
-        # The matched line is scraped straight off a login screen, which is
-        # where device codes and one-time URLs live — scrub before latching, as
-        # the API copies this into task errors and history.
-        self.auth_error = redact_secrets((line or m.group(0)).strip())[:300]
+        # That line is scraped straight off a login screen, which is where
+        # device codes and one-time URLs live — scrub before latching, as the
+        # API copies this into task errors and history.
+        self.auth_error = redact_secrets(line)[:300]
         logger.warning(
             f"[Terminal] Auth failure detected in CLI output for agent {self.agent_id}: "
             f"{self.auth_error!r}"
