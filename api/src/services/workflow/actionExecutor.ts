@@ -1247,6 +1247,9 @@ async function _runDecideMode(
       waitResult,
       'Claude Code CLI ended in an authentication or runtime error'
     );
+    // Hand over the prompt we pasted into the TUI: a CLI run records nothing in
+    // conversationHistory, so this is the only way the history entry can show
+    // what the agent was actually asked to do.
     await agentManager._saveExecutionLog(
       task.agentId,
       task.id,
@@ -1254,7 +1257,8 @@ async function _runDecideMode(
       execStartMsgIdx,
       execStartedAt,
       true,
-      'decide'
+      'decide',
+      { prompt }
     );
   } else {
     await _withAgentStream(agentManager, agent.id, async () => {

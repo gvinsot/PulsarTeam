@@ -179,6 +179,9 @@ export interface AgentManager {
   // `startMsgIdx` / `startedAt` are undefined when a run fails before the
   // execution window opened (executeRunAgent's catch path): the log entry is
   // still written, with the whole history and no start timestamp.
+  // `options.prompt` is the text pasted into a CLI runner's terminal. Such a run
+  // writes nothing to conversationHistory, so the entry records that prompt
+  // alongside the CLI tail instead of an answer with no question.
   _saveExecutionLog(
     creatorAgentId: string | null,
     taskId: string,
@@ -186,7 +189,8 @@ export interface AgentManager {
     startMsgIdx: number | undefined,
     startedAt: string | undefined,
     success?: boolean,
-    actionMode?: string
+    actionMode?: string,
+    options?: { prompt?: string | null }
   ): Promise<void>;
 
   // ── agentFeatures.ts ──

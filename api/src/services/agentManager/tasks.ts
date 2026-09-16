@@ -1881,6 +1881,11 @@ export const tasksMethods = {
       let startMsgIdx = executor.conversationHistory.length;
       let executionStartedAt = new Date().toISOString();
       let gitBaselineHead: string | null = null;
+      // Prompt pasted into a CLI runner's terminal. Hoisted so BOTH the success
+      // and the error path can hand it to _saveExecutionLog — a terminal-driven
+      // run leaves no conversation history, so this is the only record of what
+      // the agent was asked.
+      let injectedPrompt: string | null = null;
       // Ensure startedAt is set for managesContext history scoping
       if (!task.startedAt) {
         task.startedAt = executionStartedAt;
@@ -1974,6 +1979,7 @@ export const tasksMethods = {
         if (getTaskSignal(task.id, 'stopped')) return;
 
         if (terminalDriven) {
+          injectedPrompt = messageToSend;
           await bindAgentRunner(this, executor);
           await this.executionManager.sendTerminalInput(executorId, messageToSend, {
             submit: true,
@@ -2025,7 +2031,9 @@ export const tasksMethods = {
           executorId,
           startMsgIdx,
           executionStartedAt,
-          waitResult !== 'error' && waitResult !== 'timeout'
+          waitResult !== 'error' && waitResult !== 'timeout',
+          undefined,
+          { prompt: injectedPrompt }
         );
       } catch (err: any) {
         const isUserStop = isUserStopError(err);
@@ -2039,7 +2047,9 @@ export const tasksMethods = {
           executorId,
           startMsgIdx,
           executionStartedAt,
-          false
+          false,
+          undefined,
+          { prompt: injectedPrompt }
         );
 
         const errorTimestamp = new Date().toISOString();

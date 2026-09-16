@@ -82,7 +82,8 @@ export const actionLogsMethods = {
     startMsgIdx: number,
     startedAt: string,
     success: boolean = true,
-    actionMode: string = 'decide'
+    actionMode: string = 'decide',
+    options: { prompt?: string | null } = {}
   ): Promise<void> {
     const executor = this.agents.get(executorId);
     if (!executor) return;
@@ -132,6 +133,19 @@ export const actionLogsMethods = {
         } catch {
           // An unavailable runner must not prevent saving the execution record.
         }
+      }
+
+      // The CLI's own prompt never lands in conversationHistory either, so
+      // without this the entry shows an answer with no question. Prepended (not
+      // appended) so the detail modal reads it as the "Input sent to agent"
+      // block, and added AFTER the branches above so it can't make an empty run
+      // look non-empty and skip the terminal capture.
+      if (options.prompt) {
+        executionMessages.unshift({
+          role: 'user',
+          content: options.prompt,
+          timestamp: startedAt,
+        });
       }
     }
 

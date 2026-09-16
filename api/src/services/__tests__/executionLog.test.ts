@@ -28,7 +28,7 @@ function setup(runner = 'codex', messages: any[] = []) {
   return {
     output,
     emit,
-    save: (success = true) =>
+    save: (success = true, options: { prompt?: string | null } = {}) =>
       actionLogsMethods._saveExecutionLog.call(
         manager,
         null as any,
@@ -37,7 +37,8 @@ function setup(runner = 'codex', messages: any[] = []) {
         0,
         startedAt,
         success,
-        'decide'
+        'decide',
+        options
       ),
   };
 }
@@ -105,4 +106,52 @@ test('task moves and history added while fetching terminal output are preserved'
   assert.equal(task.history.length, 2);
   assert.equal(task.history[0].status, 'done');
   assert.equal(task.history[1].terminalOutput, 'Finished');
+});
+
+// ── The prompt pasted into the CLI ───────────────────────────────────────────
+//
+// The terminal tail (or a completion note) answers "what did the agent do?" but
+// leaves "what was it asked?" blank, because a CLI run writes nothing to
+// conversationHistory. Callers that inject into a TUI pass that prompt in.
+
+test('the injected CLI prompt is recorded as the run input', async () => {
+  const { save, output } = setup();
+  await save(true, { prompt: 'Task ID: task\n\nShip the feature' });
+
+  // Leading user turn → the detail modal renders it as "Input sent to agent".
+  assert.deepEqual(task.history[0].messages, [
+    { role: 'user', content: 'Task ID: task\n\nShip the feature', timestamp: startedAt },
+  ]);
+  // …and it must NOT suppress the terminal capture, which still ran.
+  assert.equal(output.mock.calls.length, 1);
+  assert.equal(task.history[0].terminalOutput, 'Tests passed\nChanges pushed');
+});
+
+test('the prompt precedes the completion notes of the same run', async () => {
+  const { save, output } = setup();
+  task.history = [
+    {
+      type: 'edit',
+      field: 'text',
+      oldValue: null,
+      by: 'Developer',
+      at: startedAt,
+      newValue: 'Done',
+    },
+  ];
+  await save(true, { prompt: 'Ship it' });
+
+  assert.deepEqual(task.history.at(-1).messages, [
+    { role: 'user', content: 'Ship it', timestamp: startedAt },
+    { role: 'assistant', content: 'Done', timestamp: startedAt },
+  ]);
+  assert.equal(output.mock.calls.length, 0);
+});
+
+test('a real conversation is never prefixed with the injected prompt', async () => {
+  // A sandbox run already has the prompt inside conversationHistory; adding it
+  // again would duplicate the first turn.
+  const { save } = setup('sandbox', [{ role: 'user', content: 'go' }]);
+  await save(true, { prompt: 'go' });
+  assert.equal(task.history[0].messages.length, 1);
 });
