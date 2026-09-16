@@ -23,7 +23,7 @@ let githubCreds: { token: string; login: string | null; provider: 'github' } | n
   login: 'octocat',
   provider: 'github',
 };
-let githubThrows = false;
+let githubThrows: Error | null = null;
 
 // routes/github.js is imported lazily by resolveAgentGitCredentials, so the mock
 // only needs the one export it reaches for.
@@ -31,7 +31,7 @@ mock.module('../../routes/github.js', {
   namedExports: {
     getGitHubCredentialsForAgent: async (agentId: string | null, boardId: string | null) => {
       githubCalls.push([agentId, boardId]);
-      if (githubThrows) throw new Error('oauth store unavailable');
+      if (githubThrows) throw githubThrows;
       return githubCreds;
     },
   },
@@ -78,7 +78,7 @@ const creds = { token: 'gh-token', login: 'octocat', provider: 'github' };
 
 beforeEach(() => {
   githubCalls.length = 0;
-  githubThrows = false;
+  githubThrows = null;
   githubCreds = { token: 'gh-token', login: 'octocat', provider: 'github' };
 });
 
@@ -333,10 +333,17 @@ test('credentials are resolved for the agent and its board', async () => {
 });
 
 test('a credential lookup failure never aborts the run', async () => {
-  githubThrows = true;
+  githubThrows = new Error('oauth store unavailable');
   assert.equal(await resolveAgentGitCredentials(agentOnRepo()), null);
   assert.equal(await resolveAgentGitCredentials(null), null);
   assert.equal(githubCalls.length, 1, 'no lookup for a missing agent');
+});
+
+test('a definitive GitHub rejection is propagated instead of retrying stored runner credentials', async () => {
+  githubThrows = Object.assign(new Error('Reconnect GitHub in the agent Plugins tab'), {
+    code: 'GITHUB_RECONNECT_REQUIRED',
+  });
+  await assert.rejects(resolveAgentGitCredentials(agentOnRepo()), githubThrows);
 });
 
 // ── Call-site wiring ────────────────────────────────────────────────────────
@@ -347,17 +354,23 @@ test('a credential lookup failure never aborts the run', async () => {
 
 const realDb = await import('../database.js');
 let persistAgent = async (_agent: any): Promise<void> => {};
+const taskWrites: Array<{ id: string; fields: any }> = [];
 mock.module('../database.js', {
   namedExports: {
     ...realDb,
     getTaskById: async () => null,
     getPool: () => null,
     saveAgent: (agent: any) => persistAgent(agent),
+    updateTaskFields: async (id: string, fields: any) => {
+      taskWrites.push({ id, fields });
+      return { id, ...fields };
+    },
   },
 });
 
 beforeEach(() => {
   persistAgent = async () => {};
+  taskWrites.length = 0;
 });
 
 const { _ensureAgentOnTaskRepo } = await import('../workflow/actionExecutor.js');
@@ -527,4 +540,69 @@ test('the action executor installs credentials for a repo-less task', async () =
 
   assert.deepEqual(res, { ok: true });
   assert.ok(em.names().includes('installGitCredentials'));
+});
+
+for (const owned of [false, true]) {
+  test(`successful workspace preparation retires the previous error (${owned ? 'owned' : 'board'} task)`, async () => {
+    const em = makeExecutionManager('gvinsot/PulsarTeam');
+    const agent: any = agentOnRepo();
+    const manager: any = {
+      executionManager: em,
+      agents: new Map(),
+      _emit: mock.fn(),
+      _sanitize: (a: any) => a,
+    };
+    const history = [{ type: 'error', error: 'GitHub authentication failed' }];
+    const task: any = {
+      id: 'retry-task',
+      repoFullName: agent.project,
+      agentId: owned ? agent.id : null,
+      status: 'in_progress',
+      error: history[0].error,
+      errorFromStatus: 'in_progress',
+      history,
+    };
+    const actualTask = owned ? structuredClone(task) : null;
+    const result = await _ensureAgentOnTaskRepo(agent, task, actualTask, {
+      agentManager: manager,
+      mode: 'decide',
+      agentId: task.agentId,
+    });
+    assert.deepEqual(result, { ok: true });
+    assert.equal(task.error, null, 'the prompt must not inherit the resolved error');
+    assert.equal(task.errorFromStatus, null);
+    if (actualTask) assert.equal(actualTask.error, null);
+    assert.deepEqual(task.history, history, 'previous failure remains in the audit history');
+    assert.deepEqual(taskWrites, [{ id: task.id, fields: { error: null, errorFromStatus: null } }]);
+    const event = manager._emit.mock.calls.find((c: any) => c.arguments[0] === 'task:updated');
+    assert.equal(event.arguments[1].task.error, null);
+  });
+}
+
+test('a rejected connection fails preflight without touching the runner or claiming a missing token', async () => {
+  githubThrows = Object.assign(new Error('Reconnect GitHub in the agent Plugins tab'), {
+    code: 'GITHUB_RECONNECT_REQUIRED',
+  });
+  const em = makeExecutionManager('gvinsot/PulsarTeam');
+  const agent: any = agentOnRepo();
+  const result = await _ensureAgentOnTaskRepo(
+    agent,
+    {
+      id: 'rejected-task',
+      repoFullName: agent.project,
+    } as any,
+    null,
+    {
+      agentManager: { executionManager: em, _emit: mock.fn(), _sanitize: (a: any) => a } as any,
+      mode: 'decide',
+      agentId: agent.id,
+    }
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.result.message!, /GitHub.*rejected/i);
+    assert.doesNotMatch(result.result.message!, /no GitHub token/);
+  }
+  assert.deepEqual(em.calls, [], 'do not retry cached credentials after a definitive rejection');
+  assert.deepEqual(taskWrites, [], 'failed preparation must not clear the failure');
 });

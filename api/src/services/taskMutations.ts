@@ -79,6 +79,18 @@ export function persistThenEmit(
     .then(() => emitTaskUpdated(agentManager, payload, { emitAgent, stampUpdatedAt }));
 }
 
+/** Retire a previous run's error only after the next run's preparation succeeds.
+ * Keep the history intact, and persist before a prompt or UI can read the task.
+ */
+export async function clearTaskErrorForRun(agentManager: any, task: any): Promise<void> {
+  if (!task.error && !task.errorFromStatus) return;
+  task.error = null;
+  task.errorFromStatus = null;
+  await persistThenEmit(agentManager, task, {
+    fields: { error: null, errorFromStatus: null },
+  });
+}
+
 /**
  * Clear a task's execution state when it moves columns, so the task loop / workflow
  * engine doesn't resume its prior run. This is the "SHORTER" reset used by user/

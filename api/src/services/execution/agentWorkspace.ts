@@ -126,10 +126,19 @@ export interface EnsureAgentWorkspaceResult {
   prepared: boolean;
 }
 
+/** A definitive OAuth rejection must not become a best-effort cache fallback. */
+export function isGitHubReconnectRequired(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'GITHUB_RECONNECT_REQUIRED'
+  );
+}
+
 /**
- * Resolve the agent's GitHub credentials, never throwing: a credential lookup
- * failure must not abort a task, it just means the runner keeps whatever token
- * it already has.
+ * Preserve cached runner credentials for a transient lookup failure, but stop
+ * on a definitive rejection so a revoked connection is never silently reused.
  */
 export async function resolveAgentGitCredentials(
   agent: WorkspaceAgent | null | undefined
@@ -139,6 +148,7 @@ export async function resolveAgentGitCredentials(
     const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
     return await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
   } catch (err) {
+    if (isGitHubReconnectRequired(err)) throw err;
     console.warn(
       `🤖 [Runner] Could not resolve git credentials for agent ${agent.id.slice(0, 8)}: ${errorMessage(err)}`
     );

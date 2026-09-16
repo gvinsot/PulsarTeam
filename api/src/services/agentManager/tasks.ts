@@ -46,7 +46,7 @@ import {
   isUserStopError,
   reArmInterruptedChains,
 } from '../workflow/index.js';
-import { enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
+import { clearTaskErrorForRun, enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
 import {
   snapshotGitBaseline,
   reconcileTaskCommits,
@@ -1838,6 +1838,7 @@ export const tasksMethods = {
           this._emit('agent:updated', this._sanitize(executor));
         }
 
+        await clearTaskErrorForRun(this, task);
         clearTaskSignal(task.id, 'completed');
         clearTaskSignal(task.id, 'comment');
 

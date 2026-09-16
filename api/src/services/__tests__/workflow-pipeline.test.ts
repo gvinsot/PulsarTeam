@@ -371,6 +371,26 @@ async function waitForStatus(
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════════
 
+test('resuming a blocked task clears the obsolete error before sending the new prompt', async () => {
+  const mgr = await setup([{ name: 'Recovered worker', role: 'assistant' }]);
+  const { task, agentId } = createTask(mgr, 'Verify the reconnected repository', 'execute');
+  task.error = 'GitHub authentication failed';
+  task.errorFromStatus = 'execute';
+  task.history = [{ type: 'error', error: task.error }];
+  let sent = false;
+  mgr.sendMessage = async () => {
+    sent = true;
+    assert.equal(taskRows.get(task.id)?.error, null);
+    assert.equal(taskRows.get(task.id)?.errorFromStatus, null);
+    assert.equal(taskRows.get(task.id)?.history[0].error, 'GitHub authentication failed');
+    return 'Connection verified';
+  };
+  mgr._waitForExecutionComplete = async () => 'completed';
+  await mgr._resumeActiveTask(agentId, mgr.agents.get(agentId), task);
+  assert.ok(sent);
+  assert.equal(taskRows.get(task.id)?.error, null);
+});
+
 test('manual resume and workflow cannot inject overlapping tasks into an idle agent', async () => {
   const { executeAction } = await import('../workflow/actionExecutor.js');
   const mgr = await setup([{ name: 'Shared worker', role: 'assistant' }]);

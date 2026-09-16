@@ -30,12 +30,13 @@ import {
   updateTaskFields,
   getTaskById,
 } from '../database.js';
-import { emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
+import { clearTaskErrorForRun, emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { isValidRepoFullName } from '../taskRepos.js';
 import {
   ensureAgentWorkspace,
   resolveAgentGitCredentials,
+  isGitHubReconnectRequired,
   type AgentGitCredentials,
 } from '../execution/agentWorkspace.js';
 import { isCliRunner } from '../runners.js';
@@ -675,6 +676,12 @@ export async function _ensureAgentOnTaskRepo(
       await saveAgent(agent);
       agentManager._emit?.('agent:updated', agentManager._sanitize(agent));
     }
+    // A blocked card can retain an older authentication error even after a
+    // human reconnects GitHub. Do not inject it as a current failure into the
+    // new prompt: agents would stop without testing the repaired connection.
+    await clearTaskErrorForRun(agentManager, actualTask || task);
+    task.error = null;
+    task.errorFromStatus = null;
     return { ok: true };
   } catch (switchErr) {
     console.error(
@@ -686,16 +693,19 @@ export async function _ensureAgentOnTaskRepo(
     // stderr ("could not read Username …"). This is the UI alert that tells the
     // user a repo-bound task can't run because GitHub isn't connected.
     const raw = errorMessage(switchErr);
+    const reconnectRequired = isGitHubReconnectRequired(switchErr);
     const isAuthFailure =
+      reconnectRequired ||
       /could not read Username|Authentication failed|terminal prompts disabled|fatal: could not read|HTTP 40[13]\b|Permission denied|invalid username or password|access denied|repository not found/i.test(
         raw
       );
     let taskError: string;
     let alertDescription: string;
     if (isAuthFailure) {
-      const why = gitCreds?.token
-        ? `the GitHub token configured for this agent or its board was rejected (expired, or it lacks access to "${taskRepo}")`
-        : `no GitHub token is configured for this agent or its board`;
+      const why =
+        reconnectRequired || gitCreds?.token
+          ? `the GitHub token configured for this agent or its board was rejected (expired, or it lacks access to "${taskRepo}")`
+          : `no GitHub token is configured for this agent or its board`;
       taskError = `GitHub authentication failed for "${taskRepo}": ${why}. Connect or reconnect GitHub for the agent/board, then retry the task.`;
       alertDescription = `[GitHub] ${agent.name}: ${taskError}`;
     } else {
