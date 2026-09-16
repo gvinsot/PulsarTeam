@@ -15,18 +15,27 @@ deltas to team-api through `usage_reporter`.
 Two transcript dialects, one adapter each:
 
   claude — ``<home>/.claude/projects/<cwd-slug>/<session>.jsonl``; every
-           ``assistant`` line carries ``message.usage``, so the tokens of the
-           lines appended since the last poll ARE the delta.
+           ``assistant`` line carries ``message.usage``. Appended lines are
+           NOT simply the delta: the CLI rewrites a line when a turn is
+           amended, and the rewritten copy repeats that message's cumulative
+           usage, so each message id keeps a ledger of what it was already
+           billed and only the increment is reported.
   codex  — ``<home>/.codex/sessions/**/rollout-*.jsonl``; ``token_count``
            events carry a *cumulative* ``info.total_token_usage``, so the
            delta is (latest cumulative − last cumulative reported).
 
 Only bytes appended after the watcher started are ever billed: the first pass
-baselines each file (size + codex's cumulative counter) without reporting, so
-restarting the terminal never re-bills the history.
+baselines each file (cursor + codex's cumulative counter + claude's message
+ledger) without reporting, so restarting the terminal never re-bills the
+history — and a historical turn amended later bills only what it added.
 If an existing Codex baseline cannot be recovered, the first later cumulative
 counter only seeds accounting. This may omit new usage up to that counter,
 but never charges an unknown amount of historical usage.
+
+Both adapters share one cursor rule: advance to the end of the last COMPLETE
+record actually consumed (see jsonl_tail), never to the file size sampled
+before the read. A turn caught half-written is re-read whole next poll instead
+of being skipped, and bytes that landed mid-read are never counted twice.
 
 Everything here is best-effort — accounting must not be able to break a
 terminal session.
@@ -41,6 +50,7 @@ from glob import glob
 from typing import Optional
 
 from config import logger
+from jsonl_tail import read_records
 from usage_reporter import report_usage
 
 try:
@@ -49,9 +59,11 @@ except ValueError:
     USAGE_WATCH_INTERVAL_SEC = 20.0
 
 # Transcripts of a busy agent grow without bound; cap what one baseline pass
-# will read back when seeding codex's cumulative counter.
+# will read back when seeding a per-file counter.
 _MAX_BASELINE_BYTES = 32 * 1024 * 1024
 _BASELINE_BLOCK_BYTES = 64 * 1024
+# Ceiling on the per-transcript message ledger (see _claude_ledger).
+_MAX_TRACKED_MESSAGES = 5000
 
 
 def _as_int(value) -> int:
@@ -68,12 +80,47 @@ def _claude_globs(root: str) -> list[str]:
     return [os.path.join(root, ".claude", "projects", "*", "*.jsonl")]
 
 
-def _claude_delta(path: str, offset: int, memo: dict) -> dict:  # noqa: ARG001
-    """Tokens recorded in `path` after byte `offset`. Append-only, so the new
-    lines are already the delta."""
-    from backends.claude_usage import usage_since
+def _claude_ledger(memo: dict, path: str) -> dict:
+    """Per-transcript ledger of what each message id has already been billed.
 
-    return usage_since(path, offset)
+    Bounded: a long-lived session appends message ids without end, and the
+    watcher outlives the turns it accounts for. Evicting the oldest ids is safe
+    — Claude amends the turn it is writing, not one thousands of messages back.
+    """
+    ledger = memo.get(path)
+    if not isinstance(ledger, dict):
+        ledger = {}
+        memo[path] = ledger
+    if len(ledger) > _MAX_TRACKED_MESSAGES:
+        for stale in list(ledger)[: len(ledger) - _MAX_TRACKED_MESSAGES]:
+            ledger.pop(stale, None)
+    return ledger
+
+
+def _claude_baseline(path: str, size: int, memo: dict) -> None:
+    """Mark the messages already in the transcript as billed.
+
+    Only their identity and counters are kept — never their content — so a
+    historical turn that the CLI later amends bills its increment instead of
+    its whole cumulative usage.
+    """
+    if size <= 0 or size > _MAX_BASELINE_BYTES:
+        return
+    from backends.claude_usage import seed_ledger
+
+    seed_ledger(path, _claude_ledger(memo, path), _MAX_BASELINE_BYTES)
+
+
+def _claude_delta(path: str, offset: int, memo: dict) -> tuple[dict, int]:
+    """Unbilled tokens recorded in `path` after byte `offset`, and the cursor.
+
+    Not simply "the new lines": the CLI rewrites an assistant line when a turn
+    is amended, so the same message can arrive in several polls carrying its
+    cumulative usage. The ledger turns that stream into increments.
+    """
+    from backends.claude_usage import usage_delta_since
+
+    return usage_delta_since(path, offset, _claude_ledger(memo, path))
 
 
 # ── codex rollout transcripts ───────────────────────────────────────────────
@@ -117,30 +164,22 @@ def _codex_cumulative(msg: dict) -> Optional[dict]:
     return _usage_totals(msg)
 
 
-def _codex_scan(path: str, start: int) -> Optional[dict]:
-    """Last cumulative total recorded in `path` at or after byte `start`."""
+def _codex_scan(path: str, start: int, *, tail: bool = True) -> tuple[Optional[dict], int]:
+    """Last cumulative total recorded at or after byte `start`, and the cursor.
+
+    Shares the complete-line cursor with the claude adapter: a `token_count`
+    event caught half-written must be re-read next poll, not stepped over.
+    """
     latest: Optional[dict] = None
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            fh.seek(start)
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                msg = _codex_find_token_count(entry)
-                if msg is None:
-                    continue
-                cumulative = _codex_cumulative(msg)
-                if cumulative:
-                    latest = cumulative
-    except OSError as e:
-        logger.debug(f"[Usage] unreadable codex rollout {path}: {e}")
-        return None
-    return latest
+    entries, cursor = read_records(path, start, tail=tail)
+    for entry in entries:
+        msg = _codex_find_token_count(entry)
+        if msg is None:
+            continue
+        cumulative = _codex_cumulative(msg)
+        if cumulative:
+            latest = cumulative
+    return latest, cursor
 
 
 def _codex_baseline(path: str, size: int, memo: dict) -> None:
@@ -184,25 +223,26 @@ def _codex_baseline(path: str, size: int, memo: dict) -> None:
         logger.debug(f"[Usage] unreadable codex baseline {path}: {e}")
 
 
-def _codex_delta(path: str, offset: int, memo: dict) -> dict:
-    cumulative = _codex_scan(path, offset)
+def _codex_delta(path: str, offset: int, memo: dict) -> tuple[dict, int]:
+    cumulative, cursor = _codex_scan(path, offset)
     if not cumulative:
-        return {}
+        return {}, cursor
     previous = memo.get(path)
     memo[path] = cumulative
     if previous is None:
         # Unknown is not zero: establish a reference without billing history.
-        return {}
-    return {
+        return {}, cursor
+    delta = {
         "input_tokens": max(0, cumulative["input_tokens"] - _as_int(previous.get("input_tokens"))),
         "output_tokens": max(
             0, cumulative["output_tokens"] - _as_int(previous.get("output_tokens"))
         ),
     }
+    return delta, cursor
 
 
 _ADAPTERS = {
-    "claude": (_claude_globs, _claude_delta, None),
+    "claude": (_claude_globs, _claude_delta, _claude_baseline),
     "codex": (_codex_globs, _codex_delta, _codex_baseline),
 }
 
@@ -265,7 +305,7 @@ class UsageWatcher:
 
     def collect(self) -> dict:
         """Sum the token deltas across every transcript and advance the
-        offsets. Returns ``{"input_tokens", "output_tokens"}``."""
+        cursors. Returns ``{"input_tokens", "output_tokens"}``."""
         totals = {"input_tokens": 0, "output_tokens": 0}
         if not self.supported:
             return totals
@@ -282,16 +322,21 @@ class UsageWatcher:
                 # Truncated/replaced underneath us — restart from the top.
                 offset = 0
                 self._memo.pop(path, None)
-            if size == offset:
+            elif size == offset:
                 continue
             try:
-                delta = self._delta(path, offset, self._memo) or {}
+                delta, cursor = self._delta(path, offset, self._memo)
             except Exception as e:  # never let accounting break the session
                 logger.debug(f"[Usage] transcript scan failed for {path}: {e}")
-                delta = {}
-            self._offsets[path] = size
-            totals["input_tokens"] += _as_int(delta.get("input_tokens"))
-            totals["output_tokens"] += _as_int(delta.get("output_tokens"))
+                delta, cursor = {}, offset
+            # The adapter reports what it actually consumed, which is NOT the
+            # size we sampled: it stops at the last complete line (a turn
+            # caught half-written stays unread until it is whole) and it may
+            # run past `size` when the CLI appended while we were reading
+            # (those bytes are consumed now, not re-read next poll).
+            self._offsets[path] = max(offset, _as_int(cursor))
+            totals["input_tokens"] += _as_int((delta or {}).get("input_tokens"))
+            totals["output_tokens"] += _as_int((delta or {}).get("output_tokens"))
         return totals
 
     async def poll_once(self) -> bool:

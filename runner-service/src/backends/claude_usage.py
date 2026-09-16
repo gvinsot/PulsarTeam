@@ -28,13 +28,12 @@ failure degrades to "no usage reported" rather than raising.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from glob import glob
 from typing import Optional
 
-from config import logger
+from jsonl_tail import read_records
 
 
 def _config_dir(env: Optional[dict], home: Optional[str]) -> Optional[str]:
@@ -115,6 +114,33 @@ def _as_int(value) -> int:
         return 0
 
 
+def _assistant_record(entry: dict) -> Optional[tuple[Optional[str], dict]]:
+    """`(message id, {input_tokens, output_tokens, cost_usd})` for an assistant
+    transcript line, or None for any other line.
+
+    Input tokens include the cache-creation and cache-read counts: they are
+    real context tokens the turn consumed, and leaving them out is what makes
+    a Claude Code turn look ~100x cheaper than it is (the uncached
+    `input_tokens` of a cached turn is typically a handful of tokens).
+    """
+    if not isinstance(entry, dict) or entry.get("type") != "assistant":
+        return None
+    usage = _usage_of(entry)
+    if not usage:
+        return None
+    record = {
+        "input_tokens": (
+            _as_int(usage.get("input_tokens"))
+            + _as_int(usage.get("cache_creation_input_tokens"))
+            + _as_int(usage.get("cache_read_input_tokens"))
+        ),
+        "output_tokens": _as_int(usage.get("output_tokens")),
+        "cost_usd": float(entry.get("costUSD") or 0.0),
+    }
+    msg_id = (entry.get("message") or {}).get("id")
+    return (msg_id if isinstance(msg_id, str) and msg_id else None), record
+
+
 def usage_since(path: Optional[str], offset: int = 0) -> dict:
     """Sum the token usage recorded in `path` after byte `offset`.
 
@@ -140,41 +166,21 @@ def usage_since(path: Optional[str], offset: int = 0) -> dict:
     # than seeking past its end.
     start = offset if 0 <= offset <= size else 0
 
+    # One-shot read after the run: an unterminated last line is the end of the
+    # file, not a fragment someone is still writing, so parse it too.
+    entries, _ = read_records(path, start, tail=False)
+
     by_id: dict = {}
     anonymous: list = []
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            fh.seek(start)
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(entry, dict) or entry.get("type") != "assistant":
-                    continue
-                usage = _usage_of(entry)
-                if not usage:
-                    continue
-                record = {
-                    "input_tokens": (
-                        _as_int(usage.get("input_tokens"))
-                        + _as_int(usage.get("cache_creation_input_tokens"))
-                        + _as_int(usage.get("cache_read_input_tokens"))
-                    ),
-                    "output_tokens": _as_int(usage.get("output_tokens")),
-                    "cost_usd": float(entry.get("costUSD") or 0.0),
-                }
-                msg_id = (entry.get("message") or {}).get("id")
-                if isinstance(msg_id, str) and msg_id:
-                    by_id[msg_id] = record
-                else:
-                    anonymous.append(record)
-    except OSError as e:
-        logger.debug(f"[Usage] unreadable Claude transcript {path}: {e}")
-        return result
+    for entry in entries:
+        parsed = _assistant_record(entry)
+        if parsed is None:
+            continue
+        msg_id, record = parsed
+        if msg_id:
+            by_id[msg_id] = record
+        else:
+            anonymous.append(record)
 
     for record in list(by_id.values()) + anonymous:
         result["input_tokens"] += record["input_tokens"]
@@ -182,6 +188,90 @@ def usage_since(path: Optional[str], offset: int = 0) -> dict:
         result["cost_usd"] += record["cost_usd"]
     result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
     return result
+
+
+# ── continuous tailing (the PTY usage watcher) ──────────────────────────────
+#
+# `usage_since` dedupes by message id WITHIN one read, which is all a one-shot
+# "usage of the run that just exited" needs. A watcher polls the same growing
+# file every few seconds, and the CLI rewrites an assistant line when a turn is
+# amended — the rewritten copy repeats that message's CUMULATIVE usage. Across
+# polls the id-keyed dict is rebuilt empty, so the amended copy was billed in
+# full a second time. Hence a ledger that survives polls: per message, remember
+# what has already been billed and report only the increment.
+
+
+def bill_records(entries: list, ledger: dict) -> dict:
+    """Fold assistant records into `ledger` (mutated) and return the increment.
+
+    Identified messages are billed as `max(0, now − already billed)`, so a
+    duplicate line bills nothing and an amended line bills only what it added.
+    Anonymous records carry no identity and are billed as they come — the
+    cursor guarantees each is read exactly once.
+    """
+    delta = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+    for entry in entries:
+        parsed = _assistant_record(entry)
+        if parsed is None:
+            continue
+        msg_id, record = parsed
+        if not msg_id:
+            increment = record
+        else:
+            billed = ledger.get(msg_id) or {}
+            increment = {
+                "input_tokens": max(
+                    0, record["input_tokens"] - _as_int(billed.get("input_tokens"))
+                ),
+                "output_tokens": max(
+                    0, record["output_tokens"] - _as_int(billed.get("output_tokens"))
+                ),
+                "cost_usd": max(0.0, record["cost_usd"] - float(billed.get("cost_usd") or 0.0)),
+            }
+            # Keep the high-water mark: a shrinking amendment must not open
+            # room to bill the same tokens again later.
+            ledger[msg_id] = {
+                "input_tokens": max(record["input_tokens"], _as_int(billed.get("input_tokens"))),
+                "output_tokens": max(
+                    record["output_tokens"], _as_int(billed.get("output_tokens"))
+                ),
+                "cost_usd": max(record["cost_usd"], float(billed.get("cost_usd") or 0.0)),
+            }
+        delta["input_tokens"] += increment["input_tokens"]
+        delta["output_tokens"] += increment["output_tokens"]
+        delta["cost_usd"] += increment["cost_usd"]
+    delta["total_tokens"] = delta["input_tokens"] + delta["output_tokens"]
+    return delta
+
+
+def usage_delta_since(path: Optional[str], offset: int, ledger: dict) -> tuple[dict, int]:
+    """Unbilled usage appended after `offset`, and the cursor to resume from.
+
+    The cursor only ever advances past COMPLETE lines, so a turn caught
+    half-written is read again (whole) on the next poll instead of being
+    skipped for good.
+    """
+    entries, cursor = read_records(path, offset, tail=True)
+    return bill_records(entries, ledger), cursor
+
+
+def seed_ledger(path: Optional[str], ledger: dict, max_bytes: Optional[int] = None) -> None:
+    """Record the usage already on disk as billed, without reporting it.
+
+    Without this, a historical message amended after the watcher started would
+    be billed in FULL (its whole cumulative usage) the first time the amended
+    copy is seen, even though the watcher never billed the original.
+    """
+    if not path:
+        return
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return
+    if size <= 0 or (max_bytes is not None and size > max_bytes):
+        return
+    entries, _ = read_records(path, 0, tail=False)
+    bill_records(entries, ledger)
 
 
 class TranscriptUsage:

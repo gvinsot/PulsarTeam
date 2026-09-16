@@ -246,6 +246,145 @@ def test_watcher_bills_only_what_the_terminal_session_produced(tmp_path):
     assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
 
 
+# ── continuous tailing across polls ─────────────────────────────────────────
+#
+# The watcher polls a transcript the CLI is still writing. Two ways that went
+# wrong, both pinned below: an amended turn (same message id, cumulative usage)
+# billed again on the next poll, and a line caught half-written stepped over by
+# a cursor that jumped to the sampled file size.
+
+
+def _append(path, text):
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def test_watcher_does_not_rebill_a_message_rewritten_in_a_later_poll(tmp_path):
+    session, cwd = "sess-dup", "/srv/project"
+    watcher = UsageWatcher("agent-1", kind="claude", root=str(tmp_path))
+    watcher.baseline()
+
+    path = _write_transcript(
+        tmp_path, session, cwd, [_assistant_line("m1", input_tokens=100, output=10)]
+    )
+    assert watcher.collect() == {"input_tokens": 100, "output_tokens": 10}
+
+    # The CLI rewrites the line for the same turn — same cumulative usage.
+    _append(path, _assistant_line("m1", input_tokens=100, output=10) + "\n")
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+    # Amended upwards: only what the turn added may be billed.
+    _append(path, _assistant_line("m1", input_tokens=150, output=25) + "\n")
+    assert watcher.collect() == {"input_tokens": 50, "output_tokens": 15}
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+
+def test_watcher_bills_only_the_increment_of_a_message_older_than_the_baseline(tmp_path):
+    """A turn already on disk when the watcher started was never billed by it;
+    re-reading its amended copy must not bill the whole history."""
+    session, cwd = "sess-hist", "/srv/project"
+    path = _write_transcript(
+        tmp_path, session, cwd, [_assistant_line("old", input_tokens=9999, output=999)]
+    )
+    watcher = UsageWatcher("agent-1", kind="claude", root=str(tmp_path))
+    watcher.baseline()
+
+    _append(path, _assistant_line("old", input_tokens=9999, output=999) + "\n")
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+    _append(path, _assistant_line("old", input_tokens=10099, output=1009) + "\n")
+    assert watcher.collect() == {"input_tokens": 100, "output_tokens": 10}
+
+
+def test_watcher_reads_a_line_split_across_two_polls(tmp_path):
+    """The poll can land while the CLI is mid-write. The cursor must stay put
+    so the fragment is read again whole, not skipped."""
+    session, cwd = "sess-split", "/srv/project"
+    watcher = UsageWatcher("agent-1", kind="claude", root=str(tmp_path))
+    watcher.baseline()
+
+    line = _assistant_line("m1", input_tokens=100, output=10)
+    path = _write_transcript(tmp_path, session, cwd, [])
+    _append(path, line[: len(line) // 2])
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+    _append(path, line[len(line) // 2 :] + "\n")
+    assert watcher.collect() == {"input_tokens": 100, "output_tokens": 10}
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+
+def test_watcher_counts_lines_appended_while_it_reads_exactly_once(tmp_path):
+    """The file can grow between the size sample and the read. Those bytes are
+    consumed by this poll — advancing the cursor to the stale size would read
+    them twice."""
+    session, cwd = "sess-race", "/srv/project"
+    watcher = UsageWatcher("agent-1", kind="claude", root=str(tmp_path))
+    watcher.baseline()
+    path = _write_transcript(
+        tmp_path, session, cwd, [_assistant_line("m1", input_tokens=100, output=10)]
+    )
+
+    stat_size = UsageWatcher._size
+
+    def racing_size(p):
+        size = stat_size(p)
+        # The CLI appends a turn right after we stat'ed the file.
+        _append(p, _assistant_line("m2", input_tokens=7, output=3) + "\n")
+        return size
+
+    watcher._size = racing_size  # type: ignore[method-assign]
+    assert watcher.collect() == {"input_tokens": 107, "output_tokens": 13}
+
+    watcher._size = stat_size  # type: ignore[method-assign]
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+
+def test_codex_watcher_waits_for_a_complete_token_count_line(tmp_path):
+    """The cursor rule is shared: a half-written rollout event must not be
+    stepped over either."""
+    watcher = UsageWatcher("agent-1", kind="codex", root=str(tmp_path))
+    watcher.baseline()
+
+    event = json.dumps(_rollout_token_count(400, 50))
+    path = _write_rollout(tmp_path, "rollout-split.jsonl", [])
+    _append(path, event[: len(event) // 2])
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+    _append(path, event[len(event) // 2 :] + "\n")
+    assert watcher.collect() == {"input_tokens": 400, "output_tokens": 50}
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+
+def test_watcher_rebills_from_scratch_when_the_transcript_is_replaced(tmp_path):
+    """A rotated/truncated file is a different conversation: the ledger and the
+    cursor both restart."""
+    session, cwd = "sess-rotate", "/srv/project"
+    watcher = UsageWatcher("agent-1", kind="claude", root=str(tmp_path))
+    watcher.baseline()
+    path = _write_transcript(
+        tmp_path, session, cwd, [_assistant_line("m1", input_tokens=100, output=10)]
+    )
+    assert watcher.collect() == {"input_tokens": 100, "output_tokens": 10}
+
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(_assistant_line("m9", input_tokens=5, output=1) + "\n")
+    assert watcher.collect() == {"input_tokens": 5, "output_tokens": 1}
+
+
+def test_watcher_ledger_stays_bounded():
+    """A long session appends message ids without end; the ledger must not
+    grow with it."""
+    from usage_watcher import _MAX_TRACKED_MESSAGES, _claude_ledger
+
+    memo: dict = {}
+    ledger = _claude_ledger(memo, "transcript")
+    for i in range(_MAX_TRACKED_MESSAGES + 100):
+        ledger[f"m{i}"] = {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
+    assert len(_claude_ledger(memo, "transcript")) == _MAX_TRACKED_MESSAGES
+    # The most recent ids — the ones a rewrite can still touch — are kept.
+    assert f"m{_MAX_TRACKED_MESSAGES + 99}" in memo["transcript"]
+
+
 def test_watcher_picks_up_a_session_started_after_the_baseline(tmp_path):
     watcher = UsageWatcher("agent-1", kind="claude", root=str(tmp_path))
     watcher.baseline()
@@ -381,13 +520,16 @@ def test_codex_baseline_stops_at_captured_eof(tmp_path):
     _write_rollout(tmp_path, "rollout-snapshot.jsonl", [_rollout_token_count(200, 20)])
     memo = {}
     usage_watcher._codex_baseline(path, size, memo)
-    assert usage_watcher._codex_delta(path, size, memo) == {"input_tokens": 100, "output_tokens": 10}
+    # The adapter answers (delta, cursor); the cursor is asserted by the
+    # split-line tests above.
+    delta, _ = usage_watcher._codex_delta(path, size, memo)
+    assert delta == {"input_tokens": 100, "output_tokens": 10}
 
 
 def test_codex_missing_baseline_is_not_implicitly_zero(tmp_path):
     path = _write_rollout(tmp_path, "rollout-missing.jsonl", [_rollout_token_count(1_000_000, 10_000)])
     memo = {}
-    assert usage_watcher._codex_delta(path, 0, memo) == {}
+    assert usage_watcher._codex_delta(path, 0, memo)[0] == {}
     assert memo[path] == {
         "input_tokens": 1_000_000, "output_tokens": 10_000, "total_tokens": 1_010_000
     }
