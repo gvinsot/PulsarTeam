@@ -535,6 +535,22 @@ def test_codex_missing_baseline_is_not_implicitly_zero(tmp_path):
     }
 
 
+def test_codex_watcher_counts_a_replaced_rollout_from_zero(tmp_path):
+    """The mirror of the unknown-baseline rule: a rollout replaced by a shorter
+    one is a NEW session whose counter restarts at zero, and that zero is known.
+    Forgetting the baseline here would read back as unknown and drop the new
+    session's first turn instead of billing it."""
+    path = _write_rollout(tmp_path, "rollout-replaced.jsonl", [_rollout_token_count(9000, 900)])
+    watcher = UsageWatcher("agent-1", kind="codex", root=str(tmp_path))
+    watcher.baseline()
+    Path(path).write_text("")
+    _write_rollout(tmp_path, "rollout-replaced.jsonl", [_rollout_token_count(20, 3)])
+    assert watcher.collect() == {"input_tokens": 20, "output_tokens": 3}
+    _write_rollout(tmp_path, "rollout-replaced.jsonl", [_rollout_token_count(35, 6)])
+    assert watcher.collect() == {"input_tokens": 15, "output_tokens": 3}
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+
 def test_watcher_is_inert_for_a_cli_with_no_adapter(tmp_path):
     watcher = UsageWatcher("agent-1", kind="hermes", root=str(tmp_path))
     assert watcher.supported is False

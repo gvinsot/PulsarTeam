@@ -319,9 +319,13 @@ class UsageWatcher:
                     # Only files first seen after baseline have a known zero.
                     self._memo[path] = {}
             if size < offset:
-                # Truncated/replaced underneath us — restart from the top.
+                # Truncated/replaced underneath us — restart from the top. The
+                # replacement's counter restarts at zero too, so unlike an
+                # unrecoverable baseline this zero is KNOWN: dropping the entry
+                # would read back as unknown and silently forfeit the first turn
+                # of the new session.
                 offset = 0
-                self._memo.pop(path, None)
+                self._memo[path] = {}
             elif size == offset:
                 continue
             try:
