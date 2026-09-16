@@ -9,16 +9,19 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import type { OpenApiDocument } from '../../../types';
 import {
   curlFor,
   firstExample,
+  mcpSetupCommands,
   operationsByTag,
   resolveResponse,
   schemaFields,
   toolCallBody,
   typeLabel,
   withServer,
+  type DocOperation,
 } from '../apiDocsModel';
 
 const doc: OpenApiDocument = {
@@ -197,4 +200,69 @@ test('response refs resolve, and the download points at this instance', () => {
     { url: 'https://team.example' },
   ]);
   assert.deepEqual(doc.servers, [{ url: '/' }], 'the loaded document is not mutated');
+});
+
+test('MCP install commands pair each endpoint with its scope and supplied key', () => {
+  for (const scope of ['insert', 'management', 'admin'] as const) {
+    const entry: DocOperation = {
+      path: `/api/mcp/${scope}`,
+      method: 'post',
+      op: { ...doc.paths['/api/mcp/insert'].post!, 'x-api-key-scope': scope },
+    };
+    const key = `test-${scope}-key`;
+    const commands = mcpSetupCommands('https://team.example', entry, key);
+    const capture = `() { printf '%s\\0' "$@"; }`;
+    const claudeArgs = execFileSync('sh', ['-c', `claude ${capture}\n${commands.claude}`])
+      .toString()
+      .split('\0');
+    assert.deepEqual(claudeArgs, [
+      'mcp',
+      'add',
+      '--transport',
+      'http',
+      '--scope',
+      'user',
+      `pulsar-${scope}`,
+      `https://team.example/api/mcp/${scope}`,
+      '--header',
+      `Authorization: Bearer ${key}`,
+      '',
+    ]);
+    const codexArgs = execFileSync('sh', [
+      '-c',
+      `codex ${capture}\n${commands.codex}\nprintf '%s' "$${commands.envVar}"`,
+    ])
+      .toString()
+      .split('\0');
+    assert.deepEqual(codexArgs, [
+      'mcp',
+      'add',
+      `pulsar-${scope}`,
+      '--url',
+      `https://team.example/api/mcp/${scope}`,
+      '--bearer-token-env-var',
+      `PULSAR_${scope.toUpperCase()}_API_KEY`,
+      key,
+    ]);
+    const placeholders = mcpSetupCommands('https://team.example', entry);
+    assert.ok(placeholders.codex.includes(`<${scope}-key>`));
+    assert.ok(placeholders.claude.includes(`<${scope}-key>`));
+  }
+});
+
+test('MCP install commands preserve shell metacharacters without executing them', () => {
+  const entry = operationsByTag(doc)[1].ops[0];
+  const key = "test-'$(printf injected)`printf injected`-$HOME-\nkey";
+  const commands = mcpSetupCommands('https://team.example', entry, key);
+  const token = execFileSync('sh', [
+    '-c',
+    `codex() { :; }\n${commands.codex}\nprintf '%s' "$${commands.envVar}"`,
+  ]).toString();
+  assert.equal(token, key);
+  const header = execFileSync('sh', [
+    '-c',
+    `claude() { for arg do last="$arg"; done; printf '%s' "$last"; }\n${commands.claude}`,
+  ]).toString();
+  assert.equal(header, `Authorization: Bearer ${key}`);
+  assert.ok(!JSON.stringify(withServer(doc, 'https://team.example')).includes(key));
 });

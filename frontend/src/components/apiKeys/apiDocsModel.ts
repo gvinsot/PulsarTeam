@@ -169,6 +169,20 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** CLI setup for the documented HTTP surface, using only its matching key. */
+export function mcpSetupCommands(origin: string, entry: DocOperation, key?: string) {
+  const scope = entry.op['x-api-key-scope'] || 'api';
+  const name = shellQuote(`pulsar-${scope}`);
+  const url = shellQuote(origin + entry.path);
+  const token = key || keyPlaceholder(entry.op);
+  const envVar = `PULSAR_${scope.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}_API_KEY`;
+  return {
+    envVar,
+    codex: `export ${envVar}=${shellQuote(token)}\ncodex mcp add ${name} --url ${url} --bearer-token-env-var ${envVar}`,
+    claude: `claude mcp add --transport http --scope user ${name} ${url} --header ${shellQuote(`Authorization: Bearer ${token}`)}`,
+  };
+}
+
 /** A copy-pasteable curl invocation for one operation. */
 export function curlFor(
   origin: string,

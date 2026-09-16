@@ -10,12 +10,13 @@ import {
   Search,
 } from 'lucide-react';
 import { api } from '../../api';
-import type { McpToolDoc, OpenApiDocument } from '../../types';
+import type { ApiKeyScope, McpToolDoc, OpenApiDocument } from '../../types';
 import CopyableCode from './CopyableCode';
 import SchemaFieldsTable from './SchemaFieldsTable';
 import {
   curlFor,
   firstExample,
+  mcpSetupCommands,
   operationAnchor,
   operationsByTag,
   resolveResponse,
@@ -33,6 +34,8 @@ export type ApiDocsSection = 'overview' | 'quickstart' | 'Insert' | 'MCP' | 'err
 interface ApiDocsPanelProps {
   /** Scroll to this section once the document is loaded. */
   focus?: ApiDocsSection | null;
+  /** Clear text is available only for keys minted in this open modal. */
+  freshKeys?: Partial<Record<ApiKeyScope, string>>;
 }
 
 const METHOD_STYLE: Record<string, string> = {
@@ -128,10 +131,12 @@ function ToolCatalogue({
   doc,
   entry,
   origin,
+  freshKey,
 }: {
   doc: OpenApiDocument;
   entry: DocOperation;
   origin: string;
+  freshKey?: string;
 }) {
   const tools = useMemo(() => entry.op['x-mcp-tools'] || [], [entry]);
   const [query, setQuery] = useState('');
@@ -144,12 +149,16 @@ function ToolCatalogue({
   }, [tools, query]);
 
   const scope = entry.op['x-api-key-scope'] || 'api';
+  const [pastedKey, setPastedKey] = useState('');
+  const key = pastedKey.trim() || freshKey;
+  const commands = mcpSetupCommands(origin, entry, key);
   const clientConfig = JSON.stringify(
     {
       mcpServers: {
         [`pulsar-${scope}`]: {
+          type: 'http',
           url: `${origin}${entry.path}`,
-          headers: { Authorization: `Bearer <${scope}-key>` },
+          headers: { Authorization: `Bearer ${key || `<${scope}-key>`}` },
         },
       },
     },
@@ -159,6 +168,64 @@ function ToolCatalogue({
 
   return (
     <div className="space-y-3">
+      <h5 className="text-xs font-medium text-dark-200">Connect Codex or Claude Code</h5>
+      <p className="text-xs text-dark-400">
+        {freshKey
+          ? `Your newly created ${scope} key is included below.`
+          : `Paste your saved ${scope} key below, or create one in the Keys tab. Existing keys cannot be retrieved in full.`}
+      </p>
+      {scope === 'insert' && (
+        <p className="text-xs text-dark-400">
+          Use an insert key bound to the board you want to create tasks on.
+        </p>
+      )}
+      <label className="block space-y-1 text-xs text-dark-300">
+        <span>{scope} key for these commands</span>
+        <input
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          value={pastedKey}
+          onChange={e => setPastedKey(e.target.value)}
+          placeholder={freshKey ? 'Using the newly created key' : `Paste your ${scope} key`}
+          className="w-full bg-dark-900 border border-dark-700 rounded-lg px-3 py-2 text-dark-200 focus:outline-none focus:border-indigo-500"
+        />
+      </label>
+      {!key && (
+        <p className="text-xs text-amber-300">
+          Replace &lt;{scope}-key&gt; with your {scope} key before running these commands.
+        </p>
+      )}
+      <CopyableCode label="Codex CLI — bash / zsh" code={commands.codex} />
+      <p className="text-xs text-dark-400">
+        Start Codex from this terminal. Keep <code>{commands.envVar}</code> exported in every
+        terminal where you launch Codex; the server configuration stores the variable name.
+      </p>
+      <CopyableCode label="Claude Code — bash / zsh" code={commands.claude} />
+      <p className="text-xs text-dark-400">
+        Claude Code saves this connection in your user configuration, available across projects.
+        Restart the client after adding the server.
+      </p>
+      <p className="text-xs text-dark-400">
+        CLI documentation:{' '}
+        <a
+          className="text-indigo-300 hover:underline"
+          href="https://developers.openai.com/codex/mcp"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Codex
+        </a>
+        {' · '}
+        <a
+          className="text-indigo-300 hover:underline"
+          href="https://code.claude.com/docs/en/mcp"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Claude Code
+        </a>
+      </p>
       <CopyableCode label="MCP client config (Claude, Cursor…)" code={clientConfig} />
       <div className="flex items-center justify-between gap-3">
         <h5 className="text-xs font-medium text-dark-300">
@@ -191,11 +258,13 @@ function OperationCard({
   entry,
   origin,
   defaultOpen,
+  freshKey,
 }: {
   doc: OpenApiDocument;
   entry: DocOperation;
   origin: string;
   defaultOpen: boolean;
+  freshKey?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { op, path, method } = entry;
@@ -328,7 +397,7 @@ function OperationCard({
             </ul>
           </div>
 
-          {isMcp && <ToolCatalogue doc={doc} entry={entry} origin={origin} />}
+          {isMcp && <ToolCatalogue doc={doc} entry={entry} origin={origin} freshKey={freshKey} />}
         </div>
       )}
     </div>
@@ -340,7 +409,7 @@ function OperationCard({
  * from its own schemas and MCP servers (api/src/services/apiDocs.ts). Every
  * endpoint, field and tool shown here is one the server actually serves.
  */
-export default function ApiDocsPanel({ focus }: ApiDocsPanelProps) {
+export default function ApiDocsPanel({ focus, freshKeys = {} }: ApiDocsPanelProps) {
   const [doc, setDoc] = useState<OpenApiDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -515,6 +584,13 @@ export default function ApiDocsPanel({ focus }: ApiDocsPanelProps) {
           <div className="space-y-2">
             {group.ops.map(entry => (
               <OperationCard
+                freshKey={
+                  entry.op['x-api-key-scope'] === 'insert' ||
+                  entry.op['x-api-key-scope'] === 'management' ||
+                  entry.op['x-api-key-scope'] === 'admin'
+                    ? freshKeys[entry.op['x-api-key-scope']]
+                    : undefined
+                }
                 key={entry.op.operationId}
                 doc={doc}
                 entry={entry}

@@ -11,6 +11,7 @@ interface InsertKeysSectionProps {
   onChanged: () => Promise<void>;
   /** Jump to the Insert API section of the documentation tab. */
   onOpenDocs: () => void;
+  onCreated?: (key: ScopedApiKeyCreated) => void;
   showToast?: ShowToastFn;
 }
 
@@ -26,6 +27,7 @@ export default function InsertKeysSection({
   keys,
   onChanged,
   onOpenDocs,
+  onCreated,
   showToast,
 }: InsertKeysSectionProps) {
   const [boards, setBoards] = useState<BoardListItem[]>([]);
@@ -89,6 +91,7 @@ export default function InsertKeysSection({
         allowedColumns.length ? allowedColumns : undefined
       );
       setFresh(created);
+      onCreated?.(created);
       setName('');
       setAllowedColumns([]);
       await onChanged();

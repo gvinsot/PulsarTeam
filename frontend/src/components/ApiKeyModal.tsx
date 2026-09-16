@@ -17,6 +17,7 @@ import type {
   LadderApiKeyScope,
   LegacyApiKey,
   ScopedApiKey,
+  ScopedApiKeyCreated,
   ShowToastFn,
 } from '../types';
 import InsertKeysSection from './apiKeys/InsertKeysSection';
@@ -78,6 +79,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   const [myKeys, setMyKeys] = useState<ScopedApiKey[]>([]);
   /** Clear text of a just-minted ladder key, keyed by scope. Shown once. */
   const [freshScoped, setFreshScoped] = useState<Partial<Record<LadderApiKeyScope, string>>>({});
+  const [freshInsert, setFreshInsert] = useState<ScopedApiKeyCreated | null>(null);
   const [minting, setMinting] = useState<LadderApiKeyScope | null>(null);
 
   // ── Legacy keys still outstanding (admin only) ───────────────────────────
@@ -251,7 +253,13 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
         {/* Content */}
         <div className="overflow-y-auto p-5">
           {tab === 'docs' ? (
-            <ApiDocsPanel focus={docsFocus} />
+            <ApiDocsPanel
+              focus={docsFocus}
+              freshKeys={{
+                ...freshScoped,
+                insert: myKeys.some(k => k.id === freshInsert?.id) ? freshInsert?.key : undefined,
+              }}
+            />
           ) : (
             <div className="space-y-6">
               {/* ── The legacy banner ─────────────────────────────────────── */}
@@ -315,6 +323,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
                   <div className="text-center py-4 text-dark-400 text-sm">Loading...</div>
                 ) : (
                   <InsertKeysSection
+                    onCreated={setFreshInsert}
                     keys={insertKeys}
                     onChanged={reloadMyKeys}
                     onOpenDocs={() => openDocs('quickstart')}
