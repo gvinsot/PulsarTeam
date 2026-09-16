@@ -15,8 +15,12 @@ const { rows, exports: taskDbFake } = makeTaskDbFake();
 mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
 
 const { AgentManager } = await import('../agentManager.js');
-const { snapshotGitBaseline, detectCommitsSinceBaseline, reconcileTaskCommits } =
-  await import('../agentManager/tools/gitReconcile.js');
+const {
+  snapshotGitBaseline,
+  detectCommitsSinceBaseline,
+  reconcileTaskCommits,
+  locallyCreatedCommits,
+} = await import('../agentManager/tools/gitReconcile.js');
 
 const mockIo = {
   emit() {},
@@ -235,6 +239,170 @@ test('an unknown identity links everything rather than nothing', async () => {
       'no identity → no filter'
     );
   }
+});
+
+// ── The reflog gate ─────────────────────────────────────────────────────────
+// The committer filter separates agents from humans, never agent A's task from
+// agent B's: every runner clone commits under the same GIT_USER_EMAIL. Agents
+// are instructed to sync before working, so agent A's clone pulls agent B's
+// commits straight into `baseline..HEAD`, where they match the committer filter
+// and used to be linked to whatever task A was running. The reflog records HOW
+// each commit entered the clone, which the range cannot fake.
+
+const OTHER_AGENT_HASH = 'e'.repeat(40);
+
+/** Reflog as `git reflog show --no-abbrev --format="%H %gs"` prints it. */
+function reflog(entries: Array<[string, string]>): string {
+  return entries.map(([hash, reason]) => `${hash} ${reason}`).join('\n') + '\n';
+}
+
+test('locallyCreatedCommits keeps creating reflog verbs and drops HEAD moves', async () => {
+  const { env } = makeExecEnv([
+    {
+      match: /git reflog show/,
+      stdout: reflog([
+        [HASH_A, 'commit: feat: mine'],
+        [HASH_B, 'commit (amend): fix: mine, amended'],
+        ['1'.repeat(40), 'rebase (pick): replayed locally'],
+        ['2'.repeat(40), "merge origin/main: Merge made by the 'ort' strategy."],
+        ['3'.repeat(40), 'cherry-pick: picked here'],
+        ['4'.repeat(40), "commit (merge): Merge branch 'main' of github.com/x/y"],
+        ['5'.repeat(40), 'pull -q (pick): my work, replayed onto upstream'],
+        [OTHER_AGENT_HASH, 'pull: Fast-forward'],
+        ['6'.repeat(40), 'merge origin/main: Fast-forward'],
+        ['7'.repeat(40), 'reset: moving to origin/main'],
+        ['8'.repeat(40), 'checkout: moving from main to feature'],
+        ['9'.repeat(40), 'fetch origin: storing head'],
+        ['0'.repeat(40), 'rebase (finish): returning to refs/heads/main'],
+        ['ab'.repeat(20), 'clone: from github.com/x/y'],
+        // git labels sequencer phases with the command actually typed, so a
+        // rebasing pull checks out the UPSTREAM tip under a `pull …` verb.
+        ['ac'.repeat(20), 'pull --rebase (start): checkout acacacac'],
+        ['ad'.repeat(20), 'rebase -i (start): checkout adadadad'],
+      ]),
+    },
+  ]);
+
+  const created = await locallyCreatedCommits(env, 'agent-1');
+  assert.ok(created);
+  assert.deepEqual(
+    [...created].sort(),
+    [
+      HASH_A,
+      HASH_B,
+      '1'.repeat(40),
+      '2'.repeat(40),
+      '3'.repeat(40),
+      '4'.repeat(40),
+      '5'.repeat(40),
+    ].sort()
+  );
+});
+
+test('a commit subject mentioning a phase or fast-forward is still kept', async () => {
+  // Only the operation half of the reflog subject may decide; the detail half
+  // is an arbitrary commit message.
+  const { env } = makeExecEnv([
+    {
+      match: /git reflog show/,
+      stdout: reflog([
+        [HASH_A, 'commit: fix(start): handle Fast-forward pulls'],
+        [HASH_B, 'commit: docs: explain rebase (finish)'],
+      ]),
+    },
+  ]);
+
+  const created = await locallyCreatedCommits(env, 'agent-1');
+  assert.deepEqual([...(created as Set<string>)].sort(), [HASH_A, HASH_B].sort());
+});
+
+test('a commit pulled from another agent is not credited to this run', async () => {
+  const { env } = makeExecEnv([
+    { match: /git config user\.email/, stdout: `${AGENT_EMAIL}\n` },
+    // Both commits carry the shared agent identity, so the committer filter
+    // lets them both through — only the reflog can tell them apart.
+    {
+      match: /git log .*\.\.HEAD/,
+      stdout: `${HASH_A} feat: written by this run\n${OTHER_AGENT_HASH} chore: another agent's task\n`,
+    },
+    {
+      match: /git reflog show/,
+      stdout: reflog([
+        [HASH_A, 'commit: feat: written by this run'],
+        [OTHER_AGENT_HASH, 'pull: Fast-forward'],
+      ]),
+    },
+    { match: /--branches --not --remotes/, stdout: '' },
+  ]);
+
+  const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
+  assert.deepEqual(
+    commits.map(c => c.hash),
+    [HASH_A]
+  );
+});
+
+test('the reflog gate also guards the time-window fallback', async () => {
+  const { env } = makeExecEnv([
+    { match: /git log .*--since/, stdout: `${HASH_A} mine\n${OTHER_AGENT_HASH} theirs\n` },
+    {
+      match: /git reflog show/,
+      stdout: reflog([
+        [HASH_A, 'commit: mine'],
+        [OTHER_AGENT_HASH, 'pull origin main: Fast-forward'],
+      ]),
+    },
+    { match: /--branches --not --remotes/, stdout: '' },
+  ]);
+
+  const commits = await detectCommitsSinceBaseline(env, 'agent-1', {
+    startedAt: new Date(Date.now() - 60000).toISOString(),
+  });
+  assert.deepEqual(
+    commits.map(c => c.hash),
+    [HASH_A]
+  );
+});
+
+test('an unreadable reflog degrades to the previous behaviour, not to zero links', async () => {
+  for (const stdout of ['', 'fatal: not a git repository\n']) {
+    const { env } = makeExecEnv([
+      { match: /git reflog show/, stdout },
+      { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n` },
+      { match: /--branches --not --remotes/, stdout: '' },
+    ]);
+
+    assert.equal(await locallyCreatedCommits(env, 'agent-1'), null);
+    const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
+    assert.equal(commits.length, 1, 'unknown must not mean "created nothing"');
+  }
+});
+
+test('reconcileTaskCommits links only what the clone created', async () => {
+  const { mgr, agentId } = await setup();
+  const task = seedTask(agentId, { id: 'task-reconcile-3' });
+
+  mgr.executionManager = makeExecEnv([
+    {
+      match: /git log .*\.\.HEAD/,
+      stdout: `${HASH_A} feat: mine\n${OTHER_AGENT_HASH} chore: pulled in\n`,
+    },
+    {
+      match: /git reflog show/,
+      stdout: reflog([
+        [HASH_A, 'commit: feat: mine'],
+        [OTHER_AGENT_HASH, 'pull: Fast-forward'],
+      ]),
+    },
+    { match: /--branches --not --remotes/, stdout: '' },
+  ]).env;
+
+  const fresh = await reconcileTaskCommits(mgr, agentId, task.id, { baselineHead: BASELINE });
+  assert.equal(fresh, 1);
+  assert.deepEqual(
+    (rows.get(task.id) as any).commits.map((c: any) => c.hash),
+    [HASH_A]
+  );
 });
 
 test('a hostile identity is treated as unknown, never spliced into the command', async () => {

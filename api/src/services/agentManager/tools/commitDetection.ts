@@ -2,7 +2,7 @@
 // Pure functions that inspect a run_command tool result to detect git commit
 // hashes. Extracted verbatim from _processToolCalls' host module.
 
-import { cloneCommitterEmail, shellQuote } from './gitReconcile.js';
+import { cloneCommitterEmail, filterLocallyCreated, shellQuote } from './gitReconcile.js';
 
 /** Check if a command string represents a git operation that creates or moves commits */
 export function _isGitMutatingCmd(rawCmd: string): boolean {
@@ -89,6 +89,9 @@ export async function _detectCommitHashes(
 
   const commits: Array<{ hash: string; msg: string }> = [];
   const seenHashes = new Set<string>(); // prefix-aware dedup within this detection pass
+  // Set when the reflog gate below rejected hashes the parsers had found, so
+  // the "nothing detected" diagnostic doesn't fire on a deliberate rejection.
+  let droppedAsForeign = false;
 
   const _addCommit = (hash: string, msg: string) => {
     if (!hash || !/^[a-f0-9]{7,40}$/.test(hash)) return;
@@ -226,10 +229,26 @@ export async function _detectCommitHashes(
         }
       }
     }
+
+    // ── Final gate: only commits this clone actually created ──
+    // `git push` publishes whatever the branch contains, so a run that pulled
+    // before pushing has other agents' commits inside its push range — and the
+    // committer filter above cannot reject them, since every runner clone
+    // commits under the same address. The reflog can: see
+    // gitReconcile.locallyCreatedCommits. Unreadable reflog → no filtering,
+    // so an unusual environment degrades to the previous behaviour.
+    const localOnly = await filterLocallyCreated(executionManager, agentId, commits, 'Commit');
+    if (localOnly.length !== commits.length) {
+      droppedAsForeign = true;
+      commits.length = 0;
+      commits.push(...localOnly);
+    }
   }
 
-  // Diagnostic: log when a git mutating command ran but no hash was detected
-  if (commits.length === 0 && !_isGitNoop(output)) {
+  // Diagnostic: log when a git mutating command ran but no hash was detected.
+  // Suppressed when the hashes were deliberately dropped as foreign — that
+  // path logs its own, more precise explanation.
+  if (commits.length === 0 && !droppedAsForeign && !_isGitNoop(output)) {
     console.warn(
       `⚠️  [Commit] No hash detected for git command. cmd="${rawCmd.slice(0, 120)}" output="${output.slice(0, 300)}"`
     );

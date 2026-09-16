@@ -10,10 +10,11 @@
 //   1. snapshotGitBaseline()        — capture HEAD when a workflow action starts.
 //   2. detectCommitsSinceBaseline() — list exactly the commits created during
 //      the run (baseline..HEAD, restricted to the clone's own committer
-//      identity so commits that merely ARRIVED via fetch/pull are not credited
-//      to the task), each with a pushed/unpushed flag derived from
-//      `git log --branches --not --remotes` (robust for new branches, where
-//      @{u} does not exist yet).
+//      identity AND intersected with the clone's reflog, so commits that
+//      merely ARRIVED via fetch/pull — including those another agent pushed
+//      for another task — are not credited to this one), each with a
+//      pushed/unpushed flag derived from `git log --branches --not --remotes`
+//      (robust for new branches, where @{u} does not exist yet).
 //   3. reconcileTaskCommits()       — link them to the task via addTaskCommit
 //      (idempotent, prefix-aware dedup), updating pushed flags on re-visit.
 //
@@ -124,6 +125,125 @@ export function shellQuote(value: string): string {
 }
 
 /**
+ * Reflog reasons that mean "this commit object was CREATED in this clone".
+ *
+ * `git reflog` records every HEAD movement together with the operation that
+ * caused it, which is the one signal that separates "the agent wrote this
+ * commit" from "this commit merely arrived in the clone". Creating verbs
+ * (`commit`, `commit (amend)`, `rebase (pick)`, `cherry-pick`, `revert`,
+ * `am`, and the merge commit of a non-fast-forward `merge`/`pull`) mint a new
+ * object locally; `fetch`, `reset`, `checkout`, `clone`, `branch` and any
+ * fast-forward only move HEAD onto an object somebody else authored.
+ */
+const _LOCAL_CREATION_VERB = /^(commit|merge|pull|cherry-pick|revert|rebase|am|applypatch)\b/i;
+
+/** Sequencer phases that only move HEAD onto an existing commit, even though
+ *  their verb is in the allow-list. Note that git prefixes the phase with the
+ *  command the user actually typed, so a rebasing pull writes
+ *  `pull --rebase (start): checkout <upstream tip>` — matching on `rebase (…)`
+ *  would miss it and credit the upstream tip (another agent's commit) to the
+ *  run. `(pick|squash|fixup|reword)` are NOT here: those do mint new objects. */
+const _NON_CREATING_PHASE = /\((start|finish|abort)\)/i;
+
+/** `merge x: Fast-forward` / `pull: Fast-forward` — HEAD jumps to whatever the
+ *  remote brought in. Checked against the reason's detail half only, so a
+ *  commit whose subject mentions the word is unaffected. */
+const _FAST_FORWARD_DETAIL = /^\s*Fast-forward\b/i;
+
+/**
+ * The set of commits that were created inside THIS clone, read from its reflog.
+ *
+ * ── Why this exists ───────────────────────────────────────────────────────
+ * `baseline..HEAD` plus a committer filter was not enough: every runner clone
+ * commits under the same `GIT_USER_EMAIL` (`agent@pulsarteam.local` by
+ * default), so a commit another agent pushed for another task and that this
+ * clone then PULLED mid-run (agents are instructed to sync before working)
+ * sits inside the range AND matches the committer filter. It was linked to
+ * whatever task happened to be running — the "commits that have nothing to do
+ * with the task" report.
+ *
+ * The reflog cannot be fooled that way: a pulled commit enters through
+ * `pull`/`fetch`/`merge … Fast-forward`, never through `commit`.
+ *
+ * Returns null when the reflog could not be read (exec failure, non-repo, or
+ * — impossibly, since `git clone` itself writes an entry — an empty reflog).
+ * Callers MUST read null as "unknown" and skip the filter rather than treat it
+ * as "nothing was created locally", which would drop every real link.
+ */
+export async function locallyCreatedCommits(
+  executionManager: GitExecEnv,
+  agentId: string,
+  limit: number = 500
+): Promise<Set<string> | null> {
+  const output = await _execGit(
+    executionManager,
+    agentId,
+    `git reflog show --no-abbrev --format="%H %gs" -n ${limit}`,
+    10000
+  );
+  if (!output || /^fatal:/im.test(output)) return null;
+
+  const created = new Set<string>();
+  for (const line of output.split('\n')) {
+    const m = line.match(/^([a-f0-9]{40})\s*(.*)$/);
+    if (!m) continue;
+    // A reflog subject is `<operation>: <detail>` (`commit: feat: x`,
+    // `merge origin/main: Fast-forward`). Split on the FIRST colon: the
+    // operation decides whether an object was minted, the detail can be any
+    // commit message and must never drive the decision.
+    const reason = (m[2] || '').trim();
+    const sep = reason.indexOf(':');
+    const operation = sep === -1 ? reason : reason.slice(0, sep);
+    const detail = sep === -1 ? '' : reason.slice(sep + 1);
+    if (!_LOCAL_CREATION_VERB.test(operation)) continue;
+    if (_NON_CREATING_PHASE.test(operation)) continue;
+    if (_FAST_FORWARD_DETAIL.test(detail)) continue;
+    created.add(m[1]);
+  }
+  // A readable reflog always has at least the `clone:` entry, so an empty
+  // parse means the format assumption broke — report "unknown", not "none".
+  return created.size > 0 ? created : null;
+}
+
+/**
+ * Drop the commits of `candidates` that this clone did not create itself.
+ * No-ops (returns the input) when the reflog is unreadable, so a broken or
+ * unusual environment degrades to the previous, looser behaviour instead of
+ * losing every link. Prefix-tolerant so short hashes from the terminal
+ * parsers can be filtered too.
+ */
+export async function filterLocallyCreated<T extends { hash: string }>(
+  executionManager: GitExecEnv,
+  agentId: string,
+  candidates: T[],
+  label: string
+): Promise<T[]> {
+  if (candidates.length === 0) return candidates;
+  const created = await locallyCreatedCommits(executionManager, agentId);
+  if (!created) return candidates;
+
+  const isLocal = (hash: string) => {
+    if (created.has(hash)) return true;
+    if (hash.length === 40) return false;
+    for (const h of created) if (h.startsWith(hash)) return true;
+    return false;
+  };
+
+  const kept = candidates.filter(c => isLocal(c.hash));
+  if (kept.length !== candidates.length) {
+    const dropped = candidates
+      .filter(c => !isLocal(c.hash))
+      .map(c => c.hash.slice(0, 7))
+      .join(', ');
+    console.log(
+      `🔗 [${label}] Ignored ${candidates.length - kept.length} commit(s) [${dropped}] not created in ` +
+        `agent ${agentId}'s clone (pulled/fetched, not written by this run)`
+    );
+  }
+  return kept;
+}
+
+/**
  * The identity this clone commits as — `git config user.email`, which
  * ensure_agent_project writes from GIT_USER_NAME/GIT_USER_EMAIL
  * (agent@pulsarteam.local by default).
@@ -179,6 +299,14 @@ export async function cloneCommitterEmail(
  * When the clone has no identity we do NOT filter: an unfiltered range
  * over-links, which is a visible annoyance, while filtering on an empty
  * identity would link nothing at all and silently lose every agent commit.
+ *
+ * ── Why the committer filter is not enough ────────────────────────────────
+ * Every runner clone commits under the SAME address, so the filter only
+ * separates agents from humans, never agent A's task from agent B's. Agents
+ * are told to sync before working, so agent A's clone routinely pulls agent
+ * B's commits into `baseline..HEAD` where they match the filter and get
+ * linked. The result is therefore intersected with the clone's reflog, which
+ * records how each commit ENTERED the clone — see locallyCreatedCommits.
  */
 export async function detectCommitsSinceBaseline(
   executionManager: any,
@@ -237,11 +365,18 @@ export async function detectCommitsSinceBaseline(
 
   if (!rangeOutput || /^fatal:/im.test(rangeOutput)) return [];
 
-  const commits: DetectedCommit[] = [];
+  const parsed: DetectedCommit[] = [];
   for (const line of rangeOutput.split('\n')) {
     const m = line.match(/^([a-f0-9]{40})\s*(.*)/);
-    if (m) commits.push({ hash: m[1], msg: (m[2] || '').slice(0, 200) });
+    if (m) parsed.push({ hash: m[1], msg: (m[2] || '').slice(0, 200) });
   }
+  if (parsed.length === 0) return parsed;
+
+  // Second, decisive gate: keep only commits this clone actually created.
+  // The committer filter above cannot separate agents (they share one
+  // GIT_USER_EMAIL), so a commit pulled from another agent's task passes it —
+  // the reflog is what rules those out. See locallyCreatedCommits.
+  const commits = await filterLocallyCreated(executionManager, agentId, parsed, 'git-reconcile');
   if (commits.length === 0) return commits;
 
   // Unpushed set: commits on any local branch that no remote-tracking ref
