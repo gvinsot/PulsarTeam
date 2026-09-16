@@ -11,7 +11,7 @@ WebSocket below and the user sees / drives the real CLI.
 Routes:
     GET    /terminal/sessions                   — list active sessions
     GET    /terminal/sessions/{agent_id}        — status of one session
-    GET    /terminal/sessions/{agent_id}/output — recent readable CLI output
+    GET    /terminal/sessions/{agent_id}/output — this execution's CLI output
     DELETE /terminal/sessions/{agent_id}        — kill a session
     POST   /terminal/sessions/{agent_id}/input  — paste task prompt into TUI
     POST   /terminal/sessions/{agent_id}/interrupt — abort active TUI run
@@ -118,6 +118,12 @@ def get_terminal_session(agent_id: str, authorization: Optional[str] = Header(No
 
 @router.get("/terminal/sessions/{agent_id}/output")
 def get_terminal_output(agent_id: str, authorization: Optional[str] = Header(None)) -> JSONResponse:
+    """Short, credential-scrubbed tail of the CURRENT execution only.
+
+    The pane is shared across tasks, so the session returns a notice rather
+    than raw terminal text when it cannot prove the output belongs to the
+    execution that opened the capture window (see PtySession.history_output).
+    """
     _check_api_key(authorization, None)
     session = pty_session.get_session(agent_id)
     if session is None:
@@ -187,6 +193,13 @@ async def send_terminal_input(
         rows=request.rows,
         config_fingerprint=config_fingerprint,
     )
+
+    # Open the history capture window BEFORE anything else touches the pane.
+    # The shared terminal still shows the previous task (and possibly a login
+    # screen with its credentials); marking here is what keeps that content out
+    # of this execution's history — including on the auth-preflight bail-out
+    # below, which never injects but is exactly the case that renders secrets.
+    session.begin_history_capture()
 
     # Auth preflight: a logged-out CLI (claude-code with no usable token) sits
     # at a `/login` screen and silently swallows the pasted prompt, then goes

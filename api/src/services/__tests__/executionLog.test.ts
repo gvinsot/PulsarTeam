@@ -148,6 +148,50 @@ test('the prompt precedes the completion notes of the same run', async () => {
   assert.equal(output.mock.calls.length, 0);
 });
 
+// ── Terminal capture hygiene ─────────────────────────────────────────────────
+//
+// The terminal is shared across executions and renders login screens, so its
+// tail is scrubbed before it lands in task.history (and in the task:updated
+// broadcast). Every credential below is synthetic.
+
+test('credentials in the terminal tail never reach history or the broadcast', async () => {
+  const { save, output, emit } = setup();
+  output.mock.mockImplementation(
+    async () =>
+      'Login failed\n' +
+      'Authorization: Bearer SYNTHETIC0123456789abcdef\n' +
+      'Open https://example.invalid/device?user_code=SYNTH-0000 to continue\n' +
+      'GITHUB_TOKEN=ghp_SYNTHETIC0000000000000000000000'
+  );
+  await save(false);
+
+  const saved = task.history[0].terminalOutput as string;
+  const broadcast = JSON.stringify(emit.mock.calls[0].arguments);
+  for (const leak of ['SYNTHETIC0123456789abcdef', 'SYNTH-0000', 'ghp_SYNTHETIC']) {
+    assert.ok(!saved.includes(leak), saved);
+    assert.ok(!broadcast.includes(leak), broadcast);
+  }
+  // The diagnostic value of the tail survives the scrub.
+  assert.match(saved, /Login failed/);
+});
+
+test('the persisted terminal tail is bounded', async () => {
+  const { save, output } = setup();
+  output.mock.mockImplementation(async () => 'y'.repeat(20000));
+  await save();
+  assert.equal(task.history[0].terminalOutput.length, 6000);
+});
+
+test('a runner that cannot scope the capture yields a diagnostic, not a transcript', async () => {
+  // What the runner returns when no execution boundary was recorded: the raw
+  // terminal is withheld rather than copied out of a previous task.
+  const notice = '[terminal capture omitted: no execution boundary was recorded for this run]';
+  const { save, output } = setup();
+  output.mock.mockImplementation(async () => notice);
+  await save();
+  assert.equal(task.history[0].terminalOutput, notice);
+});
+
 test('a real conversation is never prefixed with the injected prompt', async () => {
   // A sandbox run already has the prompt inside conversationHistory; adding it
   // again would duplicate the first turn.

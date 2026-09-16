@@ -2,6 +2,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { saveAgent, updateTaskFields, getTaskById, getTasksByAssignee } from '../database.js';
 import { isCliRunner } from '../runners.js';
+import { redactSecrets } from '../secretFilter.js';
+
+/** Hard cap on the terminal tail kept in task history — a diagnostic, not a log. */
+const TERMINAL_OUTPUT_MAX_CHARS = 6000;
 
 /** @this {import('./index.js').AgentManager} */
 export const actionLogsMethods = {
@@ -128,8 +132,14 @@ export const actionLogsMethods = {
       }
       if (executionMessages.length === 0) {
         try {
-          terminalOutput =
-            (await this.executionManager?.getTerminalOutput?.(executorId)) || undefined;
+          const captured = await this.executionManager?.getTerminalOutput?.(executorId);
+          // The terminal is shared across executions and can render a login
+          // screen, so never persist it verbatim: the runner scopes the capture
+          // to this run, and we scrub credentials again here (the runner may be
+          // an older build) before it reaches task history and `task:updated`.
+          terminalOutput = captured
+            ? redactSecrets(String(captured)).slice(-TERMINAL_OUTPUT_MAX_CHARS).trim() || undefined
+            : undefined;
         } catch {
           // An unavailable runner must not prevent saving the execution record.
         }

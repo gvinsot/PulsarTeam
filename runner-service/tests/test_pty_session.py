@@ -12,6 +12,7 @@ if os.name == "nt":
 os.environ.setdefault("RUNNER_TYPE", "codex")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import pty_session as pty_session_module  # noqa: E402
 from pty_session import PtySession  # noqa: E402
 
 
@@ -245,38 +246,117 @@ async def test_interrupt_uses_cli_specific_sequence(monkeypatch, cmd, expected_s
     assert result["sequence"] == expected_label
 
 
-def test_history_output_uses_readable_tmux_pane_and_bounds_lines(monkeypatch):
+# ── Execution-scoped, credential-free history capture ───────────────────────
+#
+# The PTY (and its tmux pane) is shared by every task an agent runs, so a
+# capture that is not bounded to the current execution copies the previous
+# ticket's output — and whatever a /login screen printed — into an unrelated
+# task's history. Every value below is synthetic.
+
+
+def _tmux_pane(session, monkeypatch, screens):
+    """Stub `capture-pane` with successive rendered pane contents."""
     from subprocess import CompletedProcess
-    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    session._tmux_session = "agent-history"
     calls = []
+    pending = list(screens)
 
     def tmux(args, **kwargs):
         calls.append(args)
-        return CompletedProcess(args, 0, stdout="\n".join(f"line {i}" for i in range(150)).encode())
+        text = pending.pop(0) if len(pending) > 1 else pending[0]
+        return CompletedProcess(args, 0, stdout=text.encode())
 
+    session._tmux_session = f"agent-{session.agent_id}"
     monkeypatch.setattr(session, "_tmux_run", tmux)
-    lines = session.history_output().splitlines()
-    assert len(lines) == 100
-    assert lines[0] == "line 50"
-    assert lines[-1] == "line 149"
-    assert calls == [["capture-pane", "-p", "-J", "-t", "agent-history", "-S", "-100"]]
+    return calls
 
 
-def test_history_output_falls_back_to_cleaned_tail_when_tmux_fails(monkeypatch):
+def test_history_output_uses_readable_tmux_pane_and_bounds_lines(monkeypatch):
     session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    session._tmux_session = "agent-history"
-    session._append_scrollback(b"\x1b[32mTests passed\x1b[0m\r\nChanges pushed\x07")
+    calls = _tmux_pane(session, monkeypatch, ["", "\n".join(f"line {i}" for i in range(150))])
+    session.begin_history_capture()
+
+    lines = session.history_output().splitlines()
+    assert len(lines) == pty_session_module.HISTORY_MAX_LINES
+    assert lines[-1] == "line 149"
+    assert calls[-1] == [
+        "capture-pane", "-p", "-J", "-t", "agent-history",
+        "-S", f"-{pty_session_module.HISTORY_MAX_LINES}",
+    ]
+
+
+def test_history_output_excludes_the_previous_tasks_output(monkeypatch):
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    previous = "Task PREV-1: refactored the billing module\nsecret-plan for customer X"
+    _tmux_pane(session, monkeypatch, [previous, f"{previous}\nTask NOW-2: tests pass"])
+    session.begin_history_capture()
+
+    output = session.history_output()
+    assert output == "Task NOW-2: tests pass"
+    assert "PREV-1" not in output and "secret-plan" not in output
+
+
+def test_history_output_is_omitted_when_no_execution_window_was_opened():
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session._append_scrollback(b"leftover output from the previous task\n")
+    assert session.history_output() == pty_session_module.HISTORY_UNSCOPED_NOTICE
+
+
+def test_history_output_falls_back_to_bytes_produced_after_the_mark(monkeypatch):
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session._append_scrollback(b"previous task: deployed to staging\r\n")
 
     def unavailable(*args, **kwargs):
         raise OSError("tmux gone")
 
+    session._tmux_session = "agent-history"
     monkeypatch.setattr(session, "_tmux_run", unavailable)
+    session.begin_history_capture()
+    session._append_scrollback(b"\x1b[32mTests passed\x1b[0m\r\nChanges pushed\x07")
+
     assert session.history_output() == "Tests passed\nChanges pushed"
 
 
-def test_history_output_bounds_characters_and_handles_empty_sessions():
+def test_history_output_fallback_survives_scrollback_eviction(monkeypatch):
+    monkeypatch.setattr(pty_session_module, "SCROLLBACK_BYTES", 64)
     session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    assert session.history_output() == ""
+    session._append_scrollback(b"previous task line\n" * 4)
+    session.begin_history_capture()
+    session._append_scrollback(b"current run line\n" * 8)
+
+    output = session.history_output()
+    assert "previous task line" not in output
+    assert output.splitlines()[-1] == "current run line"
+
+
+def test_history_output_bounds_characters_and_reports_empty_runs():
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session.begin_history_capture()
+    assert session.history_output() == pty_session_module.HISTORY_EMPTY_NOTICE
     session._append_scrollback(b"x" * 20000)
-    assert session.history_output() == "x" * 16000
+    assert session.history_output() == "x" * pty_session_module.HISTORY_MAX_CHARS
+
+
+def test_history_output_redacts_credentials(monkeypatch):
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    _tmux_pane(session, monkeypatch, [
+        "",
+        "Login failed\n"
+        "Authorization: Bearer abcdef1234567890SYNTHETIC\n"
+        "Open https://example.invalid/device?user_code=WXYZ-1234&state=abc to continue\n"
+        "GITHUB_TOKEN=ghp_0000000000000000000000000000SYNTH",
+    ])
+    session.begin_history_capture()
+
+    output = session.history_output()
+    assert "abcdef1234567890SYNTHETIC" not in output
+    assert "WXYZ-1234" not in output
+    assert "ghp_0000000000000000000000000000SYNTH" not in output
+    assert "Login failed" in output
+    assert "https://example.invalid/device?user_code=[redacted]" in output
+
+
+def test_latched_auth_errors_are_redacted():
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session.set_auth_error("Invalid API key sk-ant-SYNTHETICKEY0123456789 — run /login")
+    assert "SYNTHETICKEY" not in session.auth_error
+    assert "run /login" in session.auth_error
