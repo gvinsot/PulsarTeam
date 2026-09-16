@@ -26,6 +26,7 @@ FROM nginx:alpine AS production
 
 COPY frontend/nginx-main.conf /etc/nginx/nginx.conf
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY frontend/nginx-security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # The `nginx` user only needs to read the site and its config; it must not be

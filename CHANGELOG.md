@@ -67,6 +67,22 @@ added under `[Unreleased]` as work lands.
   Dockerfile explaining that its isolation is per-agent UIDs (which require
   `CAP_CHOWN`/`CAP_SETUID`/`CAP_SETGID` in the parent) and that adding `USER`
   would collapse every agent onto one shared UID.
+- The SPA shell now carries a `Content-Security-Policy`. Only the API's
+  responses had one before, so the page that actually runs the application's
+  JavaScript had none. It is set by the frontend's nginx
+  (`frontend/nginx-security-headers.conf`), not by Traefik, because the API's
+  OAuth result pages need their own per-request nonce policy. Scripts are
+  same-origin only (plus `blob:` for the voice AudioWorklets), with no inline
+  script and no `eval`.
+- The page no longer loads anything from a third-party origin, so nothing
+  external is left without Subresource Integrity. Inter and JetBrains Mono are
+  bundled through `@fontsource-variable/*`, since a Google Fonts stylesheet is
+  generated per user agent and can never be pinned by hash. The Umami tracker is
+  a vendored copy (`frontend/public/vendor/umami.js`) that still reports to
+  `stats.methodinfo.fr` through `data-host-url`.
+- nginx serves the SPA shell only for the paths the app handles (`/`, `/terms`,
+  `/privacy`, `/auth/{google,microsoft,github}/callback`). Any other path that
+  is not a file now answers 404 instead of 200 with `index.html`.
 - Fixed `'\U0001f50c'` in the MCP plugin route, which is not a JavaScript escape
   and rendered as the literal text `U0001f50c` instead of an icon.
 

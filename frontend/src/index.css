@@ -42,7 +42,7 @@
 
 body {
   font-family:
-    'Inter',
+    'Inter Variable',
     -apple-system,
     BlinkMacSystemFont,
     sans-serif;
@@ -55,7 +55,7 @@ body {
 code,
 pre,
 .font-mono {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono Variable', monospace;
 }
 
 /* Custom scrollbar */

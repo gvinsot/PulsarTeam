@@ -4,6 +4,11 @@ import App from './App';
 import { WebSocketProvider } from './contexts/WebSocketContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { LanguageProvider } from './contexts/LanguageContext';
+// Self-hosted rather than pulled from Google Fonts: the Google stylesheet is
+// generated per user agent, so it can never carry a Subresource Integrity hash,
+// and it would force a third-party origin into the Content-Security-Policy.
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
 import './index.css';
 
 // index.html always ships <div id="root">, so this is never null in practice.
