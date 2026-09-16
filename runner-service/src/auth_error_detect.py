@@ -11,16 +11,15 @@ unrelated HTTP responses the agent makes. Latching on either substring alone
 spuriously fails a perfectly authenticated task with "please re-authenticate"
 — and, in the sync driver, kicks off a token refresh + retry that can recurse.
 
-So we only treat output as an auth failure when EITHER:
-  * a distinctive CLI/login banner appears (``AUTH_ERROR_RE``), OR
-  * the ``authentication_error`` type co-occurs with a real, word-boundaried
-    HTTP ``401`` (``AUTH_ERROR_401_RE`` + ``HTTP_401_RE``).
+Terminal detection additionally requires a diagnostic at the start of a line,
+after optional TUI decoration. Source listings, diffs and quoted strings can
+contain even the distinctive login banners without indicating a failure.
 """
 
 import re
 
-# Distinctive CLI / login banners. These phrases are emitted by the CLI itself
-# on an auth failure and effectively never appear verbatim in an agent's reply.
+# CLI / login phrases. These also occur in source and replies: a substring match
+# alone is not sufficient evidence when inspecting mixed terminal output.
 AUTH_ERROR_RE = re.compile(
     r"(invalid\s+api\s+key"
     r"|please\s+run\s+/login"
@@ -38,14 +37,27 @@ AUTH_ERROR_401_RE = re.compile(r"authentication_error", re.IGNORECASE)
 HTTP_401_RE = re.compile(r"(?<!\d)401(?!\d)")
 
 
-def looks_like_auth_error(text: str) -> bool:
-    """True when ``text`` carries a genuine CLI auth-failure signal.
+_TUI_PREFIX_RE = re.compile(r"^[ \t]*(?:[⎿●✗✘×!][ \t]*)?")
+_ERROR_PREFIX_RE = re.compile(r"^(?:API[ \t]+)?Error[ \t]*:[ \t]*(?:401[ \t]*[:·-]?[ \t]*)?", re.IGNORECASE)
+_API_401_PREFIX_RE = re.compile(r"^(?:API[ \t]+error[ \t]*:?[ \t]*401\b|HTTP(?:/\d(?:\.\d)?)?[ \t]+401\b)", re.IGNORECASE)
 
-    Matches a distinctive login/API-key banner, or the ``authentication_error``
-    type co-occurring with a word-boundaried HTTP 401 somewhere in ``text``.
+
+def find_auth_error_line(text: str) -> str | None:
+    """Return a CLI diagnostic line, excluding embedded code/prose matches.
+
+    A 401 and authentication_error must belong to the same diagnostic line;
+    unrelated line numbers or tool output elsewhere must not complete a match.
     """
-    if not text:
-        return False
-    if AUTH_ERROR_RE.search(text):
-        return True
-    return bool(AUTH_ERROR_401_RE.search(text) and HTTP_401_RE.search(text))
+    for line in text.splitlines():
+        diagnostic = _TUI_PREFIX_RE.sub("", line, count=1)
+        banner = _ERROR_PREFIX_RE.sub("", diagnostic, count=1)
+        if AUTH_ERROR_RE.match(banner):
+            return line.strip()
+        if _API_401_PREFIX_RE.match(diagnostic) and AUTH_ERROR_401_RE.search(diagnostic):
+            return line.strip()
+    return None
+
+
+def looks_like_auth_error(text: str) -> bool:
+    """True when mixed terminal output carries an auth diagnostic line."""
+    return find_auth_error_line(text) is not None

@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from auth_error_detect import (  # noqa: E402
@@ -34,6 +36,31 @@ def test_401_is_word_boundaried():
     assert not HTTP_401_RE.search("byte 14012")
     assert not HTTP_401_RE.search("4015 tokens")
     assert not looks_like_auth_error("authentication_error at offset 14012")
+
+
+@pytest.mark.parametrize("text", [
+    '359 +    session.set_auth_error("Invalid API key sk-ant-SYNTHETICKEY0123456789 — run /login")      360 +    assert "SYNTHETICKEY" not in session.auth_error',
+    'session.set_auth_error("Invalid API key")',
+    '+    assert looks_like_auth_error("Please run /login")',
+    'tests/auth.py:359:    error = "OAuth token has expired"',
+    'The CLI can display Invalid authentication credentials.',
+    '{"result":"Invalid API key · Please run /login","is_error":false}',
+    '401 +    assert "authentication_error" in result',
+    'API error 401: unrelated failure\nsource contains authentication_error',
+])
+def test_source_and_reply_text_are_not_auth_diagnostics(text):
+    assert not looks_like_auth_error(text)
+
+
+@pytest.mark.parametrize("text", [
+    '  ⎿  Invalid API key · Please run /login',
+    '● Error: OAuth token has expired',
+    'Error: Invalid authentication credentials',
+    '⎿ API Error: 401 {"error":{"type":"authentication_error","message":"bad credentials"}}',
+    'API Error: 401 Invalid API key',
+])
+def test_decorated_cli_diagnostics_are_detected(text):
+    assert looks_like_auth_error(text)
 
 
 # ── claude_code.run_sync channel split: the weak authentication_error+401

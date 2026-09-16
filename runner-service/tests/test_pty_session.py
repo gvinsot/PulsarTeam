@@ -217,6 +217,37 @@ def test_401_alone_without_authentication_error_does_not_latch():
     assert _detect(b"HTTP/1.1 401 Unauthorized from https://example.com/api") is None
 
 
+def test_auth_detector_ignores_the_production_source_diff():
+    diff = ('359 +    session.set_auth_error("Invalid API key '
+            'sk-ant-SYNTHETICKEY0123456789 — run /login")      '
+            '360 +    assert "SYNTHETICKEY" not in session.auth_error')
+    assert _detect(diff.encode()) is None
+
+
+def test_auth_detector_keeps_source_context_across_chunks():
+    session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
+    session._auto_answer_buf.extend(b'359 + session.set_auth_error("')
+    session._maybe_detect_auth_error(b'Invalid API key")')
+    assert session.auth_error is None
+
+
+def test_auth_detector_keeps_real_banner_across_chunks():
+    session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
+    session._auto_answer_buf.extend(b'\x1b[31m  Error: Invalid API ')
+    session._maybe_detect_auth_error(b'key\x1b[0m')
+    assert session.auth_error == "Error: Invalid API key"
+
+
+def test_auth_detector_does_not_turn_a_truncated_source_line_into_a_banner():
+    text = 'source = "' + 'x' * 100 + 'Invalid API key' + 'x' * (4096 - len('Invalid API key'))
+    assert _detect(text.encode()) is None
+
+
+def test_auth_detector_captures_diagnostic_instead_of_later_source():
+    text = b'Invalid API key\n359 + session.set_auth_error("Please run /login")'
+    assert _detect(text) == "Invalid API key"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("cmd", "expected_sequence", "expected_label"),

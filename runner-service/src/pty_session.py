@@ -172,13 +172,9 @@ _AUTO_ANSWER_MAX_ATTEMPTS = 12
 # Patterns are kept tight (distinctive CLI phrasings) to avoid latching on the
 # agent's own output that merely *mentions* authentication. The patterns live
 # in the shared `auth_error_detect` module so the headless sync driver
-# (claude_code.run_sync) keys on exactly the same signals and the two can't
-# drift.
-from auth_error_detect import (
-    AUTH_ERROR_RE as _AUTH_ERROR_RE,
-    AUTH_ERROR_401_RE as _AUTH_ERROR_401_RE,
-    HTTP_401_RE as _HTTP_401_RE,
-)
+# (claude_code.run_sync) shares the same phrases. Mixed terminal output also
+# needs line context to distinguish diagnostics from source code and diffs.
+from auth_error_detect import find_auth_error_line
 
 # Banner sentinels that mean the TUI is ready to accept a typed prompt. A
 # workflow-injected prompt is only pasted once the input box exists — not while
@@ -971,15 +967,15 @@ class PtySession:
         # Include the current chunk: the reader only extends _auto_answer_buf
         # with this data AFTER _handle_output returns, so reading the buffer
         # alone would lag one chunk behind.
-        tail = _strip_ansi((bytes(self._auto_answer_buf) + data).decode("utf-8", errors="replace"))[-4096:]
-        m = _AUTH_ERROR_RE.search(tail)
-        # `authentication_error` only counts when a 401 is present in the same
-        # tail (see _AUTH_ERROR_401_RE) — the 401 may sit on a different line, so
-        # this is a whole-tail co-occurrence check, not a per-line one.
-        if not m and _AUTH_ERROR_401_RE.search(tail) and _HTTP_401_RE.search(tail):
-            m = _AUTH_ERROR_401_RE.search(tail)
-        if not m:
+        tail = _strip_ansi((bytes(self._auto_answer_buf) + data).decode("utf-8", errors="replace"))
+        if len(tail) > 4096:
+            # Drop the cut line: truncating away its code/diff prefix could
+            # otherwise turn a quoted phrase into an apparent CLI banner.
+            tail = tail[-4096:].partition("\n")[2]
+        line = find_auth_error_line(tail)
+        if line is None:
             return
+        self.auth_error = line[:300]
         # Capture the line carrying the match for a useful API-side message.
         line = ""
         for raw_line in tail.splitlines():
