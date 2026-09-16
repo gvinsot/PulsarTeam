@@ -1101,6 +1101,10 @@ export const api = {
   markTaskViewed: (boardId: string, taskId: string) =>
     post<SuccessAck>(`/boards/${boardId}/tasks/${taskId}/viewed`, {}),
 
+  /** Clears the board's unseen badge in one call; `viewed` is how many flipped. */
+  markAllBoardTasksViewed: (boardId: string) =>
+    post<SuccessAck & { viewed: number }>(`/boards/${boardId}/tasks/viewed-all`, {}),
+
   getAllBoardsAdmin: () => get<AdminBoardListItem[]>('/boards/all'),
 
   createBoard: (name?: string, workflow?: BoardWorkflow, filters?: Record<string, unknown>) =>

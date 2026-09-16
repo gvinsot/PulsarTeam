@@ -88,6 +88,11 @@ added under `[Unreleased]` as work lands.
 
 ### Added
 
+- A **Mark all seen** button in the board toolbar, shown while the active board
+  has unseen MCP/API tasks. `POST /api/boards/:id/tasks/viewed-all` acknowledges
+  them all in one atomic statement — filters do not narrow it — so the unseen
+  badge next to the board name clears without opening every card. Same guards as
+  the per-task acknowledgement: browser cookie session plus read access.
 - ESLint 10 + typescript-eslint and Prettier in `api` and `frontend` — the repo
   previously had no linter or formatter of any kind. `npm run lint`,
   `npm run lint:fix`, `npm run format`, `npm run format:check`, plus

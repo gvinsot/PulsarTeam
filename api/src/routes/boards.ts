@@ -2,7 +2,11 @@ import express from 'express';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { resolveSessionToken } from '../middleware/session.js';
 import { isInternalServiceSession } from '../lib/agentAccess.js';
-import { getUnseenTaskCounts, markTaskHumanViewed } from '../services/database/taskViews.js';
+import {
+  getUnseenTaskCounts,
+  markTaskHumanViewed,
+  markAllBoardTasksHumanViewed,
+} from '../services/database/taskViews.js';
 import { emitTaskUpdated } from '../services/taskMutations.js';
 import {
   getBoardsByUser,
@@ -19,6 +23,7 @@ import {
   getAllBoards,
   getTasksByAssignee,
   getTaskById,
+  getTasksByIds,
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
@@ -58,16 +63,18 @@ export function boardRoutes(agentManager: AgentManager) {
     })
   );
 
+  // API/MCP reads and service credentials cannot acknowledge a human view.
+  const isHumanBrowserSession = (req: express.Request) => {
+    const user = req.user;
+    if (!user?.userId || isInternalServiceSession(user)) return false;
+    return resolveSessionToken(req)?.source === 'cookie';
+  };
+
   router.post(
     '/:id/tasks/:taskId/viewed',
     authorizeBoardAccess('read'),
     asyncHandler(async (req, res) => {
-      // API/MCP reads and service credentials cannot acknowledge a human view.
-      if (
-        !req.user.userId ||
-        isInternalServiceSession(req.user) ||
-        resolveSessionToken(req)?.source !== 'cookie'
-      ) {
+      if (!isHumanBrowserSession(req)) {
         return res.status(403).json({ error: 'A browser session is required' });
       }
       const task = await getTaskById(req.params.taskId as string);
@@ -82,6 +89,25 @@ export function boardRoutes(agentManager: AgentManager) {
         if (viewedTask) emitTaskUpdated(agentManager, viewedTask, { emitAgent: false });
       }
       res.json({ success: true });
+    })
+  );
+
+  // Bulk acknowledgement behind the board's "mark all as seen" button. Distinct
+  // path shape from /:id/tasks/:taskId/viewed, so neither route shadows the other.
+  router.post(
+    '/:id/tasks/viewed-all',
+    authorizeBoardAccess('read'),
+    asyncHandler(async (req, res) => {
+      if (!isHumanBrowserSession(req)) {
+        return res.status(403).json({ error: 'A browser session is required' });
+      }
+      const viewedIds = await markAllBoardTasksHumanViewed(req.params.id as string);
+      // Same publication as the single-task route, so every board member's card
+      // indicators and unseen count follow the acknowledgement.
+      for (const viewedTask of await getTasksByIds(viewedIds)) {
+        emitTaskUpdated(agentManager, viewedTask, { emitAgent: false });
+      }
+      res.json({ success: true, viewed: viewedIds.length });
     })
   );
 

@@ -18,7 +18,7 @@ A task is the unit of work an agent executes; tasks move between columns either 
 The tab is split into:
 
 1. **Board tabs** (top) — one tab per board the user owns or has been shared. The default board is pinned and undeletable. A `+` button creates a new board.
-2. **Board toolbar** — search, filters (repo, agent), sort, create-task, deleted-tasks, workflow editor, share button.
+2. **Board toolbar** — search, filters (repo, agent), sort, mark-all-seen, create-task, deleted-tasks, workflow editor, share button.
 3. **Kanban columns** — one column per workflow state. Cards are draggable within and across columns.
 
 ---
@@ -27,6 +27,7 @@ The tab is split into:
 
 - Each tab shows the board name, optionally an indicator of the user's share permission level (read / edit / admin) when the board is shared from another user.
 - A numeric badge beside the board name counts tasks created via MCP or API that no human has opened yet. Opening a task detail in a visible browser tab acknowledges that task individually, including for read-only board members; simply opening the board, listing tasks or reading them through MCP/API does not. The first view is persisted and shared across board members. Counts include all columns regardless of UI filters, exclude deleted tasks and recurring rules, and disappear at zero. Existing MCP/API tasks start unseen when this tracking is introduced.
+- A **Mark all seen (n)** button appears in the board toolbar while the active board has unseen tasks. It acknowledges every unseen task of that board in one call — including tasks hidden by the current filters — so the badge next to the board name disappears. Available to read-only members too, and hidden again once the count is zero.
 - Plus button opens a board creation form: name, optional starting workflow (defaults to a stock 4-column flow: Backlog / In Progress / Review / Done).
 - Board context menu (`...`):
   - **Share** — opens `ShareBoardModal` (admin permission only).

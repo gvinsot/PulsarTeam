@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import type { Pool } from 'pg';
 import type { AgentManager } from '../agentManager/index.js';
 import { setPool } from '../database/connection.js';
-import { getUnseenTaskCounts, markTaskHumanViewed } from '../database/taskViews.js';
+import {
+  getUnseenTaskCounts,
+  markTaskHumanViewed,
+  markAllBoardTasksHumanViewed,
+} from '../database/taskViews.js';
 import { createRouteHarness } from './helpers/routeHarness.js';
 
 const realDb = await import('../database.js');
@@ -24,6 +28,10 @@ mock.module('../database.js', {
       id === task.id
         ? { ...task, boardId: taskBoard, humanViewedAt: viewed ? viewedAt : null }
         : null,
+    getTasksByIds: async (ids: string[]) =>
+      ids
+        .filter(id => id === task.id)
+        .map(() => ({ ...task, boardId: taskBoard, humanViewedAt: viewedAt })),
   },
 });
 const { boardRoutes } = await import('../../routes/boards.js');
@@ -87,6 +95,32 @@ test('read-only member can acknowledge exactly one task; repeated views are idem
   assert.deepEqual(await response.json(), { shared: 1 });
 });
 
+test('the board button acknowledges every unseen task at once, and repeats are no-ops', async () => {
+  const first = await harness.post('/shared/tasks/viewed-all', {}, browser);
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), { success: true, viewed: 1 });
+  // One board-scoped statement, not one write per task.
+  assert.deepEqual(writes, [['shared']]);
+  assert.equal(emit.mock.callCount(), 1);
+  assert.equal(emit.mock.calls[0].arguments[0], 'task:updated');
+  assert.equal(emit.mock.calls[0].arguments[1].task.humanViewedAt, viewedAt);
+
+  const second = await harness.post('/shared/tasks/viewed-all', {}, browser);
+  assert.deepEqual(await second.json(), { success: true, viewed: 0 });
+  assert.equal(emit.mock.callCount(), 1);
+  const counts = await harness.get('/unseen-task-counts');
+  assert.deepEqual(await counts.json(), { shared: 1 });
+});
+
+test('bulk acknowledgement needs a browser session and read access to the board', async () => {
+  assert.equal((await harness.post('/shared/tasks/viewed-all', {})).status, 403);
+  assert.equal((await harness.post('/foreign/tasks/viewed-all', {}, browser)).status, 403);
+  const service = harness.as({ userId: '', username: 'internal-mcp', role: 'admin', csrf: '' });
+  assert.equal((await service.post('/shared/tasks/viewed-all', {}, browser)).status, 403);
+  assert.equal(writes.length, 0);
+  assert.equal(emit.mock.callCount(), 0);
+});
+
 test('API and service sessions cannot acknowledge views, even with an ambient cookie', async () => {
   for (const options of [
     {},
@@ -121,6 +155,7 @@ test('SQL counts and atomic acknowledgement exclude human sources, deleted tasks
   assert.equal(queries.length, 0);
   assert.deepEqual(await getUnseenTaskCounts(['board']), {});
   assert.equal(await markTaskHumanViewed('board', 'task'), false);
+  assert.deepEqual(await markAllBoardTasksHumanViewed('board'), []);
   for (const sql of queries) {
     assert.match(sql, /human_viewed_at IS NULL/);
     assert.match(sql, /source->>'type' IN \('mcp', 'api'\)/);
@@ -128,11 +163,14 @@ test('SQL counts and atomic acknowledgement exclude human sources, deleted tasks
   }
   assert.match(queries[0], /board_id = ANY\(\$1::uuid\[\]\)/);
   assert.match(queries[1], /id = \$1 AND board_id = \$2/);
+  // The bulk form is board-scoped: it can never touch another board's tasks.
+  assert.match(queries[2], /^UPDATE tasks SET human_viewed_at = NOW\(\)\s+WHERE board_id = \$1/);
 });
 
 test('database failures are not reported as a successful acknowledgement or zero counts', async () => {
   setPool(null);
   await assert.rejects(markTaskHumanViewed('shared', 'task'), /Database not connected/);
+  await assert.rejects(markAllBoardTasksHumanViewed('shared'), /Database not connected/);
   await assert.rejects(getUnseenTaskCounts(['shared']), /Database not connected/);
 });
 

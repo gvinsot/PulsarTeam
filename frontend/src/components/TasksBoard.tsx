@@ -11,6 +11,7 @@ import {
   Archive,
   Puzzle,
   Repeat,
+  CheckCheck,
 } from 'lucide-react';
 import {
   api,
@@ -125,6 +126,7 @@ export default function TasksBoard({
   const [shareBoard, setShareBoard] = useState<BoardEntry | null>(null);
   const [activityTarget, setActivityTarget] = useState<GitHubActivityTarget | null>(null);
   const [showBoardPlugins, setShowBoardPlugins] = useState(false);
+  const [markingAllViewed, setMarkingAllViewed] = useState(false);
   const boardScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Multi-board state
@@ -976,6 +978,28 @@ export default function TasksBoard({
     }
   }, [workflow, activeBoardId, handleSaveWorkflow]);
 
+  const unseenOnActiveBoard = activeBoardId ? unseenTaskCounts[activeBoardId] || 0 : 0;
+
+  /**
+   * Acknowledge every unseen task of the active board at once — the bulk form of
+   * the per-task view recorded when a card is opened. The badge next to the board
+   * name disappears as soon as the refreshed counts land.
+   */
+  const handleMarkAllViewed = useCallback(async () => {
+    if (!activeBoardId || markingAllViewed) return;
+    setMarkingAllViewed(true);
+    try {
+      await api.markAllBoardTasksViewed(activeBoardId);
+    } catch (err) {
+      console.error('[TasksBoard] Mark all tasks as seen failed:', errorMessage(err));
+    } finally {
+      setMarkingAllViewed(false);
+      // Refresh either way: the server may have acknowledged part of the board
+      // before failing, and a stale badge is the one thing this button must fix.
+      await refreshUnseenTaskCounts();
+    }
+  }, [activeBoardId, markingAllViewed, refreshUnseenTaskCounts]);
+
   if (!boardsLoaded) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -1111,6 +1135,22 @@ export default function TasksBoard({
         )}
 
         <div className="ml-auto" />
+
+        {/* Mark every unseen task of this board as seen (clears the tab badge) */}
+        {unseenOnActiveBoard > 0 && (
+          <button
+            onClick={handleMarkAllViewed}
+            disabled={markingAllViewed}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-indigo-400 bg-indigo-500/10
+              border border-indigo-500/20 rounded-lg hover:bg-indigo-500/20 transition-colors flex-shrink-0
+              whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Mark all unseen tasks of this board as seen"
+            aria-label={`Mark all ${unseenOnActiveBoard} unseen tasks as seen`}
+          >
+            <CheckCheck className="w-3 h-3" />
+            Mark all seen ({unseenOnActiveBoard})
+          </button>
+        )}
 
         {/* Recurring rules */}
         <button

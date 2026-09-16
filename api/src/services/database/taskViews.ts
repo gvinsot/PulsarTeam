@@ -29,3 +29,20 @@ export async function markTaskHumanViewed(boardId: string, taskId: string): Prom
   );
   return result.rows.length > 0;
 }
+
+/**
+ * Bulk counterpart of markTaskHumanViewed: acknowledges every task the board
+ * still counts as unseen, in one atomic statement. Returns the ids actually
+ * flipped (empty when the badge was already clear), so the caller publishes an
+ * update for those tasks only.
+ */
+export async function markAllBoardTasksHumanViewed(boardId: string): Promise<string[]> {
+  const pool = getPool();
+  if (!pool) throw new Error('Database not connected');
+  const result = await pool.query<{ id: string }>(
+    `UPDATE tasks SET human_viewed_at = NOW()
+     WHERE board_id = $1 AND ${UNSEEN_TASK} RETURNING id`,
+    [boardId]
+  );
+  return result.rows.map(row => row.id);
+}

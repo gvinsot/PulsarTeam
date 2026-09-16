@@ -119,6 +119,7 @@ export {
   getAllTasks,
   getAllTaskIds,
   getTaskById,
+  getTasksByIds,
   getTaskByIdPrefix,
   saveTaskToDb,
   deleteTaskFromDb,

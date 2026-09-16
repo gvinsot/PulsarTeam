@@ -16,6 +16,9 @@ Returns `{ [boardId]: count }` for the caller's owned and shared boards. Only li
 ### POST `/api/boards/:id/tasks/:taskId/viewed`
 Requires a browser cookie session and read access to the board. Called only when a human opens an individual task detail in a visible browser tab. Atomically records its first human view, shared across all board members; repeated calls are harmless. Bearer/service credentials are rejected. Returns `{ success: true }`; a task missing from this board returns 404. Viewing does not approve an external task or change its workflow state.
 
+### POST `/api/boards/:id/tasks/viewed-all`
+Bulk form of the acknowledgement above, behind the board toolbar's "mark all as seen" button. Same guards (browser cookie session + read access); one atomic statement marks every task the board still counts as unseen. Returns `{ success: true, viewed: n }` where `n` is how many tasks were flipped (`0` when the badge was already clear), and emits `task:updated` for each of them.
+
 ### GET `/api/boards/:id`
 Single board detail with `permission` and `isOwner`.
 

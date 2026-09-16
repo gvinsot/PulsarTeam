@@ -369,6 +369,16 @@ export async function getTaskById(taskId: string) {
   return queryOneTask('WHERE t.id = $1 AND t.deleted_at IS NULL', [taskId], 'Failed to get task:');
 }
 
+/** Hydrate a known set of ids in one round trip (bulk emits), joins included. */
+export async function getTasksByIds(taskIds: string[]): Promise<Task[]> {
+  if (!taskIds.length) return [];
+  return queryTasks(
+    'WHERE t.id = ANY($1::uuid[]) AND t.deleted_at IS NULL',
+    [taskIds],
+    'Failed to get tasks by id:'
+  );
+}
+
 /**
  * Resolve a task by full id OR a unique id prefix (the short-id form agents and
  * the UI use). Tries the primary-key exact match first, then a prefix scan.
