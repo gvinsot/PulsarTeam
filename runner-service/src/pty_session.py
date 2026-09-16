@@ -221,6 +221,12 @@ _CLAUDE_READY_RECIPE = _ReadyRecipe(
 )
 
 _READY_RECIPES: dict[str, _ReadyRecipe] = {
+    # Codex 0.154.0 keeps the placeholder visible while working, so the
+    # interrupt footer must veto it. The old generic caret (▌) is not rendered.
+    "codex": _ReadyRecipe(
+        hints=("ask codex to do anything", "? for shortcuts"),
+        busy=("esc to interrupt", "esc to cancel"),
+    ),
     "opencode": _ReadyRecipe(
         hints=("ctrl+p commands",),
         busy=("esc interrupt", "update available"),
@@ -259,6 +265,11 @@ def screen_is_input_ready(screen: str, recipe: _ReadyRecipe) -> bool:
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
+
+
+def _codex_draft(screen: str) -> Optional[str]:
+    composers = re.findall(r"^\s*›([^\n]*)", screen, re.MULTILINE)
+    return composers[-1].strip() if composers else None
 
 
 # A "client" callback type: an async function the session calls to push
@@ -440,6 +451,8 @@ class PtySession:
     _reader_task: Optional[asyncio.Task] = None
     _idle_timer: Optional[asyncio.Task] = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _input_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _input_epoch: int = 0  # interrupt invalidates pending workflow injections
     _closed: bool = False
     exit_code: Optional[int] = None
     _auto_answer_buf: bytearray = field(default_factory=bytearray)
@@ -935,8 +948,12 @@ class PtySession:
         A CLI whose recipe carries busy markers (opencode) renders its
         input-box hint even mid-response, so for those the scan is re-based on
         every iteration: each pass repaints and looks at that one frame, where
-        the hint and its vetoing busy marker appear together."""
+        the hint and its vetoing busy marker appear together. Codex instead
+        captures the complete current tmux pane, independent of redraw timing
+        and the rolling stream buffer's size."""
         recipe = _ready_recipe(self.cmd)
+        epoch = self._input_epoch
+        codex = bool(self.cmd and os.path.basename(self.cmd[0]).lower() == "codex")
         per_frame = bool(recipe.busy)
         start_total = self._auto_answer_total
         # Ask tmux to repaint the authoritative current screen (no-op without
@@ -944,8 +961,27 @@ class PtySession:
         await self.request_repaint()
         deadline = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < deadline:
-            if self._closed or not self.is_alive():
+            if self._closed or not self.is_alive() or epoch != self._input_epoch:
                 return False
+            if codex and self._tmux_session:
+                # Read one authoritative screen, not concatenated ANSI redraws:
+                # a partial repaint can contain the placeholder without the
+                # busy footer, and a tall pane can push it out of the byte tail.
+                try:
+                    frame = await asyncio.to_thread(
+                        self._tmux_run, ["capture-pane", "-p", "-t", self._tmux_session]
+                    )
+                    if frame.returncode == 0:
+                        screen = frame.stdout.decode("utf-8", errors="replace").lower()
+                        if screen_is_input_ready(screen, recipe):
+                            return True
+                        await asyncio.sleep(0.2)
+                        continue
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                # A failed screen capture is not evidence that Codex is ready.
+                await asyncio.sleep(0.2)
+                continue
             if per_frame:
                 # Re-base on the bytes of the frame we are about to request, so
                 # a stale idle frame can't out-vote the current busy one.
@@ -1259,22 +1295,151 @@ class PtySession:
             if not self._clients:
                 self._schedule_idle_timer()
 
-    async def write(self, data: bytes) -> None:
+    async def _wait_for_codex_paste(self, epoch: int, timeout: float = 5.0) -> Optional[str]:
+        """Wait for Codex to render its nonempty composer before submitting.
+
+        Sleeping from the PTY write alone is insufficient: a busy event loop
+        may consume both paste and Enter together even if we spaced writes.
+        Use only the last composer marker, never echo prompt contents to logs.
+        """
+        if not self._tmux_session:
+            return
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if epoch != self._input_epoch:
+                raise InterruptedError("Terminal input interrupted before submission")
+            if not self.is_alive():
+                raise OSError("Terminal session closed before submission")
+            try:
+                frame = await asyncio.to_thread(
+                    self._tmux_run, ["capture-pane", "-p", "-t", self._tmux_session]
+                )
+                if frame.returncode == 0:
+                    draft = _codex_draft(frame.stdout.decode("utf-8", errors="replace"))
+                    if draft and draft.lower() != "ask codex to do anything":
+                        return draft
+            except (OSError, subprocess.SubprocessError):
+                pass
+            await asyncio.sleep(0.05)
+        raise TimeoutError("Codex did not render the pasted input; submit was not sent")
+
+    async def _submit_codex_paste(self, draft: str, epoch: int) -> None:
+        """Confirm the composer consumed Enter; retry only the unchanged draft.
+
+        Never re-paste the task. An unchanged composer can mean Enter was lost
+        or used for slash completion. Once it changes or the turn is busy,
+        another Enter could target different input, so no retry is allowed.
+        """
+        for attempt in range(2):
+            if epoch != self._input_epoch:
+                raise InterruptedError("Terminal input interrupted before submission")
+            try:
+                result = await asyncio.to_thread(
+                    self._tmux_run, ["send-keys", "-t", self._tmux_session, "Enter"]
+                )
+            except (OSError, subprocess.SubprocessError) as e:
+                raise OSError("Terminal submit could not be written") from e
+            if result.returncode != 0:
+                raise OSError("Terminal submit could not be written")
+            for _ in range(10):
+                await asyncio.sleep(0.1)
+                if epoch != self._input_epoch:
+                    raise InterruptedError("Terminal input interrupted during submission")
+                if not self.is_alive():
+                    raise OSError("Terminal session closed during submission")
+                try:
+                    frame = await asyncio.to_thread(
+                        self._tmux_run, ["capture-pane", "-p", "-t", self._tmux_session]
+                    )
+                except (OSError, subprocess.SubprocessError) as e:
+                    raise OSError("Cannot verify terminal submission") from e
+                if frame.returncode != 0:
+                    raise OSError("Cannot verify terminal submission")
+                screen = frame.stdout.decode("utf-8", errors="replace")
+                busy = any(marker in screen.lower() for marker in _READY_RECIPES["codex"].busy)
+                if busy or _codex_draft(screen) != draft:
+                    return
+        raise TimeoutError("Codex still has the pasted draft; submission was not confirmed")
+
+    async def send_input(self, text: str, *, bracketed_paste: bool = True,
+                         submit: bool = True, ready_timeout: float = 30.0) -> None:
+        """Serialize workflow submissions and cancel those superseded by Stop.
+
+        A live tmux attach process alone does not prove the CLI can accept a
+        task. Codex must show its input box; never report a blind paste as a
+        successful workflow delivery after the readiness deadline.
+        """
+        epoch = self._input_epoch
+        async with self._input_lock:
+            if epoch != self._input_epoch:
+                raise InterruptedError("Terminal input interrupted before delivery")
+            ready = await self.wait_until_input_ready(timeout=ready_timeout)
+            if epoch != self._input_epoch:
+                raise InterruptedError("Terminal input interrupted before delivery")
+            if not self.is_alive():
+                raise OSError("Terminal session closed before delivery")
+            if not ready:
+                if self.cmd and os.path.basename(self.cmd[0]).lower() == "codex":
+                    raise TimeoutError("Codex input is not ready; prompt was not delivered")
+                delay = float(os.getenv("TERMINAL_INPUT_STARTUP_DELAY_SEC", "0.75"))
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                logger.warning(
+                    f"[Terminal] Input-ready hint not seen for agent {self.agent_id} within "
+                    f"{ready_timeout}s — pasting prompt anyway after {delay}s fallback"
+                )
+            if epoch != self._input_epoch:
+                raise InterruptedError("Terminal input interrupted before delivery")
+            self.clear_auth_error()
+            payload = text.encode("utf-8", errors="replace")
+            if bracketed_paste:
+                payload = b"\x1b[200~" + payload + b"\x1b[201~"
+            codex_paste = bool(
+                bracketed_paste and self.cmd
+                and os.path.basename(self.cmd[0]).lower() == "codex"
+            )
+            if submit and not codex_paste:
+                payload += b"\r"
+            if not await self.write(payload):
+                raise OSError("Terminal input could not be fully written")
+            if submit and codex_paste:
+                # Codex's paste handling can swallow Enter from the same input
+                # burst (reproduced on 0.154.0 at cold start). Wait for the
+                # rendered draft, then let paste-burst handling settle before
+                # sending a distinct submit keystroke.
+                draft = await self._wait_for_codex_paste(epoch)
+                await asyncio.sleep(0.2)
+                if epoch != self._input_epoch:
+                    raise InterruptedError("Terminal input interrupted before submission")
+                if not self.is_alive():
+                    raise OSError("Terminal session closed before submission")
+                if self._tmux_session:
+                    await self._submit_codex_paste(draft, epoch)
+                elif not await self.write(b"\r"):
+                    raise OSError("Terminal submit could not be written")
+
+    async def write(self, data: bytes) -> bool:
         """Send keystrokes from a client into the PTY. Any client may call
         this — the multi-writer setup is fine for a few connected admins,
         though we make no effort to serialize interleaved typing."""
         if self.master_fd < 0 or self._closed:
-            return
+            return False
         try:
-            os.write(self.master_fd, data)
+            pending = memoryview(data)
+            while pending:
+                written = os.write(self.master_fd, pending)
+                if written <= 0:
+                    raise OSError("PTY write made no progress")
+                pending = pending[written:]
         except OSError as e:
             logger.warning(f"[Terminal] write to {self.agent_id} failed: {e}")
-            return
+            return False
         # A headless write (workflow prompt injection with no attached viewer)
         # restarts the idle countdown so the freshly started task isn't reaped
         # at a timer that began ticking at spawn.
         if not self._clients:
             self._schedule_idle_timer()
+        return True
 
     async def interrupt(self) -> dict:
         """Ask the foreground CLI to abort its active run without killing the
@@ -1284,6 +1449,7 @@ class PtySession:
         turn"; routing through a backend-specific recipe avoids using Ctrl-C
         for CLIs where it exits the whole app.
         """
+        self._input_epoch += 1
         if not self.is_alive():
             return {
                 "interrupted": False,

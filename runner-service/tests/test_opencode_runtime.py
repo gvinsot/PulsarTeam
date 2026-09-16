@@ -156,7 +156,7 @@ def test_opencode_has_a_dedicated_recipe():
     assert _ready_recipe(["/usr/bin/opencode"]) is OPENCODE_RECIPE
     # A CLI with no override still falls back to the default. (claude used to
     # stand in here; it has its own recipe now — see test_claude_ready_recipe.)
-    assert _ready_recipe(["codex"]) is _DEFAULT_READY_RECIPE
+    assert _ready_recipe(["unknown-cli"]) is _DEFAULT_READY_RECIPE
 
 
 # ── Layer 2: live spawn against the real CLI ────────────────────────────────

@@ -216,41 +216,21 @@ async def send_terminal_input(
                 "auth_error": session.auth_error,
             })
 
-    # A workflow-injected prompt must land in the TUI's message box, not in a
-    # startup confirmation screen (trust folder / bypass-permissions) that
-    # would swallow it, nor mid-response where it would interleave. Wait until
-    # the CLI returns to an input-ready prompt — this doubles as the
-    # "PTY-is-free" gate so a CLI runner that's still finishing a previous turn
-    # doesn't get a second prompt jammed into its stream. The reader loop
-    # auto-answers trust/bypass concurrently. Falls back to a short fixed delay
-    # only when the readiness hint never appears within the window.
-    #   • fresh session  → longer window (CLI is still booting its TUI)
-    #   • alive session  → wait for the current turn to wind down to the prompt
+    # The session owns readiness, serialization and Stop cancellation, so an
+    # interrupt while waiting cannot be followed by a stale task submission.
     ready_timeout = float(os.getenv(
         "TERMINAL_INPUT_READY_TIMEOUT_SEC",
         "45" if not session_was_alive else "30",
     ))
-    ready = await session.wait_until_input_ready(timeout=ready_timeout)
-    if not ready:
-        delay = float(os.getenv("TERMINAL_INPUT_STARTUP_DELAY_SEC", "0.75"))
-        if delay > 0:
-            await asyncio.sleep(delay)
-        logger.warning(
-            f"[Terminal] Input-ready hint not seen for agent {agent_id} within "
-            f"{ready_timeout}s — pasting prompt anyway after {delay}s fallback"
+    try:
+        await session.send_input(
+            request.input, bracketed_paste=request.bracketed_paste,
+            submit=request.submit, ready_timeout=ready_timeout,
         )
-
-    # The preflight above confirmed a usable token (or the backend has no auth
-    # gate): drop any latched auth error from a previous run so a recovered
-    # login isn't reported as still-broken to the API.
-    session.clear_auth_error()
-
-    payload = request.input.encode("utf-8", errors="replace")
-    if request.bracketed_paste:
-        payload = b"\x1b[200~" + payload + b"\x1b[201~"
-    if request.submit:
-        payload += b"\r"
-    await session.write(payload)
+    except (InterruptedError, TimeoutError) as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return JSONResponse({"status": "success", "alive": session.is_alive()})
 
 

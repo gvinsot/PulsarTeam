@@ -159,7 +159,7 @@ def test_default_hints_only_ever_matched_the_cold_start():
 def test_claude_has_a_dedicated_recipe():
     assert _ready_recipe(["claude"]) is not _DEFAULT_READY_RECIPE
     assert _ready_recipe(["/usr/bin/claude"]) is CLAUDE_RECIPE
-    assert _ready_recipe(["codex"]) is _DEFAULT_READY_RECIPE
+    assert _ready_recipe(["unknown-cli"]) is _DEFAULT_READY_RECIPE
 
 
 def test_recipe_is_evaluated_per_frame():
