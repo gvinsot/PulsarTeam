@@ -13,7 +13,7 @@
  * .env.example) but it was never consulted in either case. These tests lock in:
  * a *usable* OAuth token wins; a dead one falls back to the server token when
  * one exists; the server token fills the gap when no OAuth token exists; null
- * only when neither exists.
+ * only when neither exists. A rejected token with no fallback requires reconnection.
  */
 
 import test, { mock } from 'node:test';
@@ -81,20 +81,34 @@ test('a dead OAuth token falls back to the server GITHUB_TOKEN', async t => {
   assert.deepEqual(creds, { token: 'server-pat', login: 'serverbot', provider: 'github' });
 });
 
-test('a dead OAuth token is kept when there is no server fallback (best we have)', async t => {
+test('a dead OAuth token without a server fallback requires reconnection', async t => {
   dbState.hit = {
     accessToken: 'expired-tok',
     scopeType: 'board',
     record: { meta: { login: 'octocat' } },
   };
   setEnvToken(undefined); // no server token → nothing better to switch to
-  // With no fallback we must NOT even make the liveness call — assert that.
-  globalThis.fetch = (async () => {
-    throw new Error('should not validate without a fallback');
-  }) as typeof fetch;
+  stubTokenCheck(401);
   t.after(restoreFetch);
-  const creds = await getGitHubCredentialsForAgent('agent-1c', 'board-1c');
-  assert.deepEqual(creds, { token: 'expired-tok', login: 'octocat', provider: 'github' });
+  await assert.rejects(getGitHubCredentialsForAgent('agent-1c', 'board-1c'), {
+    name: 'GitHubReconnectRequiredError',
+    code: 'GITHUB_RECONNECT_REQUIRED',
+  });
+});
+
+test('usable and ambiguous tokens without a fallback are preserved', async t => {
+  dbState.hit = {
+    accessToken: 'oauth-tok',
+    scopeType: 'agent',
+    record: { meta: { login: 'octocat' } },
+  };
+  setEnvToken(undefined);
+  t.after(restoreFetch);
+  for (const status of [200, 403, 429, 503, 'network'] as const) {
+    stubTokenCheck(status);
+    const creds = await getGitHubCredentialsForAgent('agent-no-fallback', null);
+    assert.equal(creds?.token, 'oauth-tok');
+  }
 });
 
 test('a transient liveness-check failure keeps the OAuth token (no false fallback)', async t => {

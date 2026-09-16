@@ -1,5 +1,6 @@
 import express from 'express';
 import { errorMessage } from '../lib/errors.js';
+import { GitHubReconnectRequiredError } from './github.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { getWorkflowForBoard, isAgentTypeEnabled } from '../services/configManager.js';
 import { AGENT_TYPE_LABELS, normalizeAgentType } from '../services/runners.js';
@@ -320,7 +321,15 @@ export function agentRoutes(agentManager: AgentManager) {
       if ('ownerId' in parsed && req.user.role !== 'admin') {
         delete parsed.ownerId;
       }
-      const agent = await agentManager.update(req.params.id, parsed);
+      let agent;
+      try {
+        agent = await agentManager.update(req.params.id, parsed);
+      } catch (err) {
+        if (err instanceof GitHubReconnectRequiredError) {
+          return res.status(409).json({ error: err.message, code: err.code });
+        }
+        throw err;
+      }
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
       res.json(agent);
     })

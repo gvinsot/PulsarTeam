@@ -87,14 +87,19 @@ async function switchProjectContext(
     .catch(() => {})
     .then(async () => {
       if (agent.project === project) return;
+      // Reject revoked credentials before stopping a live agent. Clearing a
+      // repository needs no GitHub access and must remain possible after revocation.
+      const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
+      const creds =
+        manager.executionManager && project
+          ? await getGitHubCredentialsForAgent(agent.id, agent.boardId || null)
+          : null;
       manager.stopAgent(agent.id);
       agent.projectSwitching = true;
       manager._emit('agent:updated', manager._sanitize(agent));
       try {
         if (manager.executionManager) {
           const { buildRepoCloneUrl } = await import('../repoUrl.js');
-          const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
-          const creds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
           if (project) {
             const url = buildRepoCloneUrl(project);
             if (!url) throw new Error(`Invalid repository: ${project}`);

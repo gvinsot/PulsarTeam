@@ -164,6 +164,7 @@ export default function AgentDetail({
   const [autoScroll, setAutoScroll] = useState(true);
   const [currentProject, setCurrentProject] = useState(agent?.project || '');
   const [projectSaving, setProjectSaving] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const hadStreamRef = useRef(false);
 
   useEffect(() => {
@@ -226,11 +227,13 @@ export default function AgentDetail({
 
   useEffect(() => {
     setCurrentProject(agent?.project || '');
+    setProjectError(null);
   }, [agent?.id, agent?.project]);
 
   const handleProjectChange = async (project: string) => {
     setCurrentProject(project);
     setProjectSaving(true);
+    setProjectError(null);
 
     try {
       await api.updateAgent(agent.id, { project });
@@ -241,6 +244,9 @@ export default function AgentDetail({
       }
     } catch (err) {
       console.error(err);
+      setProjectError(
+        err instanceof Error ? err.message : 'Could not select the repository. Please try again.'
+      );
       setCurrentProject(agent?.project || '');
     } finally {
       setProjectSaving(false);
@@ -548,6 +554,11 @@ export default function AgentDetail({
         </div>
       </div>
 
+      {projectError && (
+        <div role="alert" className="px-4 py-2 text-sm text-red-300 bg-red-500/10">
+          {projectError}
+        </div>
+      )}
       {/* Tabs */}
       <div className="flex border-b border-dark-700 px-2 overflow-x-auto">
         {TABS.filter(
