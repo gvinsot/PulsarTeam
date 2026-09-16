@@ -427,3 +427,21 @@ def test_latched_auth_errors_are_redacted():
     session.set_auth_error("Invalid API key sk-ant-SYNTHETICKEY0123456789 — run /login")
     assert "SYNTHETICKEY" not in session.auth_error
     assert "run /login" in session.auth_error
+
+
+@pytest.mark.parametrize(
+    "line,leak",
+    [
+        # The terminal capture no longer leaves the runner, but a latched auth
+        # error still does — the API copies it into task errors and history. It
+        # is scraped off a login screen, so it carries exactly the quoted
+        # assignments the filter used to only half-mask. Values are synthetic.
+        ("Invalid API key: API_TOKEN='SYNTHETIC_VALUE_123456' rejected", "SYNTHETIC_VALUE_123456"),
+        ('Invalid API key {"password": "SYNTHETIC FIRST SECOND"}', "SECOND"),
+    ],
+)
+def test_latched_auth_errors_mask_quoted_values_whole(line, leak):
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session.set_auth_error(line)
+    assert leak not in session.auth_error
+    assert "[redacted]" in session.auth_error
