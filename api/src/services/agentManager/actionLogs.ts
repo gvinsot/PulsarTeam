@@ -2,10 +2,17 @@
 import { v4 as uuidv4 } from 'uuid';
 import { saveAgent, updateTaskFields, getTaskById, getTasksByAssignee } from '../database.js';
 import { isCliRunner } from '../runners.js';
-import { redactSecrets } from '../secretFilter.js';
 
-/** Hard cap on the terminal tail kept in task history — a diagnostic, not a log. */
-const TERMINAL_OUTPUT_MAX_CHARS = 6000;
+// Accept only fixed diagnostics from the runner. A legacy/mixed-version runner
+// can return an older task's ordinary confidential prose, which credential
+// redaction cannot detect. Shared terminal text has no execution provenance.
+export const TERMINAL_HISTORY_UNVERIFIED_NOTICE =
+  '[terminal capture omitted: a shared terminal can replay earlier tasks; execution isolation could not be established]';
+const TERMINAL_HISTORY_NOTICES = new Set([
+  TERMINAL_HISTORY_UNVERIFIED_NOTICE,
+  '[terminal capture omitted: initial pane capture failed; execution isolation could not be established]',
+  '[terminal capture omitted: no execution boundary was recorded for this run, so output from earlier tasks could not be excluded]',
+]);
 
 /** @this {import('./index.js').AgentManager} */
 export const actionLogsMethods = {
@@ -131,17 +138,14 @@ export const actionLogsMethods = {
         }
       }
       if (executionMessages.length === 0) {
+        terminalOutput = TERMINAL_HISTORY_UNVERIFIED_NOTICE;
         try {
           const captured = await this.executionManager?.getTerminalOutput?.(executorId);
-          // The terminal is shared across executions and can render a login
-          // screen, so never persist it verbatim: the runner scopes the capture
-          // to this run, and we scrub credentials again here (the runner may be
-          // an older build) before it reaches task history and `task:updated`.
-          terminalOutput = captured
-            ? redactSecrets(String(captured)).slice(-TERMINAL_OUTPUT_MAX_CHARS).trim() || undefined
-            : undefined;
+          if (typeof captured === 'string' && TERMINAL_HISTORY_NOTICES.has(captured)) {
+            terminalOutput = captured;
+          }
         } catch {
-          // An unavailable runner must not prevent saving the execution record.
+          // Preserve the safe diagnostic even if the runner is unavailable.
         }
       }
 

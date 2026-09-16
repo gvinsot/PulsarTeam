@@ -301,29 +301,61 @@ def _tmux_pane(session, monkeypatch, screens):
     return calls
 
 
-def test_history_output_uses_readable_tmux_pane_and_bounds_lines(monkeypatch):
+def test_pane_capture_distinguishes_empty_success_from_failure(monkeypatch):
+    from subprocess import CompletedProcess
     session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    calls = _tmux_pane(session, monkeypatch, ["", "\n".join(f"line {i}" for i in range(150))])
-    session.begin_history_capture()
-
-    lines = session.history_output().splitlines()
-    assert len(lines) == pty_session_module.HISTORY_MAX_LINES
-    assert lines[-1] == "line 149"
-    assert calls[-1] == [
-        "capture-pane", "-p", "-J", "-t", "agent-history",
-        "-S", f"-{pty_session_module.HISTORY_MAX_LINES}",
-    ]
+    assert session._pane_lines(10) is None
+    session._tmux_session = "agent-history"
+    monkeypatch.setattr(session, "_tmux_run", lambda args: CompletedProcess(args, 0, b"", b""))
+    assert session._pane_lines(10) == []
+    monkeypatch.setattr(session, "_tmux_run", lambda args: CompletedProcess(args, 1, b"", b""))
+    assert session._pane_lines(10) is None
 
 
-def test_history_output_excludes_the_previous_tasks_output(monkeypatch):
+@pytest.mark.parametrize("failure", ["exception", "nonzero"])
+def test_failed_initial_capture_never_reuses_recovered_shared_pane(monkeypatch, failure):
+    from subprocess import CompletedProcess
     session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    previous = "Task PREV-1: refactored the billing module\nsecret-plan for customer X"
-    _tmux_pane(session, monkeypatch, [previous, f"{previous}\nTask NOW-2: tests pass"])
+    previous = b"PREVIOUS_TASK_SYNTHETIC_CONFIDENTIAL"
+    calls = []
+    def tmux(args):
+        calls.append(args)
+        if len(calls) == 1:
+            if failure == "exception":
+                raise OSError("synthetic initial failure")
+            # Even stdout on a failed command is not an initial baseline.
+            return CompletedProcess(args, 1, previous, b"failed")
+        return CompletedProcess(args, 0, previous, b"")
+    session._tmux_session = "agent-history"
+    monkeypatch.setattr(session, "_tmux_run", tmux)
     session.begin_history_capture()
+    assert session._history_capture_state is pty_session_module.HistoryCaptureState.BASELINE_FAILED
+    # Demonstrate tmux recovery without a single new byte from this execution.
+    assert session._pane_lines(10) == [previous.decode()]
+    for _ in range(2):
+        assert session.history_output() == pty_session_module.HISTORY_BASELINE_FAILED_NOTICE
+    assert len(calls) == 2, "history must not consult the shared pane again"
+    assert previous.decode() not in session.history_output()
 
+
+@pytest.mark.parametrize("baseline,repaint", [
+    ("PREVIOUS_TASK_SYNTHETIC_CONFIDENTIAL", "PREVIOUS_TASK_SYNTHETIC_\nCONFIDENTIAL"),
+    ("PREVIOUS_TASK_SYNTHETIC_\nCONFIDENTIAL", "PREVIOUS_TASK_SYNTHETIC_CONFIDENTIAL"),
+    ("old screen", "PREVIOUS_TASK_SYNTHETIC_CONFIDENTIAL moved back into view"),
+    ("", "PREVIOUS_TASK_SYNTHETIC_CONFIDENTIAL"),
+])
+def test_successful_baseline_cannot_prove_provenance_after_repaint_or_reflow(monkeypatch, baseline, repaint):
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    calls = _tmux_pane(session, monkeypatch, [baseline, repaint])
+    session.begin_history_capture()
+    assert session._history_capture_state is pty_session_module.HistoryCaptureState.SHARED_PANE_UNVERIFIED
+    # Redraws arrive AFTER the mark, but their contents belong to the old task.
+    session._append_scrollback(repaint.encode())
+    assert session._pane_lines(10) == repaint.splitlines()
     output = session.history_output()
-    assert output == "Task NOW-2: tests pass"
-    assert "PREV-1" not in output and "secret-plan" not in output
+    assert output == pty_session_module.HISTORY_UNVERIFIED_NOTICE
+    assert "SYNTHETIC" not in output
+    assert len(calls) == 2
 
 
 def test_history_output_is_omitted_when_no_execution_window_was_opened():
@@ -332,58 +364,62 @@ def test_history_output_is_omitted_when_no_execution_window_was_opened():
     assert session.history_output() == pty_session_module.HISTORY_UNSCOPED_NOTICE
 
 
-def test_history_output_falls_back_to_bytes_produced_after_the_mark(monkeypatch):
-    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    session._append_scrollback(b"previous task: deployed to staging\r\n")
-
-    def unavailable(*args, **kwargs):
-        raise OSError("tmux gone")
-
-    session._tmux_session = "agent-history"
-    monkeypatch.setattr(session, "_tmux_run", unavailable)
-    session.begin_history_capture()
-    session._append_scrollback(b"\x1b[32mTests passed\x1b[0m\r\nChanges pushed\x07")
-
-    assert session.history_output() == "Tests passed\nChanges pushed"
-
-
-def test_history_output_fallback_survives_scrollback_eviction(monkeypatch):
+def test_raw_pty_bytes_after_failed_baseline_are_not_a_trusted_fallback(monkeypatch):
     monkeypatch.setattr(pty_session_module, "SCROLLBACK_BYTES", 64)
     session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    session._append_scrollback(b"previous task line\n" * 4)
-    session.begin_history_capture()
-    session._append_scrollback(b"current run line\n" * 8)
-
-    output = session.history_output()
-    assert "previous task line" not in output
-    assert output.splitlines()[-1] == "current run line"
+    session.begin_history_capture()  # no tmux, so no successful baseline
+    session._append_scrollback(b"old bytes\n" * 10)
+    session._append_scrollback(b"PREVIOUS_TASK_SYNTHETIC_CONFIDENTIAL repainted\n")
+    assert session.history_output() == pty_session_module.HISTORY_BASELINE_FAILED_NOTICE
 
 
-def test_history_output_bounds_characters_and_reports_empty_runs():
+def test_new_capture_records_its_own_state_without_resetting_the_session(monkeypatch):
     session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
     session.begin_history_capture()
-    assert session.history_output() == pty_session_module.HISTORY_EMPTY_NOTICE
-    session._append_scrollback(b"x" * 20000)
-    assert session.history_output() == "x" * pty_session_module.HISTORY_MAX_CHARS
-
-
-def test_history_output_redacts_credentials(monkeypatch):
-    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
-    _tmux_pane(session, monkeypatch, [
-        "",
-        "Login failed\n"
-        "Authorization: Bearer abcdef1234567890SYNTHETIC\n"
-        "Open https://example.invalid/device?user_code=WXYZ-1234&state=abc to continue\n"
-        "GITHUB_TOKEN=ghp_0000000000000000000000000000SYNTH",
-    ])
+    assert session.history_output() == pty_session_module.HISTORY_BASELINE_FAILED_NOTICE
+    session._append_scrollback(b"existing administrator terminal content")
+    calls = _tmux_pane(session, monkeypatch, [""])
     session.begin_history_capture()
+    assert session.history_output() == pty_session_module.HISTORY_UNVERIFIED_NOTICE
+    assert b"".join(session.scrollback) == b"existing administrator terminal content"
+    assert not session._closed
+    assert all(call[0] == "capture-pane" for call in calls)
 
-    output = session.history_output()
-    assert "abcdef1234567890SYNTHETIC" not in output
-    assert "WXYZ-1234" not in output
-    assert "ghp_0000000000000000000000000000SYNTH" not in output
-    assert "Login failed" in output
-    assert "https://example.invalid/device?user_code=[redacted]" in output
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exception", "nonzero", "reflow"])
+async def test_output_http_response_never_exports_an_old_ticket(monkeypatch, failure):
+    from subprocess import CompletedProcess
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    import routes_terminal
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session._tmux_session = "agent-history"
+    previous = "PREVIOUS_TASK_SYNTHETIC_CONFIDENTIAL"
+    calls = []
+    def tmux(args):
+        calls.append(args)
+        if len(calls) == 1:
+            if failure == "exception":
+                raise OSError("synthetic initial failure")
+            if failure == "nonzero":
+                return CompletedProcess(args, 1, b"", b"failed")
+            return CompletedProcess(args, 0, b"PREVIOUS_TASK_SYNTHETIC_\nCONFIDENTIAL", b"")
+        return CompletedProcess(args, 0, previous.encode(), b"")
+    monkeypatch.setattr(session, "_tmux_run", tmux)
+    session.begin_history_capture()
+    session._append_scrollback(previous.encode())
+    monkeypatch.setattr(routes_terminal, "API_KEY", "test-only")
+    monkeypatch.setattr(routes_terminal.pty_session, "get_session", lambda agent_id: session)
+    app = FastAPI()
+    app.include_router(routes_terminal.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/terminal/sessions/history/output", headers={"Authorization": "Bearer test-only"})
+    assert response.status_code == 200
+    assert previous not in response.text
+    assert response.json()["output"] == session.history_output()
+    assert "capture omitted" in response.json()["output"]
+    assert len(calls) == 1
 
 
 def test_latched_auth_errors_are_redacted():

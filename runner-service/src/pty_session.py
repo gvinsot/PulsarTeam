@@ -45,6 +45,7 @@ import time
 from collections import deque
 from typing import Awaitable, Callable, Optional
 from dataclasses import dataclass, field
+from enum import Enum
 
 from config import logger
 # Leaf module (re/dataclasses only) — pty_session must not import anything
@@ -76,27 +77,30 @@ READ_CHUNK = 4096
 
 # ── Execution-scoped history capture ────────────────────────────────────────
 #
-# A PTY session is SHARED: the same CLI (and the same tmux pane) serves every
-# task an agent executes. A naive "last N lines of the pane" capture therefore
-# copies the previous task's output — and any credential printed by a /login
-# screen — into the history of an unrelated ticket. Captures are consequently:
-#   1. bounded to output produced after the current execution's mark
-#      (`begin_history_capture`, called when a prompt is injected),
-#   2. stripped of every line that was already on screen before that mark,
-#   3. scrubbed by `redact_secrets`,
-#   4. kept deliberately short — a diagnostic tail, not a transcript.
-# When no mark exists we cannot prove isolation, so we emit a notice instead of
-# the raw terminal.
-HISTORY_MAX_LINES = int(os.getenv("TERMINAL_HISTORY_MAX_LINES", "60"))
-HISTORY_MAX_CHARS = int(os.getenv("TERMINAL_HISTORY_MAX_CHARS", "6000"))
-# How much pane history is remembered as "already seen" at mark time. Wider
-# than the capture window so nothing older can slip back in.
+# A shared TUI can repaint/reflow text from any previous task. Neither a
+# successful initial snapshot, line subtraction nor a byte offset proves that
+# later text originated in this execution. Do not persist that text in a task.
+# Structured completion notes remain the source of execution history in the API.
 HISTORY_BASELINE_LINES = 400
 HISTORY_UNSCOPED_NOTICE = (
     "[terminal capture omitted: no execution boundary was recorded for this run, "
     "so output from earlier tasks could not be excluded]"
 )
-HISTORY_EMPTY_NOTICE = "[no terminal output captured for this execution]"
+HISTORY_BASELINE_FAILED_NOTICE = (
+    "[terminal capture omitted: initial pane capture failed; "
+    "execution isolation could not be established]"
+)
+HISTORY_UNVERIFIED_NOTICE = (
+    "[terminal capture omitted: a shared terminal can replay earlier tasks; "
+    "execution isolation could not be established]"
+)
+
+
+class HistoryCaptureState(Enum):
+    NOT_STARTED = "not_started"
+    BASELINE_FAILED = "baseline_failed"
+    SHARED_PANE_UNVERIFIED = "shared_pane_unverified"
+
 
 # ── tmux backing ────────────────────────────────────────────────────────────
 #
@@ -517,13 +521,7 @@ class PtySession:
     proc: Optional[subprocess.Popen] = None
     scrollback: deque = field(default_factory=lambda: deque(maxlen=1))  # placeholder
     _scrollback_size: int = 0
-    # Absolute offset into the (unbounded, conceptual) output stream: how many
-    # bytes have ever been produced. Compared against what the ring buffer
-    # still holds, it lets history_output slice "everything after the current
-    # execution's mark" even though the buffer itself has no notion of time.
-    _output_offset: int = 0
-    _capture_mark: Optional[int] = None
-    _capture_baseline: frozenset = frozenset()
+    _history_capture_state: HistoryCaptureState = HistoryCaptureState.NOT_STARTED
     _clients: dict[int, _Client] = field(default_factory=dict)
     _next_client_id: int = 0
     _reader_task: Optional[asyncio.Task] = None
@@ -846,11 +844,8 @@ class PtySession:
             return
         self.scrollback = deque()  # holds raw byte chunks; size bounded manually
         self._scrollback_size = 0
-        # A respawn starts a brand-new output stream; offsets restart with it
-        # and any mark taken against the old process is meaningless.
-        self._output_offset = 0
-        self._capture_mark = None
-        self._capture_baseline = frozenset()
+        # A respawn has no initial history observation for the next execution.
+        self._history_capture_state = HistoryCaptureState.NOT_STARTED
 
         if not _tmux_available():
             raise RuntimeError(
@@ -1302,7 +1297,6 @@ class PtySession:
         cleanly without partial ANSI sequences mid-frame."""
         self.scrollback.append(data)
         self._scrollback_size += len(data)
-        self._output_offset += len(data)
         while self._scrollback_size > SCROLLBACK_BYTES and len(self.scrollback) > 1:
             evicted = self.scrollback.popleft()
             self._scrollback_size -= len(evicted)
@@ -1614,79 +1608,50 @@ class PtySession:
         }
 
     def begin_history_capture(self) -> None:
-        """Open a capture window for the execution that is about to start.
+        """Record whether the initial pane observation succeeded, not ownership.
 
-        Records where the output stream stands right now and snapshots the
-        lines already in the pane. Everything captured afterwards is therefore
-        provably produced by *this* execution: later reads slice the stream at
-        the mark and drop any line that was already on screen. Call this before
-        injecting a prompt — including on paths that then refuse to inject
-        (failed auth preflight), so the error screen is still scoped.
+        A failed observation must never become an empty, valid baseline on a
+        later successful read. Even a real empty baseline does not prove where
+        future TUI redraws came from, so neither case authorizes raw history.
+        This changes no terminal contents, scrollback or administrator input.
         """
-        self._capture_mark = self._output_offset
-        self._capture_baseline = frozenset(self._pane_lines(HISTORY_BASELINE_LINES))
+        baseline = self._pane_lines(HISTORY_BASELINE_LINES)
+        self._history_capture_state = (
+            HistoryCaptureState.BASELINE_FAILED if baseline is None
+            else HistoryCaptureState.SHARED_PANE_UNVERIFIED
+        )
         logger.debug(
-            f"[Terminal] History capture window opened for agent {self.agent_id} "
-            f"at offset {self._capture_mark} "
-            f"({len(self._capture_baseline)} baseline lines)"
+            "[Terminal] History capture for agent %s: %s",
+            self.agent_id, self._history_capture_state.value,
         )
 
-    def _pane_lines(self, lines: int) -> list[str]:
-        """Rendered pane content (screen + `lines` of scrollback), cleaned."""
+    def _pane_lines(self, lines: int) -> Optional[list[str]]:
+        """Cleaned pane lines; [] means a successful empty capture, None failure."""
         if not self._tmux_session:
-            return []
+            return None
         try:
             result = self._tmux_run([
                 "capture-pane", "-p", "-J", "-t", self._tmux_session, "-S", f"-{lines}",
             ])
         except Exception:
-            return []
+            return None
         if result.returncode != 0:
-            return []
+            return None
         return _clean_terminal_text(result.stdout.decode("utf-8", "replace")).splitlines()
 
     def history_output(self) -> str:
-        """A short, execution-scoped, credential-free tail for task history.
+        """Return a fixed diagnostic when execution provenance is unproven.
 
-        Readability comes from tmux's rendered pane; isolation comes from the
-        capture window opened by `begin_history_capture` (lines already present
-        then are dropped, and the byte-stream fallback is sliced at the mark).
-        Without a window we cannot prove the text belongs to this execution, so
-        a notice is returned rather than another task's terminal.
+        Never re-read the shared pane or fall back to post-mark PTY bytes:
+        both can contain old task text after repaint, scroll, resize or reflow.
+        An unavailable initial capture stays unavailable for this execution,
+        even if tmux recovers. Completion notes are preserved by the API.
         """
-        if self._capture_mark is None:
+        if self._history_capture_state is HistoryCaptureState.NOT_STARTED:
             return HISTORY_UNSCOPED_NOTICE
-
-        # Exact-match subtraction can also drop a NEW line that happens to
-        # repeat a baseline one ("Tests passed" two runs in a row). Losing a
-        # duplicate line from a diagnostic tail is the cheap side of the trade.
-        lines = [
-            line for line in self._pane_lines(HISTORY_MAX_LINES)
-            if line.strip() and line not in self._capture_baseline
-        ]
-        if not lines:
-            # The pane is gone (dead/absent tmux session) or repainted nothing
-            # new: fall back to the raw bytes produced after the mark. That
-            # slice is scoped by construction — eviction only ever removes
-            # bytes older than what it keeps.
-            fallback = _clean_terminal_text(self._output_since_mark())
-            lines = [
-                line for line in fallback.splitlines()
-                if line.strip() and line not in self._capture_baseline
-            ]
-        if not lines:
-            return HISTORY_EMPTY_NOTICE
-        return redact_secrets("\n".join(lines[-HISTORY_MAX_LINES:]))[-HISTORY_MAX_CHARS:]
-
-    def _output_since_mark(self) -> str:
-        """Decoded scrollback bytes produced after the capture mark."""
-        if self._capture_mark is None:
-            return ""
-        data = b"".join(self.scrollback)
-        # Whatever survived eviction ends at the newest byte, so its absolute
-        # start offset is simply "total produced minus what is left".
-        buffer_start = self._output_offset - len(data)
-        return data[max(0, self._capture_mark - buffer_start):].decode("utf-8", errors="replace")
+        if self._history_capture_state is HistoryCaptureState.BASELINE_FAILED:
+            return HISTORY_BASELINE_FAILED_NOTICE
+        return HISTORY_UNVERIFIED_NOTICE
 
     def tail_text(self, max_bytes: int = 4096) -> str:
         """Return a short decoded tail of recent PTY output for diagnostics."""

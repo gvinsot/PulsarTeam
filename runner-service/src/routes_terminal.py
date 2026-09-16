@@ -118,11 +118,10 @@ def get_terminal_session(agent_id: str, authorization: Optional[str] = Header(No
 
 @router.get("/terminal/sessions/{agent_id}/output")
 def get_terminal_output(agent_id: str, authorization: Optional[str] = Header(None)) -> JSONResponse:
-    """Short, credential-scrubbed tail of the CURRENT execution only.
+    """Safe history diagnostic; a shared pane does not prove task provenance.
 
-    The pane is shared across tasks, so the session returns a notice rather
-    than raw terminal text when it cannot prove the output belongs to the
-    execution that opened the capture window (see PtySession.history_output).
+    Raw terminal text stays in the interactive terminal. Structured completion
+    notes are stored separately by the API (see PtySession.history_output).
     """
     _check_api_key(authorization, None)
     session = pty_session.get_session(agent_id)
@@ -194,11 +193,9 @@ async def send_terminal_input(
         config_fingerprint=config_fingerprint,
     )
 
-    # Open the history capture window BEFORE anything else touches the pane.
-    # The shared terminal still shows the previous task (and possibly a login
-    # screen with its credentials); marking here is what keeps that content out
-    # of this execution's history — including on the auth-preflight bail-out
-    # below, which never injects but is exactly the case that renders secrets.
+    # Record the initial observation for a safe history diagnostic, including
+    # auth-preflight refusals. This observation does not establish provenance:
+    # history_output must still withhold all raw text from the shared pane.
     session.begin_history_capture()
 
     # Auth preflight: a logged-out CLI (claude-code with no usable token) sits
