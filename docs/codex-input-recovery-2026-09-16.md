@@ -34,11 +34,60 @@ only Enter is retried once; the task is never pasted twice. Short writes are
 completed so the paste terminator is retained.
 No prompt contents or authentication parameters are added to logs.
 
-HTTP 200 acknowledges input delivery (and, for Codex, a consumed or changed
-composer), **not task completion**. Acceptance
+HTTP 200 acknowledges input delivery (and, for Codex, a confirmed empty
+composer after submission), **not task completion**. Acceptance
 still requires the executor's task update and actual deliverable evidence.
 A Stop after the paste but before Enter cancels submission; the draft may remain
 visible in the composer. No automatic retry should infer that it was executed.
+The follow-up below makes this refusal enforceable in the runner.
+
+## Residual draft ownership follow-up
+
+Task: `2fb8d90d-a96a-4333-88b2-412b049642d3`.
+
+Policy: **preserve the draft and return HTTP 409; never clear it automatically**.
+An existing draft, including a multiline draft with an empty first line, blocks
+workflow input. Readiness hints such as `? for shortcuts` do not override this.
+The complete composer is read again immediately before the paste. Missing or
+unrecognized composer evidence is a conflict, not permission to write.
+
+The runner pastes once under an input epoch and checks the expected content
+before Enter. A collapsed paste must have the expected character count and no
+extra text; its provenance also requires an empty composer before the write and
+no intervening broker input. Character count alone is not an ownership check.
+All administrator WebSocket writes invalidate the epoch, including edits that
+leave an identical visible draft. A fresh capture and epoch check precede every
+Enter, including the single retry for a lost Enter. The final check and local
+tmux send have no asynchronous yield between them. A changed draft after Enter
+is a conflict, not successful delivery.
+
+Once a paste may have been written, Stop, task cancellation, paste timeout,
+failed/partial write, failed screen capture or unconfirmed submission leave the
+session's automatic input quarantined. The latch is cleared only by confirmed
+consumption of this injection. Even a temporarily empty/stale screen cannot
+release it and admit a second task. Paste-only (`submit=false`) also leaves the
+latch set. Raw administrator input remains available so the operator can inspect
+and preserve their draft. To resume automatic tasks after an ambiguous delivery,
+explicitly close/restart **that terminal**; this destroys its old composer. No
+terminal is reset automatically. A Stop before any paste needs no restart.
+
+These checks govern the runner's workflow and WebSocket input paths. Direct
+out-of-band writes to the tmux server are outside the broker's input epoch.
+No prompt or draft contents are added to logs or conflict messages.
+
+Validation adds a stateful composer simulation (paste appends, Escape preserves,
+Enter submits the entire draft) covering Stop → different task, late rendering
+after timeout, administrator drafts and concurrent input, edits between capture
+and Enter, lost/unconfirmed Enter, and clean resume. The opt-in real Codex smoke
+uses a dedicated tmux socket and temporary directory, sends only `/status`,
+checks residual-draft refusal, and closes only its own session before testing
+clean restart. It never starts a model task or resets another agent.
+
+Follow-up validation on Codex 0.154.0:
+`CODEX_TERMINAL_SMOKE=1 RUNNER_TYPE=mock python -m pytest runner-service/tests -q
+--ignore=runner-service/tests/test_cli_flag_compatibility.py` — **262 passed,
+1 skipped**. The installed-CLI flag compatibility probes are outside this input
+ownership change.
 
 ## Validation
 

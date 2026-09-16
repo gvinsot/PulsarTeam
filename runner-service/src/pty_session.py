@@ -260,6 +260,8 @@ def screen_is_input_ready(screen: str, recipe: _ReadyRecipe) -> bool:
 
     if any(present(marker) for marker in recipe.busy):
         return False
+    if recipe is _READY_RECIPES.get("codex") and not _codex_empty_draft(_codex_draft(screen)):
+        return False
     return any(present(hint) for hint in recipe.hints)
 
 
@@ -267,9 +269,39 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+class TerminalInputConflict(TimeoutError):
+    """HTTP 409: preserving uncertain/user-owned input is safer than guessing."""
+
+
 def _codex_draft(screen: str) -> Optional[str]:
-    composers = re.findall(r"^\s*›([^\n]*)", screen, re.MULTILINE)
-    return composers[-1].strip() if composers else None
+    # Read continuation lines too: the first line can be empty while another
+    # line contains an administrator's draft. Never confuse transcript prompts
+    # with a composer whose footer is absent (e.g. a modal or partial redraw).
+    lines = screen.splitlines()
+    starts = [i for i, line in enumerate(lines) if re.match(r"^\s*›", line)]
+    if not starts:
+        return None
+    start = starts[-1]
+    for end in range(start + 1, len(lines)):
+        if lines[end - 1].strip():
+            continue
+        if re.match(r"^\s+(?:gpt-\S+|\? for shortcuts|tab to queue message|\d+% context left|/[a-z]+\s{2,})", lines[end], re.I):
+            body = [re.sub(r"^\s*› ?", "", lines[start])]
+            body.extend(line[2:] if line.startswith("  ") else line for line in lines[start + 1:end])
+            return "\n".join(body).strip()
+    return None
+
+
+def _codex_empty_draft(draft: Optional[str]) -> bool:
+    return draft is not None and draft.lower() in ("", "ask codex to do anything")
+
+
+def _codex_matches_paste(draft: Optional[str], text: str) -> bool:
+    expected = text.replace("\r\n", "\n").replace("\r", "\n")
+    # A collapsed paste is attributable ONLY under the input epoch lease:
+    # verified empty before our single write, no intervening broker writer,
+    # and the exact size of that write. Any extra text/second paste conflicts.
+    return draft == expected.strip() or draft == f"[Pasted Content {len(expected)} chars]"
 
 
 # A "client" callback type: an async function the session calls to push
@@ -452,7 +484,10 @@ class PtySession:
     _idle_timer: Optional[asyncio.Task] = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _input_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _input_epoch: int = 0  # interrupt invalidates pending workflow injections
+    _input_epoch: int = 0  # Stop and administrator writes invalidate injections
+    # Once a paste may have happened, any ambiguous result quarantines automatic
+    # input until this session is closed. Never erase drafts to recover ownership.
+    _codex_input_uncertain: bool = False
     _closed: bool = False
     exit_code: Optional[int] = None
     _auto_answer_buf: bytearray = field(default_factory=bytearray)
@@ -973,10 +1008,15 @@ class PtySession:
                     )
                     if frame.returncode == 0:
                         screen = frame.stdout.decode("utf-8", errors="replace").lower()
+                        draft = _codex_draft(screen)
+                        if draft is not None and not _codex_empty_draft(draft):
+                            raise TerminalInputConflict("Codex composer contains a draft; automatic input was not delivered")
                         if screen_is_input_ready(screen, recipe):
                             return True
                         await asyncio.sleep(0.2)
                         continue
+                except TerminalInputConflict:
+                    raise
                 except (OSError, subprocess.SubprocessError):
                     pass
                 # A failed screen capture is not evidence that Codex is ready.
@@ -1295,70 +1335,66 @@ class PtySession:
             if not self._clients:
                 self._schedule_idle_timer()
 
-    async def _wait_for_codex_paste(self, epoch: int, timeout: float = 5.0) -> Optional[str]:
-        """Wait for Codex to render its nonempty composer before submitting.
+    def _check_input_epoch(self, epoch: int) -> None:
+        if epoch != self._input_epoch:
+            raise InterruptedError("Terminal input interrupted or changed by another writer")
+        if self._closed or not self.is_alive():
+            raise OSError("Terminal session closed before submission")
 
-        Sleeping from the PTY write alone is insufficient: a busy event loop
-        may consume both paste and Enter together even if we spaced writes.
-        Use only the last composer marker, never echo prompt contents to logs.
-        """
+    async def _codex_screen(self, epoch: int) -> str:
+        self._check_input_epoch(epoch)
         if not self._tmux_session:
-            return
+            raise TerminalInputConflict("Cannot inspect Codex composer; automatic input was not delivered")
+        try:
+            frame = await asyncio.to_thread(
+                self._tmux_run, ["capture-pane", "-p", "-J", "-t", self._tmux_session]
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            raise TerminalInputConflict("Cannot inspect Codex composer; automatic input stopped") from e
+        self._check_input_epoch(epoch)
+        if frame.returncode != 0:
+            raise TerminalInputConflict("Cannot inspect Codex composer; automatic input stopped")
+        return frame.stdout.decode("utf-8", errors="replace")
+
+    async def _wait_for_codex_paste(self, text: str, epoch: int, timeout: float = 5.0) -> str:
+        """A nonempty draft alone is not an acknowledgement of OUR injection."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if epoch != self._input_epoch:
-                raise InterruptedError("Terminal input interrupted before submission")
-            if not self.is_alive():
-                raise OSError("Terminal session closed before submission")
-            try:
-                frame = await asyncio.to_thread(
-                    self._tmux_run, ["capture-pane", "-p", "-t", self._tmux_session]
-                )
-                if frame.returncode == 0:
-                    draft = _codex_draft(frame.stdout.decode("utf-8", errors="replace"))
-                    if draft and draft.lower() != "ask codex to do anything":
-                        return draft
-            except (OSError, subprocess.SubprocessError):
-                pass
+            draft = _codex_draft(await self._codex_screen(epoch))
+            if _codex_matches_paste(draft, text):
+                return draft
+            if draft is not None and not _codex_empty_draft(draft):
+                raise TerminalInputConflict("Codex draft does not match this injection; submit was not sent")
             await asyncio.sleep(0.05)
         raise TimeoutError("Codex did not render the pasted input; submit was not sent")
 
     async def _submit_codex_paste(self, draft: str, epoch: int) -> None:
-        """Confirm the composer consumed Enter; retry only the unchanged draft.
-
-        Never re-paste the task. An unchanged composer can mean Enter was lost
-        or used for slash completion. Once it changes or the turn is busy,
-        another Enter could target different input, so no retry is allowed.
-        """
+        """Revalidate ownership before EVERY Enter, including a lost-key retry."""
         for attempt in range(2):
-            if epoch != self._input_epoch:
-                raise InterruptedError("Terminal input interrupted before submission")
+            screen = await self._codex_screen(epoch)
+            if _codex_draft(screen) != draft or any(
+                marker in screen.lower() for marker in _READY_RECIPES["codex"].busy
+            ):
+                raise TerminalInputConflict("Codex draft changed before Enter; automatic submission stopped")
+            self._check_input_epoch(epoch)
+            # Deliberately no await between this last epoch check and send-keys:
+            # a broker writer/Stop must not run after validation but before Enter.
+            # Offloading send-keys would leave an uncancellable worker able to
+            # submit after Stop. tmux is local and this call has a bounded timeout.
             try:
-                result = await asyncio.to_thread(
-                    self._tmux_run, ["send-keys", "-t", self._tmux_session, "Enter"]
-                )
+                result = self._tmux_run(["send-keys", "-t", self._tmux_session, "Enter"])
             except (OSError, subprocess.SubprocessError) as e:
                 raise OSError("Terminal submit could not be written") from e
             if result.returncode != 0:
                 raise OSError("Terminal submit could not be written")
             for _ in range(10):
                 await asyncio.sleep(0.1)
-                if epoch != self._input_epoch:
-                    raise InterruptedError("Terminal input interrupted during submission")
-                if not self.is_alive():
-                    raise OSError("Terminal session closed during submission")
-                try:
-                    frame = await asyncio.to_thread(
-                        self._tmux_run, ["capture-pane", "-p", "-t", self._tmux_session]
-                    )
-                except (OSError, subprocess.SubprocessError) as e:
-                    raise OSError("Cannot verify terminal submission") from e
-                if frame.returncode != 0:
-                    raise OSError("Cannot verify terminal submission")
-                screen = frame.stdout.decode("utf-8", errors="replace")
-                busy = any(marker in screen.lower() for marker in _READY_RECIPES["codex"].busy)
-                if busy or _codex_draft(screen) != draft:
+                screen = await self._codex_screen(epoch)
+                current = _codex_draft(screen)
+                if _codex_empty_draft(current):
                     return
+                if current is not None and current != draft:
+                    raise TerminalInputConflict("Codex draft changed; submission was not confirmed")
         raise TimeoutError("Codex still has the pasted draft; submission was not confirmed")
 
     async def send_input(self, text: str, *, bracketed_paste: bool = True,
@@ -1370,16 +1406,17 @@ class PtySession:
         successful workflow delivery after the readiness deadline.
         """
         epoch = self._input_epoch
+        codex = bool(self.cmd and os.path.basename(self.cmd[0]).lower() == "codex")
         async with self._input_lock:
-            if epoch != self._input_epoch:
-                raise InterruptedError("Terminal input interrupted before delivery")
+            self._check_input_epoch(epoch)
+            if codex and self._codex_input_uncertain:
+                raise TerminalInputConflict("Codex input ownership is unresolved; restart this terminal before automatic input")
+            if codex and not bracketed_paste:
+                raise TerminalInputConflict("Codex automatic input requires bracketed paste")
             ready = await self.wait_until_input_ready(timeout=ready_timeout)
-            if epoch != self._input_epoch:
-                raise InterruptedError("Terminal input interrupted before delivery")
-            if not self.is_alive():
-                raise OSError("Terminal session closed before delivery")
+            self._check_input_epoch(epoch)
             if not ready:
-                if self.cmd and os.path.basename(self.cmd[0]).lower() == "codex":
+                if codex:
                     raise TimeoutError("Codex input is not ready; prompt was not delivered")
                 delay = float(os.getenv("TERMINAL_INPUT_STARTUP_DELAY_SEC", "0.75"))
                 if delay > 0:
@@ -1388,40 +1425,42 @@ class PtySession:
                     f"[Terminal] Input-ready hint not seen for agent {self.agent_id} within "
                     f"{ready_timeout}s — pasting prompt anyway after {delay}s fallback"
                 )
-            if epoch != self._input_epoch:
-                raise InterruptedError("Terminal input interrupted before delivery")
+            if codex:
+                # Readiness is not ownership: recapture immediately before paste.
+                screen = await self._codex_screen(epoch)
+                if not screen_is_input_ready(screen.lower(), _READY_RECIPES["codex"]):
+                    raise TerminalInputConflict("Codex composer is not empty and ready; prompt was not delivered")
+                # Latch BEFORE writing, including failed/partial writes and task
+                # cancellation. Only confirmed consumption clears it. No cleanup
+                # keystrokes, no retry of an uncertain paste, no silent recovery.
+                self._codex_input_uncertain = True
+            self._check_input_epoch(epoch)
             self.clear_auth_error()
             payload = text.encode("utf-8", errors="replace")
             if bracketed_paste:
                 payload = b"\x1b[200~" + payload + b"\x1b[201~"
-            codex_paste = bool(
-                bracketed_paste and self.cmd
-                and os.path.basename(self.cmd[0]).lower() == "codex"
-            )
-            if submit and not codex_paste:
+            if submit and not codex:
                 payload += b"\r"
-            if not await self.write(payload):
+            if not await self._write_input(payload):
                 raise OSError("Terminal input could not be fully written")
-            if submit and codex_paste:
-                # Codex's paste handling can swallow Enter from the same input
-                # burst (reproduced on 0.154.0 at cold start). Wait for the
-                # rendered draft, then let paste-burst handling settle before
-                # sending a distinct submit keystroke.
-                draft = await self._wait_for_codex_paste(epoch)
+            if submit and codex:
+                draft = await self._wait_for_codex_paste(text, epoch)
                 await asyncio.sleep(0.2)
-                if epoch != self._input_epoch:
-                    raise InterruptedError("Terminal input interrupted before submission")
-                if not self.is_alive():
-                    raise OSError("Terminal session closed before submission")
-                if self._tmux_session:
-                    await self._submit_codex_paste(draft, epoch)
-                elif not await self.write(b"\r"):
-                    raise OSError("Terminal submit could not be written")
+                await self._submit_codex_paste(draft, epoch)
+                self._codex_input_uncertain = False
 
     async def write(self, data: bytes) -> bool:
-        """Send keystrokes from a client into the PTY. Any client may call
-        this — the multi-writer setup is fine for a few connected admins,
-        though we make no effort to serialize interleaved typing."""
+        """Administrator input wins: invalidate any pending automatic injection.
+
+        Do not take _input_lock here; typing/Stop must cancel the workflow rather
+        than wait behind it. The low-level write has no await while emitting bytes.
+        """
+        if data:
+            self._input_epoch += 1
+        return await self._write_input(data)
+
+    async def _write_input(self, data: bytes) -> bool:
+        """Write a complete byte sequence; internal callers own epoch checks."""
         if self.master_fd < 0 or self._closed:
             return False
         try:
@@ -1456,7 +1495,7 @@ class PtySession:
                 "reason": "session_not_alive",
             }
         cli_name, key_label, payload = _interrupt_recipe(self.cmd)
-        await self.write(payload)
+        await self._write_input(payload)
         logger.info(
             f"[Terminal] Sent {key_label} interrupt to {cli_name} "
             f"session for agent {self.agent_id}"

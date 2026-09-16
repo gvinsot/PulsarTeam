@@ -236,7 +236,7 @@ async def test_interrupt_uses_cli_specific_sequence(monkeypatch, cmd, expected_s
         written.append(data)
 
     monkeypatch.setattr(session, "is_alive", lambda: True)
-    monkeypatch.setattr(session, "write", fake_write)
+    monkeypatch.setattr(session, "_write_input", fake_write)
 
     result = await session.interrupt()
 
