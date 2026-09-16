@@ -132,3 +132,19 @@ added under `[Unreleased]` as work lands.
   be owned by it. A new `office-data` volume inherits this from the image; an
   existing one needs a one-time
   `docker run --rm -v office-data:/data alpine chown -R 10002:10002 /data`.
+
+### Fixed
+
+- Agents no longer need GitHub reconnecting several times a day. A GitHub user
+  token was treated as an eternal, per-scope credential, and both halves of that
+  are wrong for a GitHub App: the token expires after 8 h, and authorizing again
+  as the same account **revokes the token minted by the previous
+  authorization**. With one copy stored per agent/board, connecting agent N
+  silently killed agents 1..N-1 — production logs showed five agents being
+  re-authorized in rotation all day, each fix breaking the previous one. The
+  callback now keeps the `refresh_token` and expiry and renews the token in the
+  background, and the connections of one GitHub account share a single live
+  token: one connect covers every agent, and a token rejected mid-flight is
+  recovered (refreshed, or replaced by the account's live token from another
+  scope) before anyone is asked to reconnect. Connections belonging to a
+  different GitHub account are never touched.

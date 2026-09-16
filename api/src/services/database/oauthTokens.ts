@@ -75,6 +75,24 @@ async function notifyTokenChange(
   }
 }
 
+const TOKEN_COLUMNS =
+  'provider, scope_type, scope_id, access_token, refresh_token, expires_at, meta';
+
+/** Decrypt one `oauth_tokens` row into a record and prime the cache with it. */
+function rowToRecord(row: any): OAuthTokenRecord {
+  const record: OAuthTokenRecord = {
+    provider: row.provider,
+    scopeType: row.scope_type,
+    scopeId: row.scope_id,
+    accessToken: tryDecrypt(row.access_token),
+    refreshToken: tryDecrypt(row.refresh_token),
+    expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
+    meta: row.meta || {},
+  };
+  tokenCache.set(cacheKey(record.provider, record.scopeType, record.scopeId), record);
+  return record;
+}
+
 /** Read one record straight from the DB (used as a fallback when the cache is cold/stale). */
 async function loadOAuthTokenFromDb(
   provider: OAuthProvider,
@@ -85,25 +103,49 @@ async function loadOAuthTokenFromDb(
   if (!pool) return null;
   try {
     const result = await pool.query(
-      'SELECT provider, scope_type, scope_id, access_token, refresh_token, expires_at, meta FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 AND scope_id = $3',
+      `SELECT ${TOKEN_COLUMNS} FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 AND scope_id = $3`,
       [provider, scopeType, scopeId]
     );
     if (result.rows.length === 0) return null;
-    const row = result.rows[0];
-    const record: OAuthTokenRecord = {
-      provider: row.provider,
-      scopeType: row.scope_type,
-      scopeId: row.scope_id,
-      accessToken: tryDecrypt(row.access_token),
-      refreshToken: tryDecrypt(row.refresh_token),
-      expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
-      meta: row.meta || {},
-    };
-    tokenCache.set(cacheKey(provider, scopeType, scopeId), record);
-    return record;
+    return rowToRecord(result.rows[0]);
   } catch (err) {
     console.error('[OAuthStore] loadOAuthTokenFromDb failed:', (err as Error).message);
     return null;
+  }
+}
+
+/**
+ * Every stored record for one provider, across all scopes.
+ *
+ * Read-through to the DB (and cache-priming) rather than cache-only: callers use
+ * this to find sibling connections that belong to the same upstream identity —
+ * e.g. the other agents authorized as the same GitHub user — and a replica that
+ * missed a NOTIFY must not silently report "there are no siblings".
+ * Undecryptable rows are skipped, mirroring `loadOAuthTokens`.
+ */
+export async function listOAuthTokensByProvider(
+  provider: OAuthProvider
+): Promise<OAuthTokenRecord[]> {
+  const fromCache = () => [...tokenCache.values()].filter(r => r.provider === provider);
+  const pool = getPool();
+  if (!pool) return fromCache();
+  try {
+    const result = await pool.query(
+      `SELECT ${TOKEN_COLUMNS} FROM oauth_tokens WHERE provider = $1`,
+      [provider]
+    );
+    const records: OAuthTokenRecord[] = [];
+    for (const row of result.rows) {
+      try {
+        records.push(rowToRecord(row));
+      } catch {
+        /* undecryptable with the current ENCRYPTION_KEY — skip, as on startup */
+      }
+    }
+    return records;
+  } catch (err) {
+    console.error('[OAuthStore] listOAuthTokensByProvider failed:', (err as Error).message);
+    return fromCache();
   }
 }
 
@@ -190,7 +232,7 @@ export function hasOAuthToken(
 ): boolean {
   const token = getOAuthToken(provider, scopeType, scopeId);
   if (!token) return false;
-  if (!token.expiresAt) return true; // non-expiring tokens (Slack, GitHub)
+  if (!token.expiresAt) return true; // non-expiring tokens (Slack, classic GitHub OAuth Apps)
   // Consider valid if not expired, or if a refresh token exists (can be refreshed)
   return token.expiresAt > Date.now() || !!token.refreshToken;
 }
@@ -302,22 +344,10 @@ export async function resolveOAuthTokenRecord(
         if (pool) {
           try {
             const result = await pool.query(
-              'SELECT provider, scope_type, scope_id, access_token, refresh_token, expires_at, meta FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 LIMIT 1',
+              `SELECT ${TOKEN_COLUMNS} FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 LIMIT 1`,
               [provider, 'user']
             );
-            if (result.rows.length > 0) {
-              const row = result.rows[0];
-              token = {
-                provider: row.provider,
-                scopeType: row.scope_type,
-                scopeId: row.scope_id,
-                accessToken: tryDecrypt(row.access_token),
-                refreshToken: tryDecrypt(row.refresh_token),
-                expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
-                meta: row.meta || {},
-              };
-              tokenCache.set(cacheKey(token.provider, token.scopeType, token.scopeId), token);
-            }
+            if (result.rows.length > 0) token = rowToRecord(result.rows[0]);
           } catch (err) {
             console.error(
               '[OAuthStore] resolveAccessToken user-scope DB fallback failed:',
@@ -373,9 +403,7 @@ export async function loadOAuthTokens(): Promise<void> {
   if (!pool) return;
 
   try {
-    const result = await pool.query(
-      'SELECT provider, scope_type, scope_id, access_token, refresh_token, expires_at, meta FROM oauth_tokens'
-    );
+    const result = await pool.query(`SELECT ${TOKEN_COLUMNS} FROM oauth_tokens`);
 
     tokenCache.clear();
     let skipped = 0;
@@ -383,17 +411,7 @@ export async function loadOAuthTokens(): Promise<void> {
       // Per-row guard: one undecryptable row (e.g. written with a different
       // ENCRYPTION_KEY by a sibling deployment) must not abort the whole load.
       try {
-        const record: OAuthTokenRecord = {
-          provider: row.provider,
-          scopeType: row.scope_type,
-          scopeId: row.scope_id,
-          accessToken: tryDecrypt(row.access_token),
-          refreshToken: tryDecrypt(row.refresh_token),
-          expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
-          meta: row.meta || {},
-        };
-        const key = cacheKey(record.provider, record.scopeType, record.scopeId);
-        tokenCache.set(key, record);
+        rowToRecord(row);
       } catch (err) {
         skipped++;
         console.error(

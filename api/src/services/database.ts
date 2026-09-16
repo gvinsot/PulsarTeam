@@ -107,6 +107,7 @@ export {
   deleteOAuthToken,
   deleteOAuthTokensByScope,
   getOAuthTokensByScope,
+  listOAuthTokensByProvider,
   resolveAccessToken,
   resolveOAuthTokenRecord,
   loadOAuthTokens,

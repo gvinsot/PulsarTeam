@@ -36,6 +36,12 @@ export interface OAuthProviderSpec<TConfig extends { clientId: string; clientSec
   refreshNotConfiguredError?: string;
   /** Token endpoint used by makeRefresh — refresh-capable providers only. */
   refreshTokenUrl?(record: OAuthTokenRecord, config: TConfig): string;
+  /**
+   * Extra headers for the refresh request. GitHub's token endpoint answers in
+   * `application/x-www-form-urlencoded` unless asked for JSON, so it must send
+   * `Accept: application/json` or the response parses to an empty object.
+   */
+  refreshHeaders?: Record<string, string>;
   /** Builds the provider consent URL for GET /auth-url (scopes/endpoint/extras live here). */
   buildAuthUrl(req: express.Request, config: TConfig, state: string): string;
   /** Issues the HMAC-signed OAuth state. `req` lets onedrive read its consumer-flow flag. */
@@ -86,16 +92,22 @@ export function makeRefresh<TConfig extends { clientId: string; clientSecret: st
 
     const response = await fetch(refreshTokenUrl(record, config), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...(spec.refreshHeaders || {}),
+      },
       body: body.toString(),
       signal: AbortSignal.timeout(15_000),
     });
 
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      // Only invalid_grant means the refresh token itself is revoked/expired.
+    // GitHub answers 200 with `{ error: 'bad_refresh_token' }` instead of a 4xx,
+    // so an error body has to be treated as a failure whatever the status.
+    if (!response.ok || data.error || !data.access_token) {
+      // Only these mean the refresh token itself is revoked/expired (GitHub says
+      // `bad_refresh_token` where Google/Microsoft say `invalid_grant`).
       // Transient failures (429, 5xx) must keep the token so the next call retries.
-      if (data.error === 'invalid_grant') {
+      if (data.error === 'invalid_grant' || data.error === 'bad_refresh_token') {
         await deleteOAuthToken(spec.provider, record.scopeType, record.scopeId);
       } else {
         console.warn(
@@ -114,7 +126,9 @@ export function makeRefresh<TConfig extends { clientId: string; clientSecret: st
       scopeId: record.scopeId,
       accessToken: data.access_token,
       refreshToken: data.refresh_token || record.refreshToken,
-      expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+      // A provider that issues non-expiring access tokens omits expires_in;
+      // arithmetic on `undefined` would store an Invalid Date and throw.
+      expiresAt: data.expires_in ? Date.now() + (Number(data.expires_in) - 60) * 1000 : null,
       meta: record.meta,
     });
 
