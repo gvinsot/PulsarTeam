@@ -15,6 +15,7 @@ import {
   Pause,
   ShieldAlert,
   ShieldCheck,
+  Eye,
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 import type { TaskSocketPayload } from '../../types';
@@ -75,6 +76,12 @@ export default function TaskCard({
 }: TaskCardProps) {
   const isError = task.status === 'error';
   const isStopped = task.executionStatus === 'stopped';
+  // Same eligibility as the board counter (database/taskViews.ts).
+  const needsReview =
+    (task.source?.type === 'mcp' || task.source?.type === 'api') &&
+    !task.humanViewedAt &&
+    !task.deletedAt &&
+    !task.isTemplate;
   const today = isToday(task.createdAt);
   const isDraggingRef = useRef(false);
   const touchDragRef = useRef<TouchDragState | null>(null);
@@ -450,6 +457,15 @@ export default function TaskCard({
 
       {/* Badges */}
       <div className="flex flex-wrap gap-1 mb-2.5">
+        {needsReview && (
+          <span
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-indigo-500/15 text-indigo-300 ring-1 ring-indigo-500/30"
+            title="Created via MCP or API and not yet opened by a human"
+          >
+            <Eye className="w-3 h-3" aria-hidden="true" />
+            To review
+          </span>
+        )}
         {task.priority && PRIORITY_MAP[task.priority] && (
           <span
             className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${PRIORITY_MAP[task.priority].cls}`}

@@ -81,6 +81,7 @@ A card displays:
 - Recurring-run badge (`#N`) when the card is one run of a recurring rule
 - Commit count badge (links to commit modal)
 - Status indicator (running / stopped / error)
+- Indigo “To review” badge with an eye icon for MCP/API tasks not yet opened by a human, matching the board tab counter. It disappears on first consultation, including when another board member opens the task; it is independent of the manual workflow flag and external-task approval.
 
 Clicking a card opens `TaskDetailModal`.
 

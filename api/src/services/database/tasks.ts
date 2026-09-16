@@ -177,6 +177,7 @@ export interface TaskRow {
   storage_path: string | null;
   deleted_at: Date | null;
   deleted_by: string | null;
+  human_viewed_at: Date | null;
   created_at: Date | null;
   updated_at: Date | null;
   completed_at: Date | null;
@@ -223,6 +224,7 @@ export function rowToTask(row: TaskRow) {
     priority: row.priority || undefined,
     dueDate: row.due_date || undefined,
     source: row.source || null,
+    humanViewedAt: toIso(row.human_viewed_at ?? null),
     recurrence: row.recurrence || null,
     commits: row.commits || [],
     history: row.history || [],

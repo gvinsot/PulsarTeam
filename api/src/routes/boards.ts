@@ -75,7 +75,12 @@ export function boardRoutes(agentManager: AgentManager) {
         return res.status(404).json({ error: 'Task not found' });
       }
       const changed = await markTaskHumanViewed(req.params.id as string, task.id);
-      if (changed) emitTaskUpdated(agentManager, task, { emitAgent: false });
+      if (changed) {
+        // Publish the persisted acknowledgement so card indicators update for
+        // every board member, alongside the board's unseen-task count.
+        const viewedTask = await getTaskById(task.id);
+        if (viewedTask) emitTaskUpdated(agentManager, viewedTask, { emitAgent: false });
+      }
       res.json({ success: true });
     })
   );

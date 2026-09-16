@@ -369,6 +369,8 @@ export interface Task {
    *  Date while an HTTP client sees the ISO string JSON.stringify makes of it. */
   dueDate?: string;
   source: TaskSource | null;
+  /** First human opening of an MCP/API task; shared across board members. */
+  humanViewedAt: string | null;
   /** Non-null ONLY on a recurring rule (`isTemplate`); always null on a card. */
   recurrence: TaskRecurrence | null;
   /** True on a recurring RULE: it holds the schedule, never appears on a board
