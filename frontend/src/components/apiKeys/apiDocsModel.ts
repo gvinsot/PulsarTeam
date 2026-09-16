@@ -175,10 +175,17 @@ export function mcpSetupCommands(origin: string, entry: DocOperation, key?: stri
   const name = shellQuote(`pulsar-${scope}`);
   const url = shellQuote(origin + entry.path);
   const token = key || keyPlaceholder(entry.op);
-  const envVar = `PULSAR_${scope.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}_API_KEY`;
+  const envVar =
+    scope === 'admin'
+      ? undefined
+      : `PULSAR_${scope.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}_API_KEY`;
   return {
     envVar,
-    codex: `export ${envVar}=${shellQuote(token)}\ncodex mcp add ${name} --url ${url} --bearer-token-env-var ${envVar}`,
+    // The CLI only accepts bearer tokens through environment variables. For
+    // admin keys, show the supported TOML configuration with the personal key.
+    codex: envVar
+      ? `export ${envVar}=${shellQuote(token)}\ncodex mcp add ${name} --url ${url} --bearer-token-env-var ${envVar}`
+      : `[mcp_servers.pulsar-admin]\nurl = ${JSON.stringify(origin + entry.path)}\nhttp_headers = { Authorization = ${JSON.stringify(`Bearer ${token}`)} }`,
     claude: `claude mcp add --transport http --scope user ${name} ${url} --header ${shellQuote(`Authorization: Bearer ${token}`)}`,
   };
 }

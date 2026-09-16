@@ -228,26 +228,56 @@ test('MCP install commands pair each endpoint with its scope and supplied key', 
       `Authorization: Bearer ${key}`,
       '',
     ]);
-    const codexArgs = execFileSync('sh', [
-      '-c',
-      `codex ${capture}\n${commands.codex}\nprintf '%s' "$${commands.envVar}"`,
-    ])
-      .toString()
-      .split('\0');
-    assert.deepEqual(codexArgs, [
-      'mcp',
-      'add',
-      `pulsar-${scope}`,
-      '--url',
-      `https://team.example/api/mcp/${scope}`,
-      '--bearer-token-env-var',
-      `PULSAR_${scope.toUpperCase()}_API_KEY`,
-      key,
-    ]);
+    if (scope === 'admin') {
+      assert.equal(commands.envVar, undefined);
+      assert.equal(
+        commands.codex,
+        '[mcp_servers.pulsar-admin]\n' +
+          'url = "https://team.example/api/mcp/admin"\n' +
+          'http_headers = { Authorization = "Bearer test-admin-key" }'
+      );
+    } else {
+      const codexArgs = execFileSync('sh', [
+        '-c',
+        `codex ${capture}\n${commands.codex}\nprintf '%s' "$${commands.envVar}"`,
+      ])
+        .toString()
+        .split('\0');
+      assert.deepEqual(codexArgs, [
+        'mcp',
+        'add',
+        `pulsar-${scope}`,
+        '--url',
+        `https://team.example/api/mcp/${scope}`,
+        '--bearer-token-env-var',
+        `PULSAR_${scope.toUpperCase()}_API_KEY`,
+        key,
+      ]);
+    }
     const placeholders = mcpSetupCommands('https://team.example', entry);
     assert.ok(placeholders.codex.includes(`<${scope}-key>`));
     assert.ok(placeholders.claude.includes(`<${scope}-key>`));
   }
+});
+
+test('admin snippets use the latest supplied personal key after rotation', () => {
+  const entry: DocOperation = {
+    path: '/api/mcp/admin',
+    method: 'post',
+    op: { ...doc.paths['/api/mcp/insert'].post!, 'x-api-key-scope': 'admin' },
+  };
+  for (const key of ['swarm_sk_original', 'swarm_sk_rotated']) {
+    const commands = mcpSetupCommands('https://team.example', entry, key);
+    const curl = curlFor('https://team.example', entry, { method: 'tools/list' }, key);
+    for (const snippet of [commands.codex, commands.claude, curl]) {
+      assert.ok(snippet.includes(`Bearer ${key}`));
+      assert.doesNotMatch(snippet, /PULSAR_ADMIN_API_KEY|<admin-key>/);
+      if (key.endsWith('rotated')) assert.doesNotMatch(snippet, /swarm_sk_original/);
+    }
+  }
+  const commands = mcpSetupCommands('https://team.example', entry);
+  assert.match(commands.codex, /Bearer <admin-key>/);
+  assert.doesNotMatch(commands.codex, /PULSAR_ADMIN_API_KEY|swarm_sk_/);
 });
 
 test('MCP install commands preserve shell metacharacters without executing them', () => {

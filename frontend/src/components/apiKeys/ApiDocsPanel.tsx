@@ -93,11 +93,13 @@ function ToolEntry({
   entry,
   tool,
   origin,
+  apiKey,
 }: {
   doc: OpenApiDocument;
   entry: DocOperation;
   tool: McpToolDoc;
   origin: string;
+  apiKey?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -119,7 +121,10 @@ function ToolEntry({
         <div className="px-3 pb-3 space-y-3">
           <p className="text-xs text-dark-300">{tool.description}</p>
           <SchemaFieldsTable doc={doc} schema={tool.inputSchema} emptyLabel="No arguments." />
-          <CopyableCode label="tools/call" code={curlFor(origin, entry, toolCallBody(doc, tool))} />
+          <CopyableCode
+            label="tools/call"
+            code={curlFor(origin, entry, toolCallBody(doc, tool), apiKey)}
+          />
         </div>
       )}
     </li>
@@ -196,10 +201,23 @@ function ToolCatalogue({
           Replace &lt;{scope}-key&gt; with your {scope} key before running these commands.
         </p>
       )}
-      <CopyableCode label="Codex CLI — bash / zsh" code={commands.codex} />
+      <CopyableCode
+        label={commands.envVar ? 'Codex CLI — bash / zsh' : 'Codex — ~/.codex/config.toml'}
+        code={commands.codex}
+      />
       <p className="text-xs text-dark-400">
-        Start Codex from this terminal. Keep <code>{commands.envVar}</code> exported in every
-        terminal where you launch Codex; the server configuration stores the variable name.
+        {commands.envVar ? (
+          <>
+            Start Codex from this terminal. Keep <code>{commands.envVar}</code> exported in every
+            terminal where you launch Codex; the server configuration stores the variable name.
+          </>
+        ) : (
+          <>
+            Replace the existing <code>mcp_servers.pulsar-admin</code> section in{' '}
+            <code>~/.codex/config.toml</code> with this configuration, or add it if absent. Restart
+            Codex after saving. Update this section whenever you rotate your admin key.
+          </>
+        )}
       </p>
       <CopyableCode label="Claude Code — bash / zsh" code={commands.claude} />
       <p className="text-xs text-dark-400">
@@ -245,7 +263,14 @@ function ToolCatalogue({
       </div>
       <ul className="space-y-1.5">
         {shown.map(tool => (
-          <ToolEntry key={tool.name} doc={doc} entry={entry} tool={tool} origin={origin} />
+          <ToolEntry
+            key={tool.name}
+            doc={doc}
+            entry={entry}
+            tool={tool}
+            origin={origin}
+            apiKey={key}
+          />
         ))}
       </ul>
     </div>
@@ -350,7 +375,7 @@ function OperationCard({
                     </button>
                   ))}
               </div>
-              <CopyableCode code={curlFor(origin, entry, firstExample(op, exampleKey))} />
+              <CopyableCode code={curlFor(origin, entry, firstExample(op, exampleKey), freshKey)} />
             </div>
           )}
 
