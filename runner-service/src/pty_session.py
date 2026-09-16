@@ -1345,6 +1345,30 @@ class PtySession:
             "auth_error": self.auth_error,
         }
 
+    def history_output(self) -> str:
+        """Capture readable recent lines, not the raw TUI repaint stream.
+
+        tmux owns the rendered screen and scrollback. Fall back to a cleaned
+        byte tail if the pane has already disappeared or tmux is unavailable.
+        Bound both lines and characters before persisting this in task history.
+        """
+        text = ""
+        if self._tmux_session:
+            try:
+                result = self._tmux_run([
+                    "capture-pane", "-p", "-J", "-t", self._tmux_session, "-S", "-100",
+                ])
+                if result.returncode == 0:
+                    text = result.stdout.decode("utf-8", "replace")
+            except Exception:
+                pass
+        if not text.strip():
+            text = self.tail_text(32768)
+        text = _strip_ansi(text).replace("\r\n", "\n").replace("\r", "\n")
+        text = "".join(c for c in text if c in "\n\t" or (ord(c) >= 32 and ord(c) != 127))
+        lines = "\n".join(line.rstrip() for line in text.splitlines()).strip().splitlines()
+        return "\n".join(lines[-100:])[-16000:]
+
     def tail_text(self, max_bytes: int = 4096) -> str:
         """Return a short decoded tail of recent PTY output for diagnostics."""
         chunks: list[bytes] = []

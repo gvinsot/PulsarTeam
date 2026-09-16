@@ -243,3 +243,40 @@ async def test_interrupt_uses_cli_specific_sequence(monkeypatch, cmd, expected_s
     assert written == [expected_sequence]
     assert result["interrupted"] is True
     assert result["sequence"] == expected_label
+
+
+def test_history_output_uses_readable_tmux_pane_and_bounds_lines(monkeypatch):
+    from subprocess import CompletedProcess
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session._tmux_session = "agent-history"
+    calls = []
+
+    def tmux(args, **kwargs):
+        calls.append(args)
+        return CompletedProcess(args, 0, stdout="\n".join(f"line {i}" for i in range(150)).encode())
+
+    monkeypatch.setattr(session, "_tmux_run", tmux)
+    lines = session.history_output().splitlines()
+    assert len(lines) == 100
+    assert lines[0] == "line 50"
+    assert lines[-1] == "line 149"
+    assert calls == [["capture-pane", "-p", "-J", "-t", "agent-history", "-S", "-100"]]
+
+
+def test_history_output_falls_back_to_cleaned_tail_when_tmux_fails(monkeypatch):
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    session._tmux_session = "agent-history"
+    session._append_scrollback(b"\x1b[32mTests passed\x1b[0m\r\nChanges pushed\x07")
+
+    def unavailable(*args, **kwargs):
+        raise OSError("tmux gone")
+
+    monkeypatch.setattr(session, "_tmux_run", unavailable)
+    assert session.history_output() == "Tests passed\nChanges pushed"
+
+
+def test_history_output_bounds_characters_and_handles_empty_sessions():
+    session = PtySession(agent_id="history", cmd=["codex"], cwd="/tmp", env={})
+    assert session.history_output() == ""
+    session._append_scrollback(b"x" * 20000)
+    assert session.history_output() == "x" * 16000

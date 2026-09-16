@@ -881,7 +881,7 @@ async function executeRunAgent(
         console.log(
           `[ActionExecutor] run_agent stopped by user for "${task.text?.slice(0, 60)}" (mode=${mode}) — not marking as error`
         );
-        agentManager._saveExecutionLog(
+        await agentManager._saveExecutionLog(
           task.agentId,
           task.id,
           agent.id,
@@ -906,7 +906,7 @@ async function executeRunAgent(
         errorMessage(err)
       );
       // Save error execution log
-      agentManager._saveExecutionLog(
+      await agentManager._saveExecutionLog(
         task.agentId,
         task.id,
         agent.id,
@@ -932,6 +932,8 @@ async function executeRunAgent(
       // workflow (renamed/deleted columns).
       try {
         if (actualTask) {
+          // Execution logging may have appended history since setup.
+          actualTask = (await getTaskById(task.id)) || actualTask;
           const mutated = markTaskError(actualTask, errorMessage(err), {
             by: agent.name || 'workflow',
             mode,
@@ -1131,7 +1133,7 @@ async function _runSimpleMode(
   try {
     const result = await agentManager.sendMessage(agent.id, prompt, () => {});
     apply(agentManager, task, result, agent.name);
-    agentManager._saveExecutionLog(
+    await agentManager._saveExecutionLog(
       task.agentId,
       task.id,
       agent.id,
@@ -1142,7 +1144,7 @@ async function _runSimpleMode(
     );
   } catch (err) {
     console.error(`[ActionExecutor] ${modeName} failed:`, errorMessage(err));
-    agentManager._saveExecutionLog(
+    await agentManager._saveExecutionLog(
       task.agentId,
       task.id,
       agent.id,
@@ -1180,7 +1182,7 @@ async function _runRefineMode(
     );
 
     const response = (result?.content || buf.text).trim();
-    agentManager._saveExecutionLog(
+    await agentManager._saveExecutionLog(
       task.agentId,
       task.id,
       agent.id,
@@ -1245,7 +1247,7 @@ async function _runDecideMode(
       waitResult,
       'Claude Code CLI ended in an authentication or runtime error'
     );
-    agentManager._saveExecutionLog(
+    await agentManager._saveExecutionLog(
       task.agentId,
       task.id,
       agent.id,
@@ -1273,7 +1275,7 @@ async function _runDecideMode(
         workflowMeta
       );
 
-      agentManager._saveExecutionLog(
+      await agentManager._saveExecutionLog(
         task.agentId,
         task.id,
         agent.id,

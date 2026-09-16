@@ -604,7 +604,17 @@ export default function HistoryDetailModal({
           )}
 
           {/* Execution: full conversation with structured tool calls */}
-          {isExecution && <ExecutionConversation messages={entry.messages} />}
+          {isExecution && (entry.messages?.length || !entry.terminalOutput) && (
+            <ExecutionConversation messages={entry.messages} />
+          )}
+          {isExecution && entry.terminalOutput && (
+            <div>
+              <div className="text-xs font-semibold text-dark-300 mb-2">Latest CLI output</div>
+              <pre className="max-h-96 overflow-auto rounded-lg bg-dark-900 p-3 text-xs text-dark-200 whitespace-pre-wrap break-words font-mono">
+                {entry.terminalOutput}
+              </pre>
+            </div>
+          )}
         </div>
 
         {/* Footer */}

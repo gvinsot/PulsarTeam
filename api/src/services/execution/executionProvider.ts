@@ -155,6 +155,11 @@ export class ExecutionProvider {
     return null;
   }
 
+  /** Bounded, plain-text terminal snapshot for task execution history. */
+  async getTerminalOutput(_agentId: string): Promise<string | null> {
+    return null;
+  }
+
   // ── Query ─────────────────────────────────────────────────────────────
 
   /**

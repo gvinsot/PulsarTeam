@@ -217,7 +217,7 @@ export interface TaskRecurrence {
 }
 
 /**
- * One conversation turn captured inside an 'execution' history entry.
+ * One conversation turn or CLI completion note captured in an 'execution' entry.
  * Produced by api/src/services/agentManager/actionLogs.ts:95-104.
  *
  * This really IS a projection of ConversationMessage, not a look-alike: the
@@ -309,9 +309,11 @@ export interface TaskHistoryEntry {
   startedAt?: string;
   /** 'execution' entries only. */
   success?: boolean;
-  /** 'execution' entries only — a projection of the executor's
-   *  conversationHistory slice. */
+  /** 'execution' entries only — the executor's conversationHistory slice,
+   *  or completion notes submitted by the CLI agent during this run. */
   messages?: TaskExecutionMessage[];
+  /** Plain-text CLI tail captured when no conversation or completion note exists. */
+  terminalOutput?: string;
   /** 'error' entries only; `message || 'Unknown error'`, so never empty. */
   error?: string;
   /** 'error' entries only, and only when the caller supplied a mode. Fed by the

@@ -11,6 +11,7 @@ WebSocket below and the user sees / drives the real CLI.
 Routes:
     GET    /terminal/sessions                   — list active sessions
     GET    /terminal/sessions/{agent_id}        — status of one session
+    GET    /terminal/sessions/{agent_id}/output — recent readable CLI output
     DELETE /terminal/sessions/{agent_id}        — kill a session
     POST   /terminal/sessions/{agent_id}/input  — paste task prompt into TUI
     POST   /terminal/sessions/{agent_id}/interrupt — abort active TUI run
@@ -113,6 +114,15 @@ def get_terminal_session(agent_id: str, authorization: Optional[str] = Header(No
     if session is None:
         raise HTTPException(status_code=404, detail="No session for that agent")
     return JSONResponse(session.status())
+
+
+@router.get("/terminal/sessions/{agent_id}/output")
+def get_terminal_output(agent_id: str, authorization: Optional[str] = Header(None)) -> JSONResponse:
+    _check_api_key(authorization, None)
+    session = pty_session.get_session(agent_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No session for that agent")
+    return JSONResponse({"output": session.history_output()})
 
 
 @router.delete("/terminal/sessions/{agent_id}")

@@ -281,6 +281,10 @@ export class ExecutionManager {
     return this._providerFor(agentId).getTerminalSession(agentId);
   }
 
+  async getTerminalOutput(agentId: string): Promise<string | null> {
+    return this._providerFor(agentId).getTerminalOutput(agentId);
+  }
+
   hasEnvironment(agentId: string): boolean {
     return this._providerFor(agentId).hasEnvironment(agentId);
   }

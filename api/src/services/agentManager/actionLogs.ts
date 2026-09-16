@@ -1,6 +1,7 @@
 // ─── Action Logs & Execution Log ────────────────────────────────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { saveAgent, saveTaskToDb, getTaskById, getTasksByAssignee } from '../database.js';
+import { saveAgent, updateTaskFields, getTaskById, getTasksByAssignee } from '../database.js';
+import { isCliRunner } from '../runners.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const actionLogsMethods = {
@@ -75,7 +76,7 @@ export const actionLogsMethods = {
 
   async _saveExecutionLog(
     this: any,
-    creatorAgentId: string,
+    _creatorAgentId: string | null,
     taskId: string,
     executorId: string,
     startMsgIdx: number,
@@ -84,13 +85,12 @@ export const actionLogsMethods = {
     actionMode: string = 'decide'
   ): Promise<void> {
     const executor = this.agents.get(executorId);
-    const creatorAgent = this.agents.get(creatorAgentId);
-    if (!executor || !creatorAgent) return;
+    if (!executor) return;
 
-    const task = await getTaskById(taskId);
+    let task = await getTaskById(taskId);
     if (!task) return;
 
-    const rawMessages = executor.conversationHistory.slice(startMsgIdx);
+    const rawMessages = (executor.conversationHistory || []).slice(startMsgIdx);
 
     const executionMessages = rawMessages.map((m: any) => {
       const entry: any = {
@@ -103,6 +103,42 @@ export const actionLogsMethods = {
       return entry;
     });
 
+    // CLI runs bypass sendMessage, so their conversation history stays empty.
+    // Prefer the completion notes recorded by update_task during this run.
+    let terminalOutput: string | undefined;
+    if (isCliRunner(executor) && executionMessages.length === 0 && startedAt) {
+      for (const entry of task.history || []) {
+        if (
+          entry.type === 'edit' &&
+          entry.field === 'text' &&
+          entry.oldValue === null &&
+          entry.by === executor.name &&
+          entry.at &&
+          entry.at >= startedAt &&
+          typeof entry.newValue === 'string' &&
+          entry.newValue.trim()
+        ) {
+          executionMessages.push({
+            role: 'assistant',
+            content: entry.newValue,
+            timestamp: entry.at,
+          });
+        }
+      }
+      if (executionMessages.length === 0) {
+        try {
+          terminalOutput =
+            (await this.executionManager?.getTerminalOutput?.(executorId)) || undefined;
+        } catch {
+          // An unavailable runner must not prevent saving the execution record.
+        }
+      }
+    }
+
+    // The terminal request can take time; preserve intervening task updates.
+    task = await getTaskById(taskId);
+    if (!task) return;
+
     if (!task.history) task.history = [];
     task.history.push({
       type: 'execution',
@@ -112,12 +148,14 @@ export const actionLogsMethods = {
       startedAt,
       success,
       messages: executionMessages,
+      ...(terminalOutput ? { terminalOutput } : {}),
     });
 
-    await saveTaskToDb({ ...task, agentId: creatorAgentId });
+    const updated = await updateTaskFields(taskId, { history: task.history });
+    if (!updated) return;
     this._emit('task:updated', {
-      agentId: creatorAgentId,
-      task: { ...task, agentId: creatorAgentId },
+      agentId: updated.agentId,
+      task: updated,
     });
   },
 };

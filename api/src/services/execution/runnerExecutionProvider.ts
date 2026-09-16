@@ -323,11 +323,14 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   async closeTerminalSession(agentId: string): Promise<boolean> {
-    const res = await this._fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
-      method: 'DELETE',
-      headers: this._headers(agentId),
-      signal: AbortSignal.timeout(5000),
-    });
+    const res = await this._fetch(
+      `${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`,
+      {
+        method: 'DELETE',
+        headers: this._headers(agentId),
+        signal: AbortSignal.timeout(5000),
+      }
+    );
     if (res.status === 404) return false;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -367,14 +370,31 @@ export class RunnerExecutionProvider extends ExecutionProvider {
    */
   async getTerminalSession(agentId: string): Promise<any | null> {
     try {
-      const res = await this._fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
-        method: 'GET',
-        headers: this._headers(agentId),
-        signal: AbortSignal.timeout(5000),
-      });
+      const res = await this._fetch(
+        `${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`,
+        {
+          method: 'GET',
+          headers: this._headers(agentId),
+          signal: AbortSignal.timeout(5000),
+        }
+      );
       if (res.status === 404) return null;
       if (!res.ok) return null;
       return await res.json().catch(() => null);
+    } catch {
+      return null;
+    }
+  }
+
+  async getTerminalOutput(agentId: string): Promise<string | null> {
+    try {
+      const res = await this._fetch(
+        `${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/output`,
+        { headers: this._headers(agentId), signal: AbortSignal.timeout(5000) }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return typeof data?.output === 'string' ? data.output.slice(-16000) : null;
     } catch {
       return null;
     }
