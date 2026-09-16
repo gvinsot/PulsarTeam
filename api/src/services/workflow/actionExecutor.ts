@@ -40,7 +40,12 @@ import {
 } from '../execution/agentWorkspace.js';
 import { isCliRunner } from '../runners.js';
 import { errorMessage } from '../../lib/errors.js';
-import { snapshotGitBaseline, reconcileTaskCommits } from '../agentManager/tools/gitReconcile.js';
+import {
+  snapshotGitBaseline,
+  reconcileTaskCommits,
+  beginTaskCommitRun,
+  endTaskCommitRun,
+} from '../agentManager/tools/gitReconcile.js';
 import type { AgentManager } from '../agentManager/index.js';
 import type { Task } from '../database/tasks.js';
 
@@ -826,6 +831,11 @@ async function executeRunAgent(
       // parser (and often isn't even rendered by the CLI's TUI).
       if (mode === AgentMode.DECIDE) {
         gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
+        beginTaskCommitRun(agentManager, agent.id, {
+          taskId: task.id,
+          baselineHead: gitBaselineHead,
+          startedAt: execStartedAt,
+        });
       }
 
       let result: ActionResult;
@@ -969,7 +979,7 @@ async function executeRunAgent(
         try {
           await reconcileTaskCommits(agentManager, agent.id, task.id, {
             baselineHead: gitBaselineHead,
-            startedAt: gitBaselineHead ? null : execStartedAt,
+            startedAt: execStartedAt,
             label: 'RunEndReconcile',
           });
         } catch (reconcileErr) {
@@ -978,6 +988,7 @@ async function executeRunAgent(
           );
         }
       }
+      endTaskCommitRun(agentManager, agent.id, task.id);
       let cleanupMutated = false;
       const cleanupFields: any = {};
       // Clear actionRunning with a targeted DB update. The chain reads the task

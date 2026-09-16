@@ -394,7 +394,6 @@ export interface AgentManager {
   _purgeOccurrences(template: TaskWriteInput): Promise<number>;
   _isActiveTaskStatus(status: string): boolean;
   _getFirstColumnStatus(boardId: string): Promise<string>;
-  _findTaskForCommitLink(agentId: string): Promise<{ task: any; ownerAgentId: string } | null>;
   addTaskCommit(
     agentId: string,
     taskId: string,

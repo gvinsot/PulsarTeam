@@ -23,9 +23,6 @@ import {
   getTaskById,
   getTasksByAgent,
   getAllTaskIds,
-  getActiveTaskForExecutor,
-  getTasksByAssignee,
-  getTaskByActionRunningAgent,
   getRecurringTasks,
   countUnfinishedOccurrences,
   purgeTemplateOccurrences,
@@ -50,7 +47,13 @@ import {
   reArmInterruptedChains,
 } from '../workflow/index.js';
 import { enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
-import { snapshotGitBaseline, reconcileTaskCommits } from './tools/gitReconcile.js';
+import {
+  snapshotGitBaseline,
+  reconcileTaskCommits,
+  beginTaskCommitRun,
+  endTaskCommitRun,
+  getTaskCommitRun,
+} from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
 import { ensureAgentWorkspace, resolveAgentGitCredentials } from '../execution/agentWorkspace.js';
 import type { Task, TaskWriteInput, TaskRecurrence } from '../database/tasks.js';
@@ -693,110 +696,6 @@ export const tasksMethods = {
       /* fall through */
     }
     return 'backlog';
-  },
-
-  async _findTaskForCommitLink(
-    this: any,
-    agentId: string
-  ): Promise<{ task: any; ownerAgentId: string } | null> {
-    // Window for the "recently active" fallback (used when status has transitioned
-    // away from active — e.g. error from a rate-limit, or done seconds ago).
-    // Commits made by an agent within this window after the task left the
-    // "active" set still belong to that task in 99% of cases.
-    const RECENT_ACTIVE_MS = 15 * 60 * 1000;
-    const now = Date.now();
-
-    // Priority 1: Task actively running via this agent (DB flag action_running_agent_id).
-    // We INTENTIONALLY do not require _isActiveTaskStatus here — if the flag is
-    // still pointing at this agent, the action is in flight and the link is valid
-    // even if the status briefly transitioned (e.g. to "error" via a rate-limit
-    // handler or to "done" via update_task).
-    const running = await getTaskByActionRunningAgent(agentId);
-    if (running) {
-      console.log(
-        `🔗 [Commit] Found task via actionRunningAgentId: "${(running as any).text?.slice(0, 50)}" (status=${(running as any).status})`
-      );
-      return { task: running, ownerAgentId: (running as any).agentId };
-    }
-
-    // Priorities 2-4 operate on the tasks this agent executes: those assigned to
-    // it (from any owner) plus its own unassigned tasks. getTasksByAssignee is
-    // exactly that set (assignee = agentId OR (assignee IS NULL AND owner)).
-    const assignedTasks = await getTasksByAssignee(agentId);
-
-    // Priority 2/3: Active assigned/own task, preferring the most recently started.
-    let bestActive: any = null;
-    for (const task of assignedTasks) {
-      if (!this._isActiveTaskStatus(task.status)) continue;
-      if (
-        !bestActive ||
-        (task.startedAt &&
-          (!bestActive.startedAt || new Date(task.startedAt) > new Date(bestActive.startedAt)))
-      ) {
-        bestActive = task;
-      }
-    }
-    if (bestActive) {
-      console.log(
-        `🔗 [Commit] Found task via assignee/own active: "${bestActive.text?.slice(0, 50)}" (owner=${(bestActive.agentId || '').slice(0, 8)})`
-      );
-      return { task: bestActive, ownerAgentId: bestActive.agentId };
-    }
-
-    // Priority 4: Recently active task (any status) within RECENT_ACTIVE_MS.
-    // Catches the case where a task transitioned to error/done between the
-    // commit being made and the run_command handler processing the result.
-    let bestRecent: { task: any; ts: number } | null = null;
-    for (const task of assignedTasks) {
-      const ref = task.completedAt || task.startedAt;
-      if (!ref) continue;
-      const ts = new Date(ref).getTime();
-      if (now - ts > RECENT_ACTIVE_MS) continue;
-      if (!bestRecent || ts > bestRecent.ts) {
-        bestRecent = { task, ts };
-      }
-    }
-    if (bestRecent) {
-      console.log(
-        `🔗 [Commit] Found recently-active task: "${bestRecent.task.text?.slice(0, 50)}" (status=${bestRecent.task.status}, age=${Math.round((now - bestRecent.ts) / 1000)}s)`
-      );
-      return { task: bestRecent.task, ownerAgentId: bestRecent.task.agentId };
-    }
-
-    // Priority 5 (DB fallback): find active task from DB
-    const activeTask = await getActiveTaskForExecutor(agentId);
-    if (activeTask) {
-      console.log(
-        `🔗 [Commit] Found task via DB executor lookup: "${(activeTask as any).text?.slice(0, 50)}"`
-      );
-      return { task: activeTask, ownerAgentId: (activeTask as any).agentId };
-    }
-
-    // Priority 6 (DB fallback): recently completed/errored task. Include
-    // 'error' so commits made just before/during a rate-limit failure still
-    // attach to the originating task instead of creating a stray "Commit
-    // without task".
-    const allTasks = await getTasksByAgent(agentId);
-    const recentlyFinished = allTasks
-      .filter(
-        (t: any) => (t.status === 'done' || t.status === 'error') && (t.completedAt || t.startedAt)
-      )
-      .map((t: any) => ({ task: t, ts: new Date(t.completedAt || t.startedAt).getTime() }))
-      .filter((x: any) => now - x.ts <= RECENT_ACTIVE_MS);
-    if (recentlyFinished.length > 0) {
-      recentlyFinished.sort((a: any, b: any) => b.ts - a.ts);
-      const top = recentlyFinished[0].task;
-      console.log(
-        `🔗 [Commit] No active task — falling back to recently finished task "${top.text?.slice(0, 50)}" (status=${top.status})`
-      );
-      return { task: top, ownerAgentId: top.agentId };
-    }
-    // Log diagnostic info when no task found at all
-    const agentObj = this.agents.get(agentId);
-    console.warn(
-      `⚠️ [Commit] _findTaskForCommitLink: no task found for agent "${agentObj?.name || agentId.slice(0, 8)}". Checked: actionRunningAgentId, assignee, own tasks, recent in-mem, DB executor, DB recent finished.`
-    );
-    return null;
   },
 
   async addTaskCommit(
@@ -1649,13 +1548,12 @@ export const tasksMethods = {
         // Terminal-independent commit sweep for CLI runners: a runner commits
         // silently inside its PTY (nothing parseable ever reaches the terminal),
         // so poll the repo itself and link what appeared since the baseline.
-        // Requires the baseline anchor — the time-window fallback is reserved
-        // for the end-of-run reconcile, where recordTaskCompletion's heuristics
-        // already bound the risk of over-linking.
+        // The active run supplies the local creation time boundary.
         if (terminalDriven && gitBaselineHead) {
           try {
             await reconcileTaskCommits(this, executorId, taskId, {
               baselineHead: gitBaselineHead,
+              startedAt: getTaskCommitRun(this, executorId)?.startedAt,
               label: 'MidRunSweep',
             });
           } catch {
@@ -1974,6 +1872,11 @@ export const tasksMethods = {
         // executor makes — the only detection that works for CLI runners, whose
         // git activity happens silently inside their PTY.
         gitBaselineHead = await snapshotGitBaseline(this.executionManager, executorId);
+        beginTaskCommitRun(this, executorId, {
+          taskId: task.id,
+          baselineHead: gitBaselineHead,
+          startedAt: executionStartedAt,
+        });
 
         // A Stop received during workspace preparation cancels prompt injection.
         if (getTaskSignal(task.id, 'stopped')) return;
@@ -2131,7 +2034,7 @@ export const tasksMethods = {
           // ensure's fetch+reset pulled into the clone's history).
           await reconcileTaskCommits(this, executorId, task.id, {
             baselineHead: gitBaselineHead,
-            startedAt: gitBaselineHead ? null : executionStartedAt,
+            startedAt: executionStartedAt,
             label: 'ResumeEndReconcile',
           });
         } catch (reconcileErr: any) {
@@ -2139,6 +2042,7 @@ export const tasksMethods = {
             `🔗 [TaskLoop] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr?.message}`
           );
         }
+        endTaskCommitRun(this, executorId, task.id);
         this._emit('agent:stream:end', { agentId: executorId });
         this._emit('agent:updated', this._sanitize(executor));
       }

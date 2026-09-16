@@ -4,7 +4,7 @@ import { toExecutionToolCall, type NativeToolCall } from '../nativeTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import {
   saveAgent,
-  saveTaskToDb,
+  updateTaskFields,
   getTaskByIdPrefix,
   getTaskByActionRunningAgent,
   getTasksByAssignee,
@@ -14,7 +14,7 @@ import {
 import { setTaskSignal } from './tasks.js';
 import { checkToolHooks } from '../toolHooks.js';
 import { restrictedToolRefusal } from '../security/externalRunProfile.js';
-import { _detectCommitHashes } from './tools/commitDetection.js';
+import { getTaskCommitRun, reconcileTaskCommits } from './tools/gitReconcile.js';
 import { HANDLERS, appendTaskNote, HandlerCtx } from './tools/handlers.js';
 import { enrichAssignee } from '../taskMutations.js';
 
@@ -133,16 +133,7 @@ export const toolsMethods = {
     // ownerAgentId was captured while resolving inProgressTask above.
 
     // Link commits if provided (format: "hash:message, hash:message").
-    // Commit linking runs in ALL modes — including the workflow action modes
-    // (decide/execute) that CLI runners complete through. A CLI runner commits
-    // inside its own interactive PTY, so its `git commit`/`git push` never flows
-    // through the run_command tool and the real-time detector in
-    // commitDetection.ts never sees it. The runner then finishes by calling
-    // update_task while actionRunningMode is still set (fireSignal === false), so
-    // gating commit linking on fireSignal stranded EVERY CLI-runner commit — it
-    // was associated with neither detection path. Decoupling it here is safe:
-    // addTaskCommit is idempotent (prefix-aware dedup), so re-linking is a no-op.
-    let linkedCommitCount = 0;
+    // Explicit associations are accepted in every workflow mode.
     if (commitsArg) {
       const commitEntries = commitsArg
         .split(/,\s*(?=[a-f0-9])/)
@@ -154,7 +145,6 @@ export const toolsMethods = {
         const msg = colonIdx > 0 ? entry.slice(colonIdx + 1).trim() : '';
         if (hash && /^[a-f0-9]{7,40}$/.test(hash)) {
           await this.addTaskCommit(ownerAgentId, inProgressTask.id, hash, msg);
-          linkedCommitCount++;
           console.log(
             `🔗 [UpdateTask] Linked commit ${hash.slice(0, 7)} to task ${inProgressTask.id}`
           );
@@ -162,94 +152,18 @@ export const toolsMethods = {
       }
     }
 
-    // Auto-detect commits from git environment when none were explicitly provided
-    // and the task has no existing commits. This catches cases where:
-    // - The agent forgot to pass commit hashes
-    // - The execution was retried and commits were made in a previous round
-    // - The auto-detection during run_command(git push) failed
-    // Terminal-independent detection: this queries the real git repo via
-    // `git log` (not the terminal output), so it catches commits a CLI runner
-    // made silently inside its PTY that never rendered as parseable text.
-    const existingCommits = inProgressTask.commits || [];
-    if (
-      linkedCommitCount === 0 &&
-      existingCommits.length === 0 &&
-      this.executionManager?.hasEnvironment(agentId)
-    ) {
+    // All automatic attribution uses the same evidence and the exact run/task.
+    // Explicit links remain available when no execution context survived (e.g.
+    // after a restart), or when work was committed in a secondary repository.
+    const commitRun = getTaskCommitRun(this, agentId);
+    if (commitRun?.taskId === inProgressTask.id) {
       try {
-        // Use %aI (ISO author date) so we can filter by task time window in code
-        // and avoid relying solely on git's --since (which is fuzzy on edge cases).
-        const taskStartedAt = inProgressTask.startedAt;
-        const sinceArg = taskStartedAt
-          ? ` --since="${new Date(new Date(taskStartedAt).getTime() - 5 * 60000).toISOString()}"`
-          : '';
-        const logCmd = `git log --format="%H %aI %s"${sinceArg} -20`;
-        const logResult = await this.executionManager.exec(agentId, logCmd, { timeout: 10000 });
-        const logOutput = ((logResult.stdout || '') + (logResult.stderr || '')).trim();
-        if (logOutput) {
-          const agentNameLower = (agent.name || '').toLowerCase();
-          const startedAtMs = taskStartedAt ? new Date(taskStartedAt).getTime() : 0;
-          type Entry = { hash: string; date: string; msg: string; ts: number };
-          const entries: Entry[] = [];
-          for (const line of logOutput.split('\n')) {
-            const m = line.match(/^([a-f0-9]{40})\s+(\S+)\s+(.*)/);
-            if (!m) continue;
-            const ts = new Date(m[2]).getTime() || 0;
-            entries.push({ hash: m[1], date: m[2], msg: m[3], ts });
-          }
-
-          // Pass 1: name-based match (existing convention, highest confidence)
-          for (const e of entries) {
-            if (agentNameLower && e.msg.toLowerCase().includes(agentNameLower)) {
-              const linked = await this.addTaskCommit(
-                ownerAgentId,
-                inProgressTask.id,
-                e.hash,
-                e.msg
-              );
-              if (linked) {
-                linkedCommitCount++;
-                console.log(
-                  `🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-name): "${e.msg.slice(0, 60)}"`
-                );
-              }
-            }
-          }
-
-          // Pass 2: date-only fallback. If the agent didn't include its
-          // name in the commit message, link every commit authored at-or-
-          // after task.startedAt that does NOT mention a different agent
-          // (to avoid stealing commits in shared-repo multi-agent setups).
-          if (linkedCommitCount === 0 && startedAtMs > 0) {
-            const otherAgentNames = [...this.agents.values()]
-              .filter((a: any) => a.id !== agentId && a.name)
-              .map((a: any) => (a.name as string).toLowerCase());
-            for (const e of entries) {
-              if (e.ts < startedAtMs) continue;
-              const msgLower = e.msg.toLowerCase();
-              if (otherAgentNames.some(n => msgLower.includes(n))) continue;
-              const linked = await this.addTaskCommit(
-                ownerAgentId,
-                inProgressTask.id,
-                e.hash,
-                e.msg
-              );
-              if (linked) {
-                linkedCommitCount++;
-                console.log(
-                  `🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-date): "${e.msg.slice(0, 60)}"`
-                );
-              }
-            }
-          }
-        }
-        if (linkedCommitCount === 0) {
-          console.log(
-            `ℹ️ [UpdateTask] No auto-detectable commits for task ${inProgressTask.id} (agent="${agent.name}")`
-          );
-        }
-      } catch (e: any) {
-        console.warn(`⚠️ [UpdateTask] Auto-detect commits failed: ${e.message}`);
+        await reconcileTaskCommits(this, agentId, inProgressTask.id, {
+          ...commitRun,
+          label: 'UpdateTask',
+        });
+      } catch (error: any) {
+        console.warn(`⚠️ [UpdateTask] Commit reconcile failed: ${error.message}`);
       }
     }
 
@@ -263,7 +177,13 @@ export const toolsMethods = {
     // would never reach the DB.
     if (comment && comment.trim()) {
       try {
-        await saveTaskToDb({ ...inProgressTask, agentId: ownerAgentId });
+        // Persist only the comment fields: the task snapshot predates commit
+        // linking, so saving it wholesale would erase the newly linked commits.
+        const updated = await updateTaskFields(inProgressTask.id, {
+          text: inProgressTask.text,
+          history: inProgressTask.history,
+        });
+        if (updated) inProgressTask = updated;
       } catch (err: any) {
         console.warn(
           `⚠️ [UpdateTask] Failed to persist appended comment for task ${inProgressTask.id}: ${err?.message || err}`
@@ -456,6 +376,7 @@ export const toolsMethods = {
             console.log(`🛡️ ${hookResult.message}`);
           }
 
+          const commandCommitRun = getTaskCommitRun(this, agentId);
           const result = await executeTool(
             call.tool,
             call.args,
@@ -477,58 +398,20 @@ export const toolsMethods = {
             }
           }
 
-          // Auto-capture commit hashes from git commands and link to task
-          if (call.tool === 'run_command' && result.success) {
-            const detectedCommits = await _detectCommitHashes(
-              call,
-              result,
-              this.executionManager,
-              agentId
-            );
-
-            if (detectedCommits.length > 0) {
-              let targetTask: any = null;
-              let ownerAgentId = agentId;
-
-              // Auto-detect active task
-              const found = await this._findTaskForCommitLink(agentId);
-              targetTask = found?.task || null;
-              ownerAgentId = found?.ownerAgentId || agentId;
-
-              if (!targetTask) {
-                const taskText =
-                  agent.currentTask || detectedCommits[0].msg || 'Commit without task';
-                const created = await this.addTask(agentId, taskText, {
-                  type: 'auto',
-                  reason: 'commit-link',
-                });
-                if (created) {
-                  targetTask = created;
-                  ownerAgentId = agentId;
-                  console.log(
-                    `🔗 [Commit] Auto-created task "${taskText.slice(0, 50)}" for commit linking`
-                  );
-                }
-              }
-
-              if (targetTask) {
-                let linkedCount = 0;
-                for (const { hash, msg } of detectedCommits) {
-                  const linked = await this.addTaskCommit(ownerAgentId, targetTask.id, hash, msg);
-                  if (linked) linkedCount++;
-                }
-                if (linkedCount > 0) {
-                  const hashPreview = detectedCommits.map(c => c.hash.slice(0, 7)).join(', ');
-                  console.log(
-                    `🔗 [Commit] Auto-linked ${linkedCount} commit(s) [${hashPreview}] to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`
-                  );
-                  result.result = `${result.result}\n\n🔗 ${linkedCount} commit(s) automatically linked to task "${targetTask.text?.slice(0, 60)}"`;
-                }
-              } else {
-                console.warn(
-                  `⚠️  [Commit] Agent "${agent.name}" committed but no task found to link`
-                );
-              }
+          // A failed command may still have created commits (commit && push).
+          // Never associate push tips or terminal text with a guessed task.
+          if (
+            call.tool === 'run_command' &&
+            commandCommitRun &&
+            /\bgit\b/.test(call.args[0] || '')
+          ) {
+            try {
+              await reconcileTaskCommits(this, agentId, commandCommitRun.taskId, {
+                ...commandCommitRun,
+                label: 'RunCommand',
+              });
+            } catch (error: any) {
+              console.warn(`⚠️ [Commit] Command reconcile failed: ${error.message}`);
             }
           }
 

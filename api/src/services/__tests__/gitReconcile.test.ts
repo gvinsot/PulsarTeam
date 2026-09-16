@@ -1,25 +1,19 @@
-// Terminal-independent commit/push detection for CLI runners (claude code,
-// aider, …). A CLI runner commits inside its own interactive PTY: nothing
-// flows through @run_command, and its TUI often doesn't render parseable git
-// output at all. gitReconcile.ts therefore queries the repo itself:
-//   - snapshotGitBaseline() captures HEAD before the run,
-//   - detectCommitsSinceBaseline() diffs baseline..HEAD with pushed flags,
-//   - reconcileTaskCommits() links the result to the task (idempotent) and
-//     upgrades pushed flags once the runner pushes.
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-
 import { makeTaskDbFake } from './helpers/taskDbFake.js';
+import { gitFixture } from './helpers/gitFixture.js';
+
 const realDb = await import('../database.js');
 const { rows, exports: taskDbFake } = makeTaskDbFake();
 mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
-
 const { AgentManager } = await import('../agentManager.js');
 const {
   snapshotGitBaseline,
   detectCommitsSinceBaseline,
   reconcileTaskCommits,
-  locallyCreatedCommits,
+  beginTaskCommitRun,
+  getTaskCommitRun,
+  endTaskCommitRun,
 } = await import('../agentManager/tools/gitReconcile.js');
 
 const mockIo = {
@@ -28,394 +22,219 @@ const mockIo = {
     return { emit() {} };
   },
 };
+const HASH = 'a'.repeat(40);
+const start = '2026-01-01T00:00:00Z';
+const event = `${HASH}\tHEAD@{1767225601}\tcommit: feature\tfeature`;
 
-const HASH_A = 'a'.repeat(40);
-const HASH_B = 'b'.repeat(40);
-const BASELINE = 'c'.repeat(40);
-
-/** Fake execution env: scripted stdout per command matcher. */
-function makeExecEnv(responses: Array<{ match: RegExp; stdout: string }>) {
-  const calls: string[] = [];
+function fakeEnv(reflog: string, unpushed: unknown = '') {
   return {
-    calls,
-    env: {
-      hasEnvironment: () => true,
-      async exec(_id: string, command: string) {
-        calls.push(command);
-        const hit = responses.find(r => r.match.test(command));
-        return { stdout: hit ? hit.stdout : '', stderr: '' };
-      },
+    async exec(_id: string, command: string) {
+      if (command.includes('reflog')) return { stdout: reflog };
+      if (command.includes('--not --remotes')) {
+        if (unpushed instanceof Error) throw unpushed;
+        if (typeof unpushed === 'object') return unpushed;
+        return { stdout: unpushed };
+      }
+      return { stdout: HASH };
     },
   };
 }
 
-async function setup() {
-  rows.clear();
-  const mgr = new AgentManager(mockIo, null, null, null) as any;
-  const created = await mgr.create({ name: 'CLI Runner', role: 'developer' });
-  const raw = mgr.agents.get(created.id);
-  raw.status = 'idle';
-  raw.conversationHistory = [];
-  return { mgr, agentId: created.id as string };
-}
-
-function seedTask(agentId: string, overrides: any = {}) {
-  const task = {
-    id: 'task-reconcile-1',
-    text: 'Implement feature',
-    status: 'execute',
-    boardId: 'board-1',
-    agentId,
-    assignee: agentId,
-    startedAt: new Date(Date.now() - 120000).toISOString(),
-    commits: [],
-    ...overrides,
-  };
-  rows.set(task.id, task);
-  return task;
-}
-
-test('snapshotGitBaseline returns HEAD hash, null on non-repo output', async () => {
-  const { env } = makeExecEnv([{ match: /rev-parse HEAD/, stdout: `${BASELINE}\n` }]);
-  assert.equal(await snapshotGitBaseline(env, 'agent-1'), BASELINE);
-
-  const { env: badEnv } = makeExecEnv([
-    { match: /rev-parse HEAD/, stdout: 'fatal: not a git repository\n' },
-  ]);
-  assert.equal(await snapshotGitBaseline(badEnv, 'agent-1'), null);
-
-  assert.equal(await snapshotGitBaseline({ hasEnvironment: () => false }, 'agent-1'), null);
-});
-
-test('detectCommitsSinceBaseline diffs baseline..HEAD and flags unpushed commits', async () => {
-  const { env, calls } = makeExecEnv([
-    { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n${HASH_B} fix: second\n` },
-    // HASH_B is on a local branch only — never pushed.
-    { match: /--branches --not --remotes/, stdout: `${HASH_B}\n` },
-  ]);
-
-  const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
-  assert.equal(commits.length, 2);
-  assert.ok(
-    calls.some(c => c.includes(`${BASELINE}..HEAD`)),
-    'should use the exact rev-range'
+test('snapshot captures HEAD and rejects failed commands even with recoverable output', async () => {
+  assert.equal(await snapshotGitBaseline(fakeEnv(''), 'agent'), HASH);
+  assert.equal(
+    await snapshotGitBaseline({ exec: async () => ({ stdout: HASH, exitCode: 1 }) }, 'agent'),
+    null
   );
-  const byHash = Object.fromEntries(commits.map(c => [c.hash, c]));
-  assert.equal(byHash[HASH_A].pushed, true);
-  assert.equal(byHash[HASH_B].pushed, false);
-  assert.equal(byHash[HASH_A].msg, 'feat: first');
+  assert.equal(
+    await snapshotGitBaseline(
+      {
+        exec: async () => {
+          throw Object.assign(new Error('failed'), { stdout: HASH });
+        },
+      },
+      'agent'
+    ),
+    null
+  );
 });
 
-test('detectCommitsSinceBaseline falls back to --since when no baseline', async () => {
-  const startedAt = new Date(Date.now() - 60000).toISOString();
-  const { env, calls } = makeExecEnv([
-    { match: /git log .*--since/, stdout: `${HASH_A} feat: windowed\n` },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]);
+test('pulled commits with the same identity and agent name are never linked', async t => {
+  const f = gitFixture(t);
+  f.git(f.peer, 'commit', '--allow-empty', '-m', 'Shared Agent: unrelated task');
+  f.git(f.peer, 'push');
+  f.git(f.repo, 'pull', '--ff-only');
+  assert.deepEqual(await detectCommitsSinceBaseline(f.executionManager, 'agent', f), []);
+  // Pushing an imported tip is still not evidence of local creation.
+  f.git(f.repo, 'push', 'origin', 'HEAD:other-branch');
+  assert.deepEqual(await detectCommitsSinceBaseline(f.executionManager, 'agent', f), []);
+});
 
-  const commits = await detectCommitsSinceBaseline(env, 'agent-1', { startedAt });
+test('mixed local and pulled history links only local commits and refreshes pushed state', async t => {
+  const f = gitFixture(t);
+  f.git(f.peer, 'commit', '--allow-empty', '-m', 'unrelated');
+  f.git(f.peer, 'push');
+  f.git(f.repo, 'pull', '--ff-only');
+  f.git(f.repo, 'commit', '--allow-empty', '-m', 'task implementation');
+  const hash = f.git(f.repo, 'rev-parse', 'HEAD');
+  assert.deepEqual(await detectCommitsSinceBaseline(f.executionManager, 'agent', f), [
+    { hash, msg: 'task implementation', pushed: false },
+  ]);
+  f.git(f.repo, 'push');
+  assert.deepEqual(await detectCommitsSinceBaseline(f.executionManager, 'agent', f), [
+    { hash, msg: 'task implementation', pushed: true },
+  ]);
+});
+
+test('amend excludes abandoned versions; a subsequent task gets no previous commits', async t => {
+  const f = gitFixture(t);
+  f.git(f.repo, 'commit', '--allow-empty', '-m', 'first version');
+  f.git(f.repo, 'commit', '--amend', '--allow-empty', '-m', 'final version');
+  const hash = f.git(f.repo, 'rev-parse', 'HEAD');
+  assert.deepEqual(await detectCommitsSinceBaseline(f.executionManager, 'agent', f), [
+    { hash, msg: 'final version', pushed: false },
+  ]);
+  assert.deepEqual(
+    await detectCommitsSinceBaseline(f.executionManager, 'agent', {
+      startedAt: new Date().toISOString(),
+      baselineHead: hash,
+    }),
+    []
+  );
+});
+
+test('detached HEAD commits are correctly identified as unpushed', async t => {
+  const f = gitFixture(t);
+  f.git(f.repo, 'checkout', '--detach');
+  f.git(f.repo, 'commit', '--allow-empty', '-m', 'detached work');
+  const commits = await detectCommitsSinceBaseline(f.executionManager, 'agent', f);
   assert.equal(commits.length, 1);
-  assert.ok(
-    calls.some(c => c.includes('--since')),
-    'should query by time window'
+  assert.equal(commits[0].pushed, false);
+});
+
+test('creation events use local time even when the author date is old', async t => {
+  const f = gitFixture(t);
+  f.git(f.repo, 'commit', '--allow-empty', '--date=2000-01-01T00:00:00Z', '-m', 'old author date');
+  assert.equal((await detectCommitsSinceBaseline(f.executionManager, 'agent', f)).length, 1);
+});
+
+test('missing baseline uses local evidence, never an unfiltered recent history scan', async () => {
+  assert.equal(
+    (await detectCommitsSinceBaseline(fakeEnv(event), 'agent', { startedAt: start })).length,
+    1
   );
-
-  // Neither anchor → no query at all.
-  const { env: idleEnv, calls: idleCalls } = makeExecEnv([]);
-  assert.deepEqual(await detectCommitsSinceBaseline(idleEnv, 'agent-1', {}), []);
-  assert.equal(idleCalls.length, 0);
-});
-
-test('reconcileTaskCommits links new commits with pushed flags, idempotently', async () => {
-  const { mgr, agentId } = await setup();
-  const task = seedTask(agentId);
-
-  const { env } = makeExecEnv([
-    { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n${HASH_B} fix: second\n` },
-    { match: /--branches --not --remotes/, stdout: `${HASH_B}\n` },
-  ]);
-  mgr.executionManager = env;
-
-  const fresh = await reconcileTaskCommits(mgr, agentId, task.id, { baselineHead: BASELINE });
-  assert.equal(fresh, 2);
-  const linked = (rows.get(task.id) as any).commits;
-  assert.equal(linked.length, 2);
-  const byHash = Object.fromEntries(linked.map((c: any) => [c.hash, c]));
-  assert.equal(byHash[HASH_A].pushed, true);
-  assert.equal(byHash[HASH_B].pushed, false);
-
-  // Second sweep (same repo state): nothing new, no duplicates.
-  const again = await reconcileTaskCommits(mgr, agentId, task.id, { baselineHead: BASELINE });
-  assert.equal(again, 0);
-  assert.equal((rows.get(task.id) as any).commits.length, 2);
-});
-
-test('reconcileTaskCommits upgrades the pushed flag once the runner pushed', async () => {
-  const { mgr, agentId } = await setup();
-  const task = seedTask(agentId, { id: 'task-reconcile-2' });
-
-  // Mid-run sweep: commit exists but is local-only.
-  mgr.executionManager = makeExecEnv([
-    { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: wip\n` },
-    { match: /--branches --not --remotes/, stdout: `${HASH_A}\n` },
-  ]).env;
-  await reconcileTaskCommits(mgr, agentId, task.id, { baselineHead: BASELINE });
-  assert.equal((rows.get(task.id) as any).commits[0].pushed, false);
-
-  // End-of-run reconcile: the runner has pushed — unpushed set is now empty.
-  mgr.executionManager = makeExecEnv([
-    { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: wip\n` },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]).env;
-  const fresh = await reconcileTaskCommits(mgr, agentId, task.id, { baselineHead: BASELINE });
-  assert.equal(fresh, 0, 'no new commit — only the flag changes');
-  const linked = (rows.get(task.id) as any).commits;
-  assert.equal(linked.length, 1);
-  assert.equal(linked[0].pushed, true);
-});
-
-// ── The committer filter ────────────────────────────────────────────────────
-// `baseline..HEAD` answers "what is new in this clone", which is NOT the same
-// as "what did the agent write": ensureProject fetch/resets the clone on every
-// chat and every terminal attach, and the runner pulls too, so commits that
-// merely ARRIVED sit in the range. Observed in prod: a task whose text was
-// literally "test task, do nothing" was credited with five commits its human
-// owner had pushed from his own machine the day before.
-
-const AGENT_EMAIL = 'agent@pulsarteam.local';
-const HUMAN_HASH = 'd'.repeat(40);
-
-test('detection asks only for the commits this clone committed', async () => {
-  const { env, calls } = makeExecEnv([
-    { match: /git config user\.email/, stdout: `${AGENT_EMAIL}\n` },
-    // The fake answers the FILTERED query only, the way git would: a range
-    // holding nothing but pulled human commits comes back empty.
-    { match: /git log .*\.\.HEAD.*--committer=/, stdout: '' },
-    { match: /git log .*\.\.HEAD/, stdout: `${HUMAN_HASH} someone else's work\n` },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]);
-
-  const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
-
-  assert.deepEqual(commits, [], 'pulled commits must not be credited to the run');
-  const rangeCall = calls.find(c => c.includes(`${BASELINE}..HEAD`));
-  assert.ok(
-    rangeCall?.includes(`--committer='${AGENT_EMAIL}'`),
-    `the range query must be scoped to the clone's identity, got: ${rangeCall}`
+  assert.deepEqual(
+    await detectCommitsSinceBaseline(fakeEnv(''), 'agent', { startedAt: start }),
+    []
+  );
+  assert.deepEqual(await detectCommitsSinceBaseline(fakeEnv(event), 'agent', {}), []);
+  assert.deepEqual(
+    await detectCommitsSinceBaseline(fakeEnv(event), 'agent', { startedAt: 'invalid' }),
+    []
+  );
+  assert.deepEqual(
+    await detectCommitsSinceBaseline(fakeEnv(event), 'agent', { startedAt: '2026-01-02' }),
+    []
   );
 });
 
-test('the time-window fallback is scoped to the same identity', async () => {
-  const { env, calls } = makeExecEnv([
-    { match: /git config user\.email/, stdout: `${AGENT_EMAIL}\n` },
-    { match: /git log .*--since/, stdout: `${HASH_A} feat: windowed\n` },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]);
-
-  await detectCommitsSinceBaseline(env, 'agent-1', {
-    startedAt: new Date(Date.now() - 60000).toISOString(),
-  });
-
-  const windowCall = calls.find(c => c.includes('--since'));
-  assert.ok(windowCall?.includes(`--committer='${AGENT_EMAIL}'`), windowCall);
-});
-
-test('an unknown identity links everything rather than nothing', async () => {
-  // A clone with no user.email must keep the old, over-linking behaviour:
-  // filtering on an empty identity would match nothing and silently lose every
-  // agent commit — a worse failure than the one being fixed.
-  for (const stdout of ['', 'fatal: not in a git directory\n']) {
-    const { env, calls } = makeExecEnv([
-      { match: /git config user\.email/, stdout },
-      { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n` },
-      { match: /--branches --not --remotes/, stdout: '' },
-    ]);
-
-    const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
-
-    assert.equal(commits.length, 1);
-    assert.ok(
-      !calls.find(c => c.includes(`${BASELINE}..HEAD`))?.includes('--committer'),
-      'no identity → no filter'
+test('pull, reset, checkout and clone events are not local creation', async () => {
+  for (const action of [
+    'pull: Fast-forward',
+    'reset: moving to HEAD',
+    'checkout: moving from main to other',
+    'clone: from remote',
+  ]) {
+    const reflog = event.replace('commit: feature', action);
+    assert.deepEqual(
+      await detectCommitsSinceBaseline(fakeEnv(reflog), 'agent', { startedAt: start }),
+      []
     );
   }
 });
 
-// ── The reflog gate ─────────────────────────────────────────────────────────
-// The committer filter separates agents from humans, never agent A's task from
-// agent B's: every runner clone commits under the same GIT_USER_EMAIL. Agents
-// are instructed to sync before working, so agent A's clone pulls agent B's
-// commits straight into `baseline..HEAD`, where they match the committer filter
-// and used to be linked to whatever task A was running. The reflog records HOW
-// each commit entered the clone, which the range cannot fake.
-
-const OTHER_AGENT_HASH = 'e'.repeat(40);
-
-/** Reflog as `git reflog show --no-abbrev --format="%H %gs"` prints it. */
-function reflog(entries: Array<[string, string]>): string {
-  return entries.map(([hash, reason]) => `${hash} ${reason}`).join('\n') + '\n';
-}
-
-test('locallyCreatedCommits keeps creating reflog verbs and drops HEAD moves', async () => {
-  const { env } = makeExecEnv([
-    {
-      match: /git reflog show/,
-      stdout: reflog([
-        [HASH_A, 'commit: feat: mine'],
-        [HASH_B, 'commit (amend): fix: mine, amended'],
-        ['1'.repeat(40), 'rebase (pick): replayed locally'],
-        ['2'.repeat(40), "merge origin/main: Merge made by the 'ort' strategy."],
-        ['3'.repeat(40), 'cherry-pick: picked here'],
-        ['4'.repeat(40), "commit (merge): Merge branch 'main' of github.com/x/y"],
-        ['5'.repeat(40), 'pull -q (pick): my work, replayed onto upstream'],
-        [OTHER_AGENT_HASH, 'pull: Fast-forward'],
-        ['6'.repeat(40), 'merge origin/main: Fast-forward'],
-        ['7'.repeat(40), 'reset: moving to origin/main'],
-        ['8'.repeat(40), 'checkout: moving from main to feature'],
-        ['9'.repeat(40), 'fetch origin: storing head'],
-        ['0'.repeat(40), 'rebase (finish): returning to refs/heads/main'],
-        ['ab'.repeat(20), 'clone: from github.com/x/y'],
-        // git labels sequencer phases with the command actually typed, so a
-        // rebasing pull checks out the UPSTREAM tip under a `pull …` verb.
-        ['ac'.repeat(20), 'pull --rebase (start): checkout acacacac'],
-        ['ad'.repeat(20), 'rebase -i (start): checkout adadadad'],
-      ]),
-    },
-  ]);
-
-  const created = await locallyCreatedCommits(env, 'agent-1');
-  assert.ok(created);
-  assert.deepEqual(
-    [...created].sort(),
-    [
-      HASH_A,
-      HASH_B,
-      '1'.repeat(40),
-      '2'.repeat(40),
-      '3'.repeat(40),
-      '4'.repeat(40),
-      '5'.repeat(40),
-    ].sort()
-  );
-});
-
-test('a commit subject mentioning a phase or fast-forward is still kept', async () => {
-  // Only the operation half of the reflog subject may decide; the detail half
-  // is an arbitrary commit message.
-  const { env } = makeExecEnv([
-    {
-      match: /git reflog show/,
-      stdout: reflog([
-        [HASH_A, 'commit: fix(start): handle Fast-forward pulls'],
-        [HASH_B, 'commit: docs: explain rebase (finish)'],
-      ]),
-    },
-  ]);
-
-  const created = await locallyCreatedCommits(env, 'agent-1');
-  assert.deepEqual([...(created as Set<string>)].sort(), [HASH_A, HASH_B].sort());
-});
-
-test('a commit pulled from another agent is not credited to this run', async () => {
-  const { env } = makeExecEnv([
-    { match: /git config user\.email/, stdout: `${AGENT_EMAIL}\n` },
-    // Both commits carry the shared agent identity, so the committer filter
-    // lets them both through — only the reflog can tell them apart.
-    {
-      match: /git log .*\.\.HEAD/,
-      stdout: `${HASH_A} feat: written by this run\n${OTHER_AGENT_HASH} chore: another agent's task\n`,
-    },
-    {
-      match: /git reflog show/,
-      stdout: reflog([
-        [HASH_A, 'commit: feat: written by this run'],
-        [OTHER_AGENT_HASH, 'pull: Fast-forward'],
-      ]),
-    },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]);
-
-  const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
-  assert.deepEqual(
-    commits.map(c => c.hash),
-    [HASH_A]
-  );
-});
-
-test('the reflog gate also guards the time-window fallback', async () => {
-  const { env } = makeExecEnv([
-    { match: /git log .*--since/, stdout: `${HASH_A} mine\n${OTHER_AGENT_HASH} theirs\n` },
-    {
-      match: /git reflog show/,
-      stdout: reflog([
-        [HASH_A, 'commit: mine'],
-        [OTHER_AGENT_HASH, 'pull origin main: Fast-forward'],
-      ]),
-    },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]);
-
-  const commits = await detectCommitsSinceBaseline(env, 'agent-1', {
-    startedAt: new Date(Date.now() - 60000).toISOString(),
-  });
-  assert.deepEqual(
-    commits.map(c => c.hash),
-    [HASH_A]
-  );
-});
-
-test('an unreadable reflog degrades to the previous behaviour, not to zero links', async () => {
-  for (const stdout of ['', 'fatal: not a git repository\n']) {
-    const { env } = makeExecEnv([
-      { match: /git reflog show/, stdout },
-      { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n` },
-      { match: /--branches --not --remotes/, stdout: '' },
-    ]);
-
-    assert.equal(await locallyCreatedCommits(env, 'agent-1'), null);
-    const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
-    assert.equal(commits.length, 1, 'unknown must not mean "created nothing"');
+test('Git failures leave push state unknown, including exceptions with stdout', async () => {
+  for (const failure of [
+    new Error('unavailable'),
+    Object.assign(new Error('failed'), { stdout: HASH }),
+    { stdout: '', exitCode: 1 },
+  ]) {
+    const commits = await detectCommitsSinceBaseline(fakeEnv(event, failure), 'agent', {
+      startedAt: start,
+    });
+    assert.equal(commits.length, 1);
+    assert.equal(commits[0].pushed, undefined);
   }
 });
 
-test('reconcileTaskCommits links only what the clone created', async () => {
-  const { mgr, agentId } = await setup();
-  const task = seedTask(agentId, { id: 'task-reconcile-3' });
-
-  mgr.executionManager = makeExecEnv([
-    {
-      match: /git log .*\.\.HEAD/,
-      stdout: `${HASH_A} feat: mine\n${OTHER_AGENT_HASH} chore: pulled in\n`,
-    },
-    {
-      match: /git reflog show/,
-      stdout: reflog([
-        [HASH_A, 'commit: feat: mine'],
-        [OTHER_AGENT_HASH, 'pull: Fast-forward'],
-      ]),
-    },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]).env;
-
-  const fresh = await reconcileTaskCommits(mgr, agentId, task.id, { baselineHead: BASELINE });
-  assert.equal(fresh, 1);
-  assert.deepEqual(
-    (rows.get(task.id) as any).commits.map((c: any) => c.hash),
-    [HASH_A]
-  );
+test('reconcile links once and updates pushed status on subsequent sweeps', async t => {
+  rows.clear();
+  const f = gitFixture(t);
+  const mgr = new AgentManager(mockIo, null, null, null) as any;
+  const agent = await mgr.create({ name: 'CLI Runner', role: 'developer' });
+  mgr.executionManager = f.executionManager;
+  rows.set('task', { id: 'task', agentId: agent.id, text: 'Implement', commits: [] });
+  f.git(f.repo, 'commit', '--allow-empty', '-m', 'implementation');
+  assert.equal(await reconcileTaskCommits(mgr, agent.id, 'task', f), 1);
+  assert.equal(rows.get('task').commits[0].pushed, false);
+  f.git(f.repo, 'push');
+  assert.equal(await reconcileTaskCommits(mgr, agent.id, 'task', f), 0);
+  assert.equal(rows.get('task').commits.length, 1);
+  assert.equal(rows.get('task').commits[0].pushed, true);
 });
 
-test('a hostile identity is treated as unknown, never spliced into the command', async () => {
-  const { env, calls } = makeExecEnv([
-    { match: /git config user\.email/, stdout: `x'; rm -rf /; echo '\n` },
-    { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n` },
-    { match: /--branches --not --remotes/, stdout: '' },
-  ]);
+test('run context is isolated by manager, agent and task and cleared at completion', () => {
+  const mgr = {},
+    otherMgr = {};
+  const run = { taskId: 'task', baselineHead: HASH, startedAt: start };
+  beginTaskCommitRun(mgr, 'agent', run);
+  assert.equal(getTaskCommitRun(mgr, 'agent'), run);
+  assert.equal(getTaskCommitRun(otherMgr, 'agent'), undefined);
+  assert.equal(getTaskCommitRun(mgr, 'other-agent'), undefined);
+  endTaskCommitRun(mgr, 'agent', 'other-task');
+  assert.equal(getTaskCommitRun(mgr, 'agent'), run);
+  endTaskCommitRun(mgr, 'agent', 'task');
+  assert.equal(getTaskCommitRun(mgr, 'agent'), undefined);
+});
 
-  await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
-
-  assert.ok(
-    calls.every(c => !c.includes('rm -rf')),
-    'a quote-bearing identity must be rejected, not quoted'
-  );
+test('sequencer creation phases survive while start, finish and fast-forward moves are rejected', async () => {
+  for (const action of [
+    'commit (merge): merged',
+    'commit (initial): initial',
+    'pull -q (pick): replayed',
+    'pull --rebase (pick): replayed',
+    'rebase -i (reword): rewritten',
+    'merge origin/main: Merge made by the ort strategy.',
+    'commit: fix(start): handle Fast-forward pulls',
+    'commit: Fast-forward documentation',
+    'commit: docs: explain rebase (finish)',
+  ]) {
+    assert.equal(
+      (
+        await detectCommitsSinceBaseline(
+          fakeEnv(event.replace('commit: feature', action)),
+          'agent',
+          { startedAt: start }
+        )
+      ).length,
+      1,
+      action
+    );
+  }
+  for (const action of [
+    'pull --rebase (start): checkout upstream',
+    'rebase -i (start): checkout upstream',
+    'pull (finish): returning to main',
+    'rebase (abort): returning to main',
+    'merge origin/main: Fast-forward',
+    'pull origin main: Fast-forward',
+  ]) {
+    assert.deepEqual(
+      await detectCommitsSinceBaseline(fakeEnv(event.replace('commit: feature', action)), 'agent', {
+        startedAt: start,
+      }),
+      [],
+      action
+    );
+  }
 });
