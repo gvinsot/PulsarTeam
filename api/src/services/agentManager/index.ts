@@ -687,82 +687,54 @@ export class AgentManager {
     return Array.from(this.llmConfigs.values());
   }
 
+  /**
+   * Price a turn from the agent's LLM config (USD per 1M tokens).
+   *
+   * Resolution order: the agent's resolved config → the config it references
+   * by id → any config for the same model → a Sonnet-ish 3/15 default. Split
+   * out of _recordUsage so the internal token-usage route (CLI runners report
+   * raw token counts, never a price) can bill terminal-driven turns the same
+   * way instead of writing $0 rows that make the budget screen read free.
+   */
+  _resolveUsageCost(agent: any, inputTokens: number, outputTokens: number): number {
+    const price = (perInput: number, perOutput: number) =>
+      (inputTokens / 1e6) * perInput + (outputTokens / 1e6) * perOutput;
+    const resolved = this.resolveLlmConfig(agent);
+    if (resolved.costPerInputToken != null && resolved.costPerOutputToken != null) {
+      return price(resolved.costPerInputToken, resolved.costPerOutputToken);
+    }
+    const configs = this._getLlmConfigsCached();
+    const byId = agent.llmConfigId
+      ? configs.find((c: any) => c.id === agent.llmConfigId)
+      : undefined;
+    const model = resolved.model || 'unknown';
+    const candidate =
+      byId && (byId.costPerInputToken != null || byId.costPerOutputToken != null)
+        ? byId
+        : configs.find(
+            (c: any) =>
+              c.model === model &&
+              (c.costPerInputToken != null || c.costPerOutputToken != null)
+          );
+    if (candidate) {
+      return price(candidate.costPerInputToken || 0, candidate.costPerOutputToken || 0);
+    }
+    return price(3, 15);
+  }
+
   _recordUsage(agent: any, inputTokens: number, outputTokens: number, contextTokens: number = 0) {
     if (!inputTokens && !outputTokens) return;
-    const userId = agent.ownerId || null;
     const resolved = this.resolveLlmConfig(agent);
-    const provider = resolved.configName || resolved.provider || 'unknown';
-    const model = resolved.model || 'unknown';
     try {
-      if (resolved.costPerInputToken != null && resolved.costPerOutputToken != null) {
-        const cost =
-          (inputTokens / 1e6) * resolved.costPerInputToken +
-          (outputTokens / 1e6) * resolved.costPerOutputToken;
-        recordTokenUsage(
-          agent.id,
-          agent.name,
-          provider,
-          model,
-          inputTokens,
-          outputTokens,
-          cost,
-          userId,
-          contextTokens
-        );
-        return;
-      }
-      const configs = this._getLlmConfigsCached();
-      if (agent.llmConfigId) {
-        const cfg = configs.find((c: any) => c.id === agent.llmConfigId);
-        if (cfg && (cfg.costPerInputToken != null || cfg.costPerOutputToken != null)) {
-          const cost =
-            (inputTokens / 1e6) * (cfg.costPerInputToken || 0) +
-            (outputTokens / 1e6) * (cfg.costPerOutputToken || 0);
-          recordTokenUsage(
-            agent.id,
-            agent.name,
-            provider,
-            model,
-            inputTokens,
-            outputTokens,
-            cost,
-            userId,
-            contextTokens
-          );
-          return;
-        }
-      }
-      const cfgByModel = configs.find((c: any) => c.model === model);
-      if (
-        cfgByModel &&
-        (cfgByModel.costPerInputToken != null || cfgByModel.costPerOutputToken != null)
-      ) {
-        const cost =
-          (inputTokens / 1e6) * (cfgByModel.costPerInputToken || 0) +
-          (outputTokens / 1e6) * (cfgByModel.costPerOutputToken || 0);
-        recordTokenUsage(
-          agent.id,
-          agent.name,
-          provider,
-          model,
-          inputTokens,
-          outputTokens,
-          cost,
-          userId,
-          contextTokens
-        );
-        return;
-      }
-      const cost = (inputTokens / 1e6) * 3 + (outputTokens / 1e6) * 15;
       recordTokenUsage(
         agent.id,
         agent.name,
-        provider,
-        model,
+        resolved.configName || resolved.provider || 'unknown',
+        resolved.model || 'unknown',
         inputTokens,
         outputTokens,
-        cost,
-        userId,
+        this._resolveUsageCost(agent, inputTokens, outputTokens),
+        agent.ownerId || null,
         contextTokens
       );
     } catch (err: any) {

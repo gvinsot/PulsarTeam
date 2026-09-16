@@ -30,7 +30,11 @@ JSON event shape emitted by `codex exec --json`:
   {"id":"...","msg":{"type":"agent_message_delta","delta":"..."}}
   {"id":"...","msg":{"type":"agent_message","message":"..."}}
   {"id":"...","msg":{"type":"exec_command_begin", ...}}
-  {"id":"...","msg":{"type":"token_count","input_tokens":...,"output_tokens":...}}
+  {"id":"...","msg":{"type":"token_count","info":{"total_token_usage":{...},
+                     "last_token_usage":{...}},"rate_limits":{...}}}
+      (legacy builds emitted the counts flat: {"type":"token_count",
+       "input_tokens":...,"output_tokens":...} — both are accepted, see
+       _accumulate_token_count)
   {"id":"...","msg":{"type":"task_complete","last_agent_message":"..."}}
 """
 
@@ -93,6 +97,86 @@ def _resolve_codex_model(llm_config: Optional[dict]) -> str:
     return resolve_model_spec(llm_config)
 
 
+# ── token_count accounting ──────────────────────────────────────────────────
+
+_TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
+_ZERO_TOKENS = {k: 0 for k in _TOKEN_KEYS}
+
+
+def _int(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _usage_totals(block) -> Optional[dict]:
+    """Flatten one codex `TokenUsage` block into our canonical token triple.
+
+    `input_tokens` already includes `cached_input_tokens` and `output_tokens`
+    already includes `reasoning_output_tokens` — both extra fields are
+    breakdowns of the totals, so adding them would double-count.
+    """
+    if not isinstance(block, dict):
+        return None
+    inp = _int(block.get("input_tokens"))
+    out = _int(block.get("output_tokens"))
+    if not inp and not out:
+        return None
+    return {
+        "input_tokens": inp,
+        "output_tokens": out,
+        "total_tokens": _int(block.get("total_tokens")) or (inp + out),
+    }
+
+
+def _accumulate_token_count(msg: dict, state: dict) -> None:
+    """Fold one codex `token_count` event into the run's running total
+    (stored under ``state["tokens"]``, read by the `task_complete` handler).
+
+    Two wire shapes exist:
+      • legacy (codex ≤ 0.2x):
+          {"type": "token_count", "input_tokens": N, "output_tokens": M}
+      • current:
+          {"type": "token_count",
+           "info": {"total_token_usage": {...}, "last_token_usage": {...},
+                    "model_context_window": N},
+           "rate_limits": {...}}
+
+    The move to the nested shape broke the flat reader silently — every field
+    it looked for was gone, so each codex turn was billed as 0 tokens and the
+    budget screen under-reported every codex agent.
+
+    `total_token_usage` is cumulative over the whole session, which after a
+    `codex exec resume` already covers turns billed by earlier runs. This run's
+    share is therefore (total − baseline), the baseline being taken from the
+    FIRST event seen: `first.total − first.last`. Deriving from the cumulative
+    counter rather than summing `last_token_usage` also makes the fold
+    idempotent — codex re-emits `token_count` on rate-limit refreshes with an
+    unchanged `info`, and a naive sum would double-count those.
+    """
+    info = msg.get("info")
+    if isinstance(info, dict):
+        total = _usage_totals(info.get("total_token_usage"))
+        if not total:
+            # Rate-limit-only refresh (no usage attached) — nothing to fold.
+            return
+        last = _usage_totals(info.get("last_token_usage")) or _ZERO_TOKENS
+        if "token_baseline" not in state:
+            state["token_baseline"] = {
+                k: max(0, total[k] - last.get(k, 0)) for k in _TOKEN_KEYS
+            }
+        baseline = state["token_baseline"]
+        state["tokens"] = {k: max(0, total[k] - baseline.get(k, 0)) for k in _TOKEN_KEYS}
+        return
+
+    flat = _usage_totals(msg)
+    if flat:
+        # Legacy shape: the counts are already this run's cumulative totals,
+        # so the last event seen wins.
+        state["tokens"] = flat
+
+
 class CodexBackend(CliBackend):
     name = "codex"
     cli_command = "codex"
@@ -101,18 +185,16 @@ class CodexBackend(CliBackend):
     supports_token_set = True      # accepts a full auth.json blob via /auth/token
     supports_interactive_terminal = True  # `codex` (no `exec` subcommand) is a real TUI
 
+    # `codex` records every turn's cumulative token usage in its rollout
+    # transcripts (~/.codex/sessions/**/rollout-*.jsonl), so terminal-driven
+    # turns can be billed by tailing those. See usage_watcher.
+    usage_watch_kind = "codex"
+
     # config.toml is where codex saves the model the user picks with `/model`,
     # plus their project trust decisions. auth.json is NOT listed — it has its
     # own owner-scoped store and creds watcher.
     persisted_config_files = (".codex/config.toml",)
 
-    def __init__(self):
-        super().__init__()
-        # Per-run token counts keyed by the JSONL submission id (the top-level
-        # "id" shared by token_count and task_complete within a run). The
-        # backend instance is a process-wide singleton serving every agent, so
-        # unkeyed state would cross-contaminate concurrent streams.
-        self._pending_tokens: dict[str, dict] = {}
 
     def _sanitize_persisted_config(self, name: str, raw: str) -> Optional[str]:
         """Persist config.toml without our managed MCP block: configure_codex_mcp
@@ -218,8 +300,10 @@ class CodexBackend(CliBackend):
             "creds_dedup_key": _creds_dedup_key,
         }
         # This prepare_interactive doesn't go through the CliBackend template,
-        # so the config-persistence watcher has to be wired in explicitly.
+        # so the config-persistence and token-accounting watchers have to be
+        # wired in explicitly.
         recipe.update(self._config_persistence_extras(agent_id, effective_user))
+        recipe.update(self._usage_watch_extras(agent_id, effective_user))
         return recipe
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
@@ -396,13 +480,18 @@ class CodexBackend(CliBackend):
         plain text (no JSON envelope). Return it directly."""
         return {"status": "success", "output": stdout.strip()}
 
-    def _parse_stream_event(self, line: str) -> Optional[dict]:
+    def _parse_stream_event(self, line: str, state: Optional[dict] = None) -> Optional[dict]:
         """Translate codex's JSONL event stream into the canonical event
         shape consumed by stream_events in cli_backend.
 
         Codex emits events of the form:
           {"id": "...", "msg": {"type": "...", ...}}
+
+        `state` is the per-run scratch dict from cli_backend.stream_events;
+        it carries the running token total until `task_complete`.
         """
+        if state is None:
+            state = {}
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -441,19 +530,11 @@ class CodexBackend(CliBackend):
             return {"type": "status", "content": f"Using tool: {tool}"}
 
         if mtype == "token_count":
-            # Hold onto last seen counts so the final `result` event can
-            # report them. Codex emits this multiple times during a run.
-            self._pending_tokens[str(event.get("id"))] = {
-                "input_tokens": int(msg.get("input_tokens") or 0),
-                "output_tokens": int(msg.get("output_tokens") or 0),
-                "total_tokens": int(msg.get("total_tokens") or 0)
-                                 or (int(msg.get("input_tokens") or 0)
-                                     + int(msg.get("output_tokens") or 0)),
-            }
+            _accumulate_token_count(msg, state)
             return None
 
         if mtype == "task_complete":
-            tokens = self._pending_tokens.pop(str(event.get("id")), {}) or {}
+            tokens = state.get("tokens") or {}
             final = msg.get("last_agent_message", "") or ""
             return {
                 "type": "result",

@@ -3,14 +3,15 @@ Usage reporter — pushes token-usage events from the runner-service back to
 team-api so the budget screen reflects the LLM consumption of CLI runner
 agents (claudecode, opencode, codex, hermes, openclaw).
 
-Three call sites feed this module:
-  - The CLI backend's run_sync/stream_events paths (covers /v1/chat/completions
-    when the API doesn't proxy the response itself — i.e. for non-claudecode
-    runners which the API never hits over HTTP today).
-  - The PTY shared session, which scans CLI TUI output for known
-    "Total cost: $X" / "input N, output M" patterns and reports best-effort.
-  - Backend-specific hooks that already parse usage events (e.g. codex
-    `token_count` JSONL events) can call report() directly.
+Two call sites feed this module:
+  - The PTY shared session's usage watcher (usage_watcher.py), which tails the
+    CLI's own session transcripts while an interactive terminal is alive. This
+    is the path that matters: a task assigned to a CLI-runner agent is injected
+    into that terminal, so no HTTP response ever carries its usage.
+  - The runner HTTP routes team-api does NOT itself account for — /execute,
+    /stream and /v1/completions (see RunnerBackend.report_usage_for_result).
+    `/v1/chat/completions` is deliberately excluded: team-api records the usage
+    block it returns, and reporting there too billed every turn twice.
 
 Reporting is fire-and-forget — delivery runs in a background task that
 retries transient failures (network errors, HTTP 5xx) with a short backoff

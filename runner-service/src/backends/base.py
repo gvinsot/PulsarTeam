@@ -119,6 +119,57 @@ class RunnerBackend:
         raise NotImplementedError(f"{self.name} backend does not support stream_events")
         yield  # pragma: no cover — make this an async generator
 
+    # ── Token accounting ──────────────────────────────────────────────────
+
+    async def report_usage_for_result(
+        self,
+        agent_id: Optional[str],
+        result: Optional[dict],
+    ) -> None:
+        """Push the token usage carried by a run_sync result / `result` stream
+        event to team-api's internal token-usage endpoint.
+
+        ONLY routes whose HTTP response team-api does not already account for
+        may call this. `/v1/chat/completions` is the route team-api actually
+        talks to, and it returns a `usage` block that the API records through
+        its own provider pipeline (with the agent's per-token pricing applied):
+        reporting there as well double-counts every turn and is what made the
+        budget screen over-report CLI-runner agents. The remaining routes
+        (`/execute`, `/stream`, `/v1/completions`) have no such accounting on
+        the caller side, so the runner reports for them.
+        """
+        if not agent_id or not isinstance(result, dict):
+            return
+        try:
+            in_toks = int(result.get("input_tokens") or 0)
+            out_toks = int(result.get("output_tokens") or 0)
+            cost = float(result.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            return
+        if not in_toks and not out_toks and not cost:
+            return
+
+        from config import RUNNER_MODEL, logger
+        from usage_reporter import report_usage
+
+        llm = {}
+        get_llm_config = getattr(self, "_get_llm_config", None)
+        if callable(get_llm_config):
+            llm = get_llm_config(agent_id) or {}
+        provider = (llm.get("provider") or self.name or "cli").strip()
+        model = (llm.get("model") or RUNNER_MODEL or "unknown").strip()
+        try:
+            await report_usage(
+                agent_id,
+                input_tokens=in_toks,
+                output_tokens=out_toks,
+                cost_usd=cost,
+                provider=provider,
+                model=model,
+            )
+        except Exception as e:
+            logger.debug(f"[Usage] reporter raised for agent {agent_id[:8]}: {e}")
+
     # ── Interactive terminal (TUI runners only) ───────────────────────────
 
     async def prepare_interactive(

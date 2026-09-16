@@ -7,11 +7,17 @@ import { asyncHandler } from '../lib/asyncHandler.js';
  * Internal endpoint that the runner-service uses to report token usage
  * consumed by CLI runners (claudecode, opencode, codex, hermes, openclaw).
  *
- * The non-interactive paths (/v1/chat/completions) already return usage in
- * the HTTP response and the API records it directly. This endpoint covers
- * the interactive PTY path, where the CLI tool burns tokens against its
- * own LLM and the API otherwise has no visibility — without this hook the
- * budget screen reads zero for terminal-driven CLI agents.
+ * /v1/chat/completions — the only runner route this API calls for a chat turn
+ * — returns usage in its HTTP response and is recorded by the provider
+ * pipeline in agentManager.chat. The runner must NOT report those turns here
+ * as well; doing so billed every CLI-runner turn twice.
+ *
+ * What this endpoint covers is the interactive PTY path (a task injected into
+ * the agent's shared terminal, which produces no HTTP usage block at all —
+ * the runner tails the CLI's own session transcripts, see usage_watcher.py)
+ * plus the runner routes nothing on this side accounts for (/execute,
+ * /stream, /v1/completions). Without it the budget screen reads zero for
+ * terminal-driven CLI agents.
  *
  * Auth is handled by authenticateCoderApiKey in index.ts.
  */
@@ -43,6 +49,15 @@ export function internalTokenUsageRoutes(agentManager: AgentManager) {
         const userId = agent.ownerId || null;
         const idempotencyKey = (body.idempotency_key || '').toString().trim() || null;
 
+        // CLI runners report raw token counts: the CLI bills against a
+        // subscription and never tells us a price. Falling back to the stored
+        // 0 would make every terminal-driven turn free on the budget screen,
+        // so price it from the agent's LLM config like the chat path does.
+        const price =
+          Number.isFinite(costUsd) && costUsd > 0
+            ? costUsd
+            : agentManager._resolveUsageCost(agent, inputTokens, outputTokens);
+
         const recorded = await recordTokenUsage(
           agent.id,
           agent.name,
@@ -50,7 +65,7 @@ export function internalTokenUsageRoutes(agentManager: AgentManager) {
           model,
           inputTokens,
           outputTokens,
-          Number.isFinite(costUsd) ? costUsd : 0,
+          price,
           userId,
           contextTokens,
           idempotencyKey
@@ -85,7 +100,7 @@ export function internalTokenUsageRoutes(agentManager: AgentManager) {
           recorded: true,
           input_tokens: inputTokens,
           output_tokens: outputTokens,
-          cost_usd: costUsd,
+          cost_usd: price,
         });
       } catch (err: any) {
         console.error('Failed to record CLI runner token usage:', err?.message);

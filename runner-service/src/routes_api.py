@@ -276,6 +276,10 @@ async def execute_message(
     )
     system_prompt = _append_context_file_note(request.system_prompt, context_paths)
     result = await BACKEND.run_sync(request.content, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id)
+    # team-api does not call this route, so nothing on the caller side records
+    # the spend — report it ourselves. (Deliberately NOT done for
+    # /v1/chat/completions; see RunnerBackend.report_usage_for_result.)
+    await BACKEND.report_usage_for_result(x_agent_id, result)
     return ExecutionResponse(**result)
 
 
@@ -658,6 +662,7 @@ async def stream_execution(
                     yield _sse({"status": "streaming", "output": event["content"]}, ensure_ascii=False)
                     has_streamed_text = True
                 elif event_type == "result":
+                    await BACKEND.report_usage_for_result(x_agent_id, event)
                     output = "" if has_streamed_text else event["content"]
                     yield _sse({
                         "status": "success",
@@ -888,6 +893,7 @@ async def openai_completions(
                     total_tokens = event.get("total_tokens", 0) or 0
                     input_tokens = event.get("input_tokens", 0) or 0
                     output_tokens_val = event.get("output_tokens", 0) or 0
+                    await BACKEND.report_usage_for_result(x_agent_id, event)
                     if not has_streamed_text:
                         for piece in chunk_text(event["content"]):
                             yield _sse(_completion_chunk(completion_id, created, model, piece))
@@ -911,6 +917,7 @@ async def openai_completions(
         return StreamingResponse(stream_openai_completion_response(), media_type="text/event-stream")
 
     result = await BACKEND.run_sync(request.prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id)
+    await BACKEND.report_usage_for_result(x_agent_id, result)
     content = result.get("output", "") if result.get("status") == "success" else (result.get("error") or "Execution failed")
 
     return {

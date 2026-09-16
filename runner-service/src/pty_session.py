@@ -505,6 +505,12 @@ class PtySession:
     # receives a {basename: text_content} dict of the watched files that exist.
     files_watch_paths: Optional[list] = None
     files_on_change: Optional[Callable[[dict], None]] = None
+    # Token accounting for terminal-driven turns. The backend recipe supplies
+    # {"kind": "claude"|"codex", "root": "<agent HOME>"} and we tail the CLI's
+    # own session transcripts, reporting the deltas to team-api. Without it a
+    # task injected into this PTY burns tokens that never reach the budget
+    # screen (nothing on the API side sees a `usage` block for a PTY turn).
+    usage_watch: Optional[dict] = None
 
     # Internals — filled in by start() and the background reader.
     master_fd: int = -1
@@ -547,6 +553,8 @@ class PtySession:
     _creds_sync_task: Optional[asyncio.Task] = None
     _files_watcher: Optional[_FileWatcher] = None
     _files_sync_task: Optional[asyncio.Task] = None
+    _usage_watcher: Optional[object] = None
+    _usage_watch_task: Optional[asyncio.Task] = None
     # First detected auth failure (decoded sentinel line). Latched until the
     # next prompt injection clears it (see clear_auth_error). Exposed in
     # status() so the API can fail the in-flight task instead of treating the
@@ -572,6 +580,9 @@ class PtySession:
             self._creds_watcher = self._build_creds_watcher()
         if self.files_watch_paths and self.files_on_change:
             self._files_watcher = self._build_files_watcher()
+        if self.usage_watch:
+            from usage_watcher import build_watcher
+            self._usage_watcher = build_watcher(self.agent_id, self.usage_watch)
 
     # ── Reverse-sync watchers (creds + config files) ──────────────────────
 
@@ -911,6 +922,13 @@ class PtySession:
             self._files_watcher.capture_baseline()
             self._files_sync_task = loop.create_task(
                 self._files_watcher.run(lambda: self._closed)
+            )
+        # Same baseline reasoning for token accounting: everything already in
+        # the CLI's transcripts predates this session and was billed then.
+        if self._usage_watcher is not None:
+            await asyncio.to_thread(self._usage_watcher.baseline)
+            self._usage_watch_task = loop.create_task(
+                self._usage_watcher.run(lambda: self._closed)
             )
         # A session spawned headlessly (POST /input, no WS viewer ever) must
         # still be idle-reaped — arm the timer now; attach() cancels it on the
@@ -1763,6 +1781,13 @@ class PtySession:
                 await self._creds_watcher.poll_once()
             except Exception as e:
                 logger.warning(f"[Terminal] final creds sync failed for {self.agent_id}: {e}")
+        # Same for token accounting: the last turn usually finishes between
+        # two watcher ticks, and its tokens would die with the session.
+        if self._usage_watcher is not None:
+            try:
+                await self._usage_watcher.poll_once()
+            except Exception as e:
+                logger.warning(f"[Usage] final usage scan failed for {self.agent_id}: {e}")
         self._closed = True
         self._cancel_idle_timer()
         if self._creds_sync_task and not self._creds_sync_task.done():
@@ -1771,6 +1796,9 @@ class PtySession:
         if self._files_sync_task and not self._files_sync_task.done():
             self._files_sync_task.cancel()
             self._files_sync_task = None
+        if self._usage_watch_task and not self._usage_watch_task.done():
+            self._usage_watch_task.cancel()
+            self._usage_watch_task = None
 
         # Kill the tmux session first: the real CLI lives in the tmux server
         # (not as a child of `self.proc`, which is only the attach client), so
@@ -1936,6 +1964,7 @@ async def get_or_create_session(
             creds_dedup_key=recipe.get("creds_dedup_key"),
             files_watch_paths=recipe.get("files_watch_paths"),
             files_on_change=recipe.get("files_on_change"),
+            usage_watch=recipe.get("usage_watch"),
         )
         await session.start()
         _SESSIONS[agent_id] = session

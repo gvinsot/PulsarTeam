@@ -43,6 +43,7 @@ from .claude_oauth import (
     token_http_request,
 )
 from .claude_interactive import run_interactive
+from .claude_usage import TranscriptUsage
 from .runner_config_store import PersistedConfigMixin
 from .runner_mcp_config import configure_claude_mcp, claude_mcp_config_path
 from auth_error_detect import (
@@ -272,6 +273,18 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
         # restores it. Keyed on the PER-AGENT home (effective_user), not the
         # `home` above, which falls back to /root in runAsRoot mode.
         recipe.update(self._config_persistence_extras(agent_id, effective_user))
+        # Token accounting for terminal-driven turns: a task injected into this
+        # PTY never produces an HTTP `usage` block, so the budget screen only
+        # learns what the CLI wrote to its own session transcripts. Same
+        # per-agent home caveat as above.
+        agent_home = (effective_user or {}).get("home")
+        if agent_id and agent_home:
+            recipe["usage_watch"] = {
+                "kind": "claude",
+                "root": agent_home,
+                "provider": self.name,
+                "model": RUNNER_MODEL or "",
+            }
         return recipe
 
     async def interactive_preflight_auth(self, agent_id, owner_id=None) -> Optional[str]:
@@ -784,6 +797,12 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
             _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
             preexec_fn = _subp_kwargs.get("preexec_fn")
             spawn_env = await run_blocking(get_agent_env, effective_user)
+            # Baseline the session transcript BEFORE the spawn so we can bill
+            # only the lines this turn appends (see claude_usage).
+            usage_probe = await run_blocking(
+                TranscriptUsage, sid, proc_cwd, spawn_env,
+                (effective_user or {}).get("home"),
+            )
             try:
                 interactive_result = await asyncio.wait_for(
                     run_interactive(
@@ -801,14 +820,21 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
                 pass
             fp = _FakeProc()
             fp.returncode = interactive_result.get("returncode") or 0
+            # Real token usage, recovered from the session transcript the CLI
+            # just appended to. Without this the budget screen bills every
+            # Claude-runner turn as free.
+            usage = await run_blocking(usage_probe.collect)
             # Wrap the textual reply into the JSON envelope shape the parser
             # below expects.
             payload = {
                 "result": interactive_result.get("output", ""),
-                "cost_usd": 0,
+                "cost_usd": usage.get("cost_usd", 0.0),
                 "duration_ms": 0,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-                "total_tokens": 0,
+                "usage": {
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                },
+                "total_tokens": usage.get("total_tokens", 0),
             }
             so_b = json.dumps(payload).encode("utf-8")
             se_b = (interactive_result.get("stderr") or "").encode("utf-8")
@@ -992,10 +1018,23 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
         try:
             parsed = json.loads(stdout)
             output_text = parsed.get("result", stdout)
-            cost = parsed.get("cost_usd", 0)
+            # `total_cost_usd` is what recent Claude CLI builds emit in the
+            # `--output-format json` envelope; `cost_usd` is the legacy key
+            # (and the one our PTY wrapper above synthesises).
+            cost = parsed.get("cost_usd", None)
+            if cost is None:
+                cost = parsed.get("total_cost_usd", 0)
+            cost = cost or 0
             duration = parsed.get("duration_ms", 0)
             usage = parsed.get("usage", {}) or {}
-            input_tokens = usage.get("input_tokens", 0) or 0
+            # Cache reads/writes are billable input tokens; a cached turn
+            # reports only a handful of plain `input_tokens`, so dropping them
+            # under-reports the turn by orders of magnitude.
+            input_tokens = (
+                (usage.get("input_tokens", 0) or 0)
+                + (usage.get("cache_creation_input_tokens", 0) or 0)
+                + (usage.get("cache_read_input_tokens", 0) or 0)
+            )
             output_tokens = usage.get("output_tokens", 0) or 0
             total_tokens = parsed.get("total_tokens", 0) or (input_tokens + output_tokens)
 
@@ -1094,6 +1133,12 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
             loop.call_soon_threadsafe(event_queue.put_nowait, ev)
 
         spawn_env = await run_blocking(get_agent_env, effective_user)
+        # Baseline the session transcript before the spawn — same accounting
+        # trick as run_sync (see claude_usage).
+        usage_probe = await run_blocking(
+            TranscriptUsage, current_session_id, proc_cwd, spawn_env,
+            (effective_user or {}).get("home"),
+        )
         runner_task = asyncio.create_task(asyncio.wait_for(
             run_interactive(
                 cmd=cmd, cwd=proc_cwd,
@@ -1145,15 +1190,21 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
         rc = result.get("returncode")
 
         if output:
+            usage = await run_blocking(usage_probe.collect)
+            if VERBOSE:
+                logger.info(
+                    f"[Usage] claude session {current_session_id[:12]}: "
+                    f"in={usage.get('input_tokens')} out={usage.get('output_tokens')}"
+                )
             yield {"type": "text", "content": output}
             yield {
                 "type": "result",
                 "content": output,
-                "cost_usd": 0,
+                "cost_usd": usage.get("cost_usd", 0.0),
                 "duration_ms": 0,
-                "total_tokens": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
+                "total_tokens": usage.get("total_tokens", 0),
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
             }
             yield {"type": "session_id_used", "session_id": current_session_id}
             return

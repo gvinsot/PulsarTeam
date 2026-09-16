@@ -22,7 +22,6 @@ from .base import RunnerBackend
 from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_config_store import PersistedConfigMixin
 from .runner_llm_config import fetch_agent_llm_config
-from usage_reporter import report_usage
 
 
 # Most CLI agents (claude, opencode, codex, hermes, openclaw) render an initial
@@ -173,12 +172,19 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
             "output_tokens": output_tokens,
         }
 
-    def _parse_stream_event(self, line: str) -> Optional[dict]:
+    def _parse_stream_event(self, line: str, state: Optional[dict] = None) -> Optional[dict]:
         """Parse a stream output line into a canonical event.
 
         Default assumes JSON-per-line in Claude-code's stream-json format.
         Returns None to skip the event. Returns a dict with "type" set to
         one of: text, thinking, status, result, error.
+
+        `state` is a scratch dict created fresh by `stream_events` for each
+        run and handed to every call of that run. Parsers that need to carry
+        information across lines (codex accumulates token counts before the
+        terminating `task_complete` event) MUST keep it there: the backend
+        instance is a process-wide singleton serving every agent, so
+        instance-level scratch state cross-contaminates concurrent streams.
         """
         try:
             event = json.loads(line)
@@ -422,33 +428,6 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
                     self.name, short,
                 )
 
-    async def _report_usage_for_agent(self, agent_id: Optional[str], result: dict) -> None:
-        """Push token usage to team-api so it shows up on the budget screen."""
-        if not agent_id or not isinstance(result, dict):
-            return
-        try:
-            in_toks = int(result.get("input_tokens") or 0)
-            out_toks = int(result.get("output_tokens") or 0)
-            cost = float(result.get("cost_usd") or 0.0)
-        except (TypeError, ValueError):
-            return
-        if not in_toks and not out_toks and not cost:
-            return
-        llm = self._get_llm_config(agent_id) or {}
-        provider = (llm.get("provider") or self.name or "cli").strip()
-        model = (llm.get("model") or RUNNER_MODEL or "unknown").strip()
-        try:
-            await report_usage(
-                agent_id,
-                input_tokens=in_toks,
-                output_tokens=out_toks,
-                cost_usd=cost,
-                provider=provider,
-                model=model,
-            )
-        except Exception as e:
-            logger.debug(f"[Usage] reporter raised for agent {agent_id[:8]}: {e}")
-
     def _resolve_cwd(self, agent_id: Optional[str]) -> str:
         agent_project_dir = get_agent_project_dir(agent_id) if agent_id else None
         if agent_project_dir and os.path.isdir(agent_project_dir):
@@ -522,6 +501,34 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         """Extra recipe keys (e.g. hermes' files-watcher pair). Default none."""
         return {}
 
+    # Transcript dialect the PTY usage watcher should tail for this CLI (see
+    # usage_watcher). None disables token accounting for terminal-driven turns
+    # — correct for CLIs that keep no machine-readable usage record.
+    usage_watch_kind: Optional[str] = None
+
+    def _usage_watch_extras(
+        self,
+        agent_id: Optional[str],
+        effective_user: Optional[dict],
+    ) -> dict:
+        """Recipe entry telling the PTY session how to bill this CLI's
+        terminal-driven turns. Without it, a task injected into the shared
+        terminal never reaches the budget screen."""
+        if not self.usage_watch_kind or not agent_id:
+            return {}
+        home = (effective_user or {}).get("home")
+        if not home:
+            return {}
+        llm = self._get_llm_config(agent_id) or {}
+        return {
+            "usage_watch": {
+                "kind": self.usage_watch_kind,
+                "root": home,
+                "provider": (llm.get("provider") or self.name),
+                "model": llm.get("model") or "",
+            }
+        }
+
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
         """Spawn recipe for the shared interactive PTY (see pty_session).
 
@@ -559,6 +566,7 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         # Config persistence first, so a backend with bespoke watcher needs can
         # still override the hooks from _interactive_extras.
         recipe.update(self._config_persistence_extras(agent_id, effective_user))
+        recipe.update(self._usage_watch_extras(agent_id, effective_user))
         recipe.update(self._interactive_extras(agent_id, owner_id, agent_user, effective_user))
         return recipe
 
@@ -649,9 +657,7 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         if proc.returncode != 0 and not stdout:
             return {"status": "error", "output": "", "error": stderr or f"{self.cli_command} exited with code {proc.returncode}"}
 
-        result = self._parse_sync_result(stdout)
-        await self._report_usage_for_agent(agent_id, result)
-        return result
+        return self._parse_sync_result(stdout)
 
     # ── Streaming ─────────────────────────────────────────────────────────
 
@@ -696,6 +702,8 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         # (e.g. codex's progress log) can't fill the pipe and stall mid-run.
         # The collected bytes are consumed after the stdout loop.
         stderr_task = asyncio.create_task(proc.stderr.read())
+        # Per-run scratch space for _parse_stream_event (see its docstring).
+        stream_state: dict = {}
         loop = asyncio.get_running_loop()
         deadline = loop.time() + TIMEOUT
         timed_out = False
@@ -730,7 +738,7 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
                 line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
                 if not line or not line.strip():
                     continue
-                event = self._parse_stream_event(line)
+                event = self._parse_stream_event(line, stream_state)
                 if not event:
                     continue
                 # Expand "_blocks" container into individual events
@@ -746,8 +754,6 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
                         elif btype == "tool_use":
                             yield {"type": "status", "content": f"Using tool: {block.get('name', 'unknown')}"}
                 else:
-                    if event.get("type") == "result":
-                        await self._report_usage_for_agent(agent_id, event)
                     yield event
             if timed_out:
                 # Kill before the finally's wait so cleanup can't block on
