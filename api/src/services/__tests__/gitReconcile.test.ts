@@ -183,6 +183,87 @@ test('reconcile links once and updates pushed status on subsequent sweeps', asyn
   assert.equal(rows.get('task').commits[0].pushed, true);
 });
 
+/** A clone whose only HEAD movements are `clone` + fast-forward `pull` has a
+ *  perfectly readable reflog that simply records no creation. That must stay
+ *  distinct from an unreadable reflog: an earlier revision returned the same
+ *  "unknown" marker for both and fell back to crediting the rev-range, which
+ *  linked another agent's pushed commit to this task. */
+test('a clone that only pulled links nothing, through detection, reconcile and push', async t => {
+  rows.clear();
+  const f = gitFixture(t);
+  const mgr = new AgentManager(mockIo, null, null, null) as any;
+  const agent = await mgr.create({ name: 'CLI Runner', role: 'developer' });
+  mgr.executionManager = f.executionManager;
+  rows.set('task', { id: 'task', agentId: agent.id, text: 'Implement', commits: [] });
+  // Reflog times are second-precision: step past the fixture's own setup commit
+  // so the run window holds the pull and nothing else — the case where the
+  // reflog is fully readable yet records no creation at all.
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  const run = { baselineHead: f.baselineHead, startedAt: new Date().toISOString() };
+  f.git(f.peer, 'commit', '--allow-empty', '-m', 'other task');
+  f.git(f.peer, 'push');
+  f.git(f.repo, 'pull', '--ff-only');
+  assert.deepEqual(await detectCommitsSinceBaseline(f.executionManager, 'agent', run), []);
+  assert.equal(await reconcileTaskCommits(mgr, agent.id, 'task', run), 0);
+  // Publishing the imported tip is not evidence of local creation either.
+  f.git(f.repo, 'push', 'origin', 'HEAD:other-branch');
+  assert.equal(await reconcileTaskCommits(mgr, agent.id, 'task', run), 0);
+  assert.deepEqual(rows.get('task').commits, []);
+});
+
+test('an unreadable reflog fails closed instead of crediting the rev-range', async () => {
+  rows.clear();
+  const mgr = new AgentManager(mockIo, null, null, null) as any;
+  const agent = await mgr.create({ name: 'CLI Runner', role: 'developer' });
+  mgr.executionManager = {
+    async exec(_id: string, command: string) {
+      if (command.includes('reflog')) throw new Error('reflog unreadable');
+      return { stdout: HASH };
+    },
+  };
+  rows.set('task', { id: 'task', agentId: agent.id, text: 'Implement', commits: [] });
+  const opts = { startedAt: start, baselineHead: HASH };
+  assert.deepEqual(await detectCommitsSinceBaseline(mgr.executionManager, 'agent', opts), []);
+  assert.equal(await reconcileTaskCommits(mgr, agent.id, 'task', opts), 0);
+  assert.deepEqual(rows.get('task').commits, []);
+});
+
+/** Only the operation half of a reflog subject may reject a Fast-forward:
+ *  matching the whole line dropped local commits that merely talk about one. */
+test('local commits named Fast-forward are kept while real fast-forward moves are not', async t => {
+  rows.clear();
+  const f = gitFixture(t);
+  const mgr = new AgentManager(mockIo, null, null, null) as any;
+  const agent = await mgr.create({ name: 'CLI Runner', role: 'developer' });
+  mgr.executionManager = f.executionManager;
+  rows.set('task', { id: 'task', agentId: agent.id, text: 'Implement', commits: [] });
+  f.git(f.peer, 'commit', '--allow-empty', '-m', 'Fast-forward from another agent');
+  f.git(f.peer, 'push');
+  f.git(f.repo, 'pull', '--ff-only'); // pull: Fast-forward
+  f.git(f.repo, 'commit', '--allow-empty', '-m', 'ordinary work');
+  f.git(f.repo, 'push');
+  f.git(f.peer, 'pull', '--ff-only');
+  f.git(f.peer, 'commit', '--allow-empty', '-m', 'more work elsewhere');
+  f.git(f.peer, 'push');
+  f.git(f.repo, 'fetch');
+  f.git(f.repo, 'merge', '--ff-only', 'origin/main'); // merge: Fast-forward
+  f.git(f.repo, 'commit', '--allow-empty', '-m', 'Fast-forward handling fix');
+  assert.deepEqual(
+    (await detectCommitsSinceBaseline(f.executionManager, 'agent', f)).map(c => c.msg).sort(),
+    ['Fast-forward handling fix', 'ordinary work']
+  );
+  assert.equal(await reconcileTaskCommits(mgr, agent.id, 'task', f), 2);
+  f.git(f.repo, 'push');
+  assert.equal(await reconcileTaskCommits(mgr, agent.id, 'task', f), 0);
+  assert.deepEqual(
+    rows
+      .get('task')
+      .commits.map((c: any) => c.pushed)
+      .sort(),
+    [true, true]
+  );
+});
+
 test('run context is isolated by manager, agent and task and cleared at completion', () => {
   const mgr = {},
     otherMgr = {};
