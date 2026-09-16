@@ -14,7 +14,10 @@ Three regressions are pinned here:
 import json
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+
+import pytest
 
 os.environ.setdefault("RUNNER_TYPE", "codex")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -22,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from backends.claude_usage import TranscriptUsage, transcript_path, usage_since  # noqa: E402
 from backends.codex import CodexBackend  # noqa: E402
 from usage_watcher import UsageWatcher  # noqa: E402
+import usage_watcher  # noqa: E402
 
 
 # ── codex: token_count parsing ──────────────────────────────────────────────
@@ -285,6 +289,108 @@ def test_codex_watcher_handles_a_new_rollout_file(tmp_path):
     watcher.baseline()
     _write_rollout(tmp_path, "rollout-b.jsonl", [_rollout_token_count(300, 40)])
     assert watcher.collect() == {"input_tokens": 300, "output_tokens": 40}
+
+
+def test_codex_watcher_resumes_large_rollout_across_polls_and_restarts(tmp_path, monkeypatch):
+    name = "rollout-large.jsonl"
+    path = _write_rollout(tmp_path, name, [_rollout_token_count(900_000, 9000)])
+    with open(path, "ab") as fh:
+        fh.write(b" " * usage_watcher._MAX_BASELINE_BYTES + b"\n")
+    _write_rollout(tmp_path, name, [_rollout_token_count(1_000_000, 10_000)])
+    reads = []
+
+    class ReadMeter:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def seek(self, offset):
+            return self.fh.seek(offset)
+
+        def read(self, count):
+            reads.append(count)
+            return self.fh.read(count)
+
+    @contextmanager
+    def measured_open(*args, **kwargs):
+        with open(*args, **kwargs) as fh:
+            yield ReadMeter(fh)
+
+    for run in range(3):
+        watcher = UsageWatcher("agent-1", kind="codex", root=str(tmp_path))
+        reads.clear()
+        with monkeypatch.context() as patch:
+            patch.setattr(usage_watcher, "open", measured_open, raising=False)
+            watcher.baseline()
+        assert sum(reads) <= usage_watcher._BASELINE_BLOCK_BYTES
+        assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+        for poll in range(2):
+            step = run * 2 + poll + 1
+            _write_rollout(tmp_path, name, [
+                _rollout_token_count(1_000_000 + step * 100, 10_000 + step * 10)
+            ])
+            assert watcher.collect() == {"input_tokens": 100, "output_tokens": 10}
+            assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+
+@pytest.mark.parametrize("reason", ["unreadable", "stat_failure", "no_counter", "outside_window"])
+def test_codex_unknown_baseline_never_bills_history(tmp_path, monkeypatch, reason):
+    name = "rollout-unknown.jsonl"
+    entries = [] if reason == "no_counter" else [_rollout_token_count(1_000_000, 10_000)]
+    path = _write_rollout(tmp_path, name, entries)
+    if reason == "no_counter":
+        with open(path, "a") as fh:
+            fh.write('invalid JSON\n{"type":"session_meta"}\n')
+    if reason == "outside_window":
+        monkeypatch.setattr(usage_watcher, "_MAX_BASELINE_BYTES", 1024)
+        with open(path, "a") as fh:
+            fh.write(json.dumps({"text": "x" * 2048}) + "\n")
+    watcher = UsageWatcher("agent-1", kind="codex", root=str(tmp_path))
+
+    def unreadable(*args, **kwargs):
+        raise PermissionError("synthetic read failure")
+
+    with monkeypatch.context() as patch:
+        if reason == "unreadable":
+            patch.setattr(usage_watcher, "open", unreadable, raising=False)
+        elif reason == "stat_failure":
+            patch.setattr(watcher, "_size", lambda path: 0)
+        watcher.baseline()
+    assert watcher._memo[path] is None
+    _write_rollout(tmp_path, name, [_rollout_token_count(1_000_100, 10_010)])
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+    _write_rollout(tmp_path, name, [_rollout_token_count(1_000_200, 10_020)])
+    assert watcher.collect() == {"input_tokens": 100, "output_tokens": 10}
+    assert watcher.collect() == {"input_tokens": 0, "output_tokens": 0}
+
+
+def test_codex_baseline_scans_backwards_across_record_and_utf8_boundaries(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage_watcher, "_BASELINE_BLOCK_BYTES", 17)
+    path = _write_rollout(tmp_path, "rollout-blocks.jsonl", [
+        _rollout_token_count(100, 10), _rollout_token_count(200, 20),
+    ])
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"text": "é" * 300}, ensure_ascii=False) + '\n{"partial":')
+    memo = {}
+    usage_watcher._codex_baseline(path, os.path.getsize(path), memo)
+    assert memo[path] == {"input_tokens": 200, "output_tokens": 20, "total_tokens": 220}
+
+
+def test_codex_baseline_stops_at_captured_eof(tmp_path):
+    path = _write_rollout(tmp_path, "rollout-snapshot.jsonl", [_rollout_token_count(100, 10)])
+    size = os.path.getsize(path)
+    _write_rollout(tmp_path, "rollout-snapshot.jsonl", [_rollout_token_count(200, 20)])
+    memo = {}
+    usage_watcher._codex_baseline(path, size, memo)
+    assert usage_watcher._codex_delta(path, size, memo) == {"input_tokens": 100, "output_tokens": 10}
+
+
+def test_codex_missing_baseline_is_not_implicitly_zero(tmp_path):
+    path = _write_rollout(tmp_path, "rollout-missing.jsonl", [_rollout_token_count(1_000_000, 10_000)])
+    memo = {}
+    assert usage_watcher._codex_delta(path, 0, memo) == {}
+    assert memo[path] == {
+        "input_tokens": 1_000_000, "output_tokens": 10_000, "total_tokens": 1_010_000
+    }
 
 
 def test_watcher_is_inert_for_a_cli_with_no_adapter(tmp_path):

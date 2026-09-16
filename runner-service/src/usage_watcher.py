@@ -24,6 +24,9 @@ Two transcript dialects, one adapter each:
 Only bytes appended after the watcher started are ever billed: the first pass
 baselines each file (size + codex's cumulative counter) without reporting, so
 restarting the terminal never re-bills the history.
+If an existing Codex baseline cannot be recovered, the first later cumulative
+counter only seeds accounting. This may omit new usage up to that counter,
+but never charges an unknown amount of historical usage.
 
 Everything here is best-effort — accounting must not be able to break a
 terminal session.
@@ -48,6 +51,7 @@ except ValueError:
 # Transcripts of a busy agent grow without bound; cap what one baseline pass
 # will read back when seeding codex's cumulative counter.
 _MAX_BASELINE_BYTES = 32 * 1024 * 1024
+_BASELINE_BLOCK_BYTES = 64 * 1024
 
 
 def _as_int(value) -> int:
@@ -141,20 +145,54 @@ def _codex_scan(path: str, start: int) -> Optional[dict]:
 
 def _codex_baseline(path: str, size: int, memo: dict) -> None:
     """Seed the per-file cumulative counter so pre-existing history is never
-    billed. Reads the file once; skipped for implausibly large rollouts."""
-    if size <= 0 or size > _MAX_BASELINE_BYTES:
+    billed. Search backwards in growing blocks, bounded by the read budget
+    and the captured EOF. None explicitly means an unknown baseline, including
+    stat/read failures, missing counters, and counters outside the search window.
+    """
+    memo[path] = None
+    if size <= 0:
         return
-    cumulative = _codex_scan(path, 0)
-    if cumulative:
-        memo[path] = cumulative
+    cursor = size
+    lower_bound = max(0, size - _MAX_BASELINE_BYTES)
+    block_size = _BASELINE_BLOCK_BYTES
+    pending = b""
+    try:
+        with open(path, "rb") as fh:
+            while cursor > lower_bound:
+                count = min(block_size, cursor - lower_bound)
+                cursor -= count
+                fh.seek(cursor)
+                block = fh.read(count)
+                if len(block) != count:  # File shrank after the size snapshot.
+                    return
+                lines = (block + pending).split(b"\n")
+                # A block can start inside a JSON record (or a UTF-8 character).
+                # Keep that prefix for the next block; never parse it alone.
+                pending = lines.pop(0) if cursor else b""
+                for line in reversed(lines):
+                    try:
+                        entry = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    msg = _codex_find_token_count(entry)
+                    cumulative = _codex_cumulative(msg) if msg else None
+                    if cumulative is not None:
+                        memo[path] = cumulative
+                        return
+                block_size *= 2
+    except OSError as e:
+        logger.debug(f"[Usage] unreadable codex baseline {path}: {e}")
 
 
 def _codex_delta(path: str, offset: int, memo: dict) -> dict:
     cumulative = _codex_scan(path, offset)
     if not cumulative:
         return {}
-    previous = memo.get(path) or {}
+    previous = memo.get(path)
     memo[path] = cumulative
+    if previous is None:
+        # Unknown is not zero: establish a reference without billing history.
+        return {}
     return {
         "input_tokens": max(0, cumulative["input_tokens"] - _as_int(previous.get("input_tokens"))),
         "output_tokens": max(
@@ -191,7 +229,7 @@ class UsageWatcher:
         self.provider = provider or kind
         self.model = model or ""
         self._offsets: dict[str, int] = {}
-        self._memo: dict[str, dict] = {}
+        self._memo: dict[str, Optional[dict]] = {}
         adapter = _ADAPTERS.get(kind)
         self._globs, self._delta, self._baseline = adapter if adapter else (None, None, None)
 
@@ -238,7 +276,8 @@ class UsageWatcher:
                 # A file that appeared after baseline() — bill it whole.
                 offset = 0
                 if self._baseline:
-                    self._baseline(path, 0, self._memo)
+                    # Only files first seen after baseline have a known zero.
+                    self._memo[path] = {}
             if size < offset:
                 # Truncated/replaced underneath us — restart from the top.
                 offset = 0
