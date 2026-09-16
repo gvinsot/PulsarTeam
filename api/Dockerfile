@@ -32,6 +32,8 @@ RUN npx tsc
 
 # ── Test stage: keeps dev dependencies and sources (never shipped) ───────────
 FROM build AS test
+# Integration fixtures create real repositories and exercise commits/pushes.
+RUN apk add --no-cache git
 CMD ["npm", "test"]
 
 # ── Prune stage: strip dev dependencies from node_modules ───────────────────
