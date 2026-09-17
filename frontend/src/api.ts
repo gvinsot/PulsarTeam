@@ -840,6 +840,43 @@ export const api = {
   removePlugin: (agentId: string, pluginId: string) =>
     del<SuccessAck>(`/agents/${agentId}/plugins/${pluginId}`),
 
+  // Remote MCP catalog and explicit agent/board connections.
+  searchMcpRegistry: (search: string, cursor = '') =>
+    get<import('./types').RegistryPage>(
+      `/remote-mcp/catalog?${new URLSearchParams({ search, cursor })}`
+    ),
+  installRegistryMcp: (
+    name: string,
+    version: string,
+    remoteIndex: number,
+    mode: 'oauth' | 'api_key'
+  ) => post<Plugin>('/remote-mcp/catalog/install', { name, version, remoteIndex, mode }),
+  getRemoteMcpStatus: (id: string, agentId?: string, boardId?: string) =>
+    get<import('./types').RemoteMcpStatus>(
+      `/remote-mcp/${id}/status?${new URLSearchParams(agentId ? { agentId } : boardId ? { boardId } : {})}`
+    ),
+  getRemoteMcpAuthUrl: (
+    id: string,
+    agentId?: string,
+    boardId?: string,
+    clientId?: string,
+    clientSecret?: string
+  ) =>
+    post<{ authUrl: string }>(`/remote-mcp/${id}/auth-url`, {
+      agentId,
+      boardId,
+      clientId: clientId || undefined,
+      clientSecret: clientSecret || undefined,
+    }),
+  saveRemoteMcpKey: (
+    id: string,
+    data: { agentId?: string; boardId?: string; apiKey: string; headerName: string; prefix: string }
+  ) => post<SuccessAck>(`/remote-mcp/${id}/api-key`, data),
+  disconnectRemoteMcp: (id: string, agentId?: string, boardId?: string) =>
+    post<SuccessAck>(`/remote-mcp/${id}/disconnect`, { agentId, boardId }),
+  testRemoteMcp: (id: string, agentId?: string, boardId?: string) =>
+    post<{ success: boolean; toolCount: number }>(`/remote-mcp/${id}/test`, { agentId, boardId }),
+
   // MCP Servers
   getMcpServers: () => get<McpServer[]>('/mcp-servers'),
 

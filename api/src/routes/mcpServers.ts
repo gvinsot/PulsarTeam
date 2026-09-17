@@ -106,6 +106,12 @@ export function mcpServerRoutes(mcpManager: MCPManager) {
           res.status(404).json({ error: 'MCP server not found' });
           return;
         }
+        if (server.remoteAuth) {
+          res
+            .status(400)
+            .json({ error: 'Testez ce MCP depuis sa connexion sur un agent ou un board.' });
+          return;
+        }
 
         const { MCPClient } = await import('../services/mcpClient.js');
         const { resolveInternalMcpConfig } = await import('../services/mcpManager.js');

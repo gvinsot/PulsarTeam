@@ -17,7 +17,7 @@ import { readSecret } from '../secrets.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 /**
  * GitHub OAuth2 routes — unified token store.
- * Resolution: agent → board → user → error
+ * Resolution: agent → board → error
  *
  * Two properties of GitHub App user-to-server tokens drive the token handling
  * below, and getting either wrong sends the owner round an endless reconnect
@@ -300,7 +300,7 @@ async function isGitHubTokenUsable(token: string): Promise<boolean> {
 
 /**
  * Resolve GitHub credentials for an agent. Resolution order:
- *   agent → board → user OAuth token  →  server-wide GITHUB_TOKEN fallback.
+ *   agent → board OAuth token  →  server-wide GITHUB_TOKEN fallback.
  * Returns null only when NO source yields a token. Used to inject the access
  * token into the runner container so the agent can `git clone/pull/push` via
  * HTTPS.

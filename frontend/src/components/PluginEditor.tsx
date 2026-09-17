@@ -170,6 +170,7 @@ export default function PluginEditor<TDraft extends PluginDraft<PluginMcpDraft>>
   if (isActivate) {
     const mcps = value.mcps || [];
     const authMcps = mcps.filter(m => {
+      if (m.remoteAuth) return false;
       const am = m.authMode || (m.hasApiKey || m.apiKey ? 'bearer' : 'none');
       return am === 'bearer';
     });
@@ -455,6 +456,27 @@ export default function PluginEditor<TDraft extends PluginDraft<PluginMcpDraft>>
 
         <div className="space-y-3">
           {(value.mcps || []).map((mcp, index) => {
+            if (mcp.remoteAuth)
+              return (
+                <div
+                  key={mcp.id || index}
+                  className="rounded-lg border border-dark-700 p-3 text-xs text-dark-300"
+                >
+                  <p className="font-medium">{mcp.name}</p>
+                  <p className="break-all text-dark-400">{mcp.url}</p>
+                  <p className="mt-2">
+                    {mcp.remoteAuth === 'oauth' ? 'OAuth' : 'Clé API'} : gérez la connexion depuis
+                    les plugins de l’agent ou du board.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => removeMcp(index)}
+                    className="mt-2 text-red-400"
+                  >
+                    Retirer ce MCP du plugin
+                  </button>
+                </div>
+              );
             const expanded = expandedMcps.has(index);
             const authMode = mcp.authMode || (mcp.hasApiKey || mcp.apiKey ? 'bearer' : 'none');
             const testResult = mcp.id ? testResults[mcp.id] : undefined;

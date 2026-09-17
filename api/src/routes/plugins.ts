@@ -12,7 +12,7 @@ const mcpConfigSchema = z
     description: z.string().max(2000).optional(),
     icon: z.string().max(50).optional(),
     enabled: z.boolean().optional(),
-    authMode: z.enum(['none', 'bearer']).optional(),
+    authMode: z.enum(['none', 'bearer', 'oauth']).optional(),
     apiKey: z.string().max(500).optional(),
     hasApiKey: z.boolean().optional(),
     userConfig: z.record(z.string(), z.any()).optional(),
@@ -190,6 +190,10 @@ export function pluginRoutes(skillManager: SkillManager, mcpManager: MCPManager)
       if (Array.isArray(parsed.mcps)) {
         const currentMcps: McpConfig[] = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
         for (const mcp of parsed.mcps) {
+          if (mcp.id && mcpManager.getById(mcp.id)?.remoteAuth) {
+            // Remote secrets are scoped connections, never plugin/global keys.
+            mcp.apiKey = '';
+          }
           if (mcp.apiKey === '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' && mcp.id) {
             const existing = currentMcps.find(m => m.id === mcp.id);
             mcp.apiKey = existing ? existing.apiKey : '';
@@ -203,7 +207,7 @@ export function pluginRoutes(skillManager: SkillManager, mcpManager: MCPManager)
       // Sync MCP apiKeys to the MCP server registry (global key) - managers only.
       if (isManager && Array.isArray(parsed.mcps)) {
         for (const mcp of parsed.mcps) {
-          if (mcp.id && mcpManager.getById(mcp.id)) {
+          if (mcp.id && mcpManager.getById(mcp.id) && !mcpManager.getById(mcp.id)?.remoteAuth) {
             const newKey = mcp.apiKey || '';
             const cur = mcpManager.getById(mcp.id);
             if (cur.apiKey !== newKey) {

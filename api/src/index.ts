@@ -27,6 +27,7 @@ import { createBrowserMcpHandler } from './services/browserMcp.js';
 import { pluginRoutes } from './routes/plugins.js';
 import { agentSkillRoutes } from './routes/agentSkills.js';
 import { mcpServerRoutes } from './routes/mcpServers.js';
+import { remoteMcpPublicRoutes, remoteMcpRoutes } from './routes/remoteMcp.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { externalVoiceRoutes } from './routes/externalVoice.js';
 import { leaderToolsRoutes } from './routes/leaderTools.js';
@@ -239,6 +240,8 @@ app.use('/api/code-index', authenticateToken, codeIndexRoutes(codeIndexService))
 app.use('/api/plugins', authenticateToken, pluginRoutes(skillManager, mcpManager));
 app.use('/api/agent-skills', authenticateToken, agentSkillRoutes());
 app.use('/api/mcp-servers', authenticateToken, mcpServerRoutes(mcpManager));
+app.use('/api/remote-mcp', remoteMcpPublicRoutes(mcpManager));
+app.use('/api/remote-mcp', authenticateToken, remoteMcpRoutes(mcpManager, skillManager));
 app.use('/api/onedrive', authenticateToken, onedriveRoutes());
 app.use('/api/outlook', authenticateToken, outlookRoutes());
 app.use('/api/gmail', authenticateToken, gmailRoutes());

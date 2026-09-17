@@ -18,7 +18,7 @@ import type { OAuthProviderSpec } from './oauthProviderRoutes.js';
  *   - user:<username>  (per-user fallback)
  *
  * Resolution order when an agent calls a Google Drive MCP tool:
- *   agent tokens → board tokens → user tokens → error
+ *   agent tokens → board tokens → error
  *
  * Drive shares the same OAuth client, redirect URI, state store, and
  * callback handler as Gmail — see api/src/routes/googleOAuth.ts. Only

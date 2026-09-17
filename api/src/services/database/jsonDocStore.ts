@@ -70,9 +70,12 @@ export function createJsonDocStore<T extends Record<string, unknown>>(
 
     // Only the id is read here — the rest of the document is serialized whole
     // into the JSONB column, so the store stays agnostic about its shape.
-    async save(doc: { id: string }) {
+    async save(doc: { id: string }, { throwOnPersistError = false } = {}) {
       const pool = getPool();
-      if (!pool) return;
+      if (!pool) {
+        if (throwOnPersistError) throw new Error(`Cannot save ${label}: database unavailable`);
+        return;
+      }
       try {
         await pool.query(
           `INSERT INTO ${table} (id, data, updated_at)
@@ -82,6 +85,7 @@ export function createJsonDocStore<T extends Record<string, unknown>>(
         );
       } catch (err) {
         console.error(`Failed to save ${label}:`, errorMessage(err));
+        if (throwOnPersistError) throw err;
       }
     },
 

@@ -1,5 +1,21 @@
 # Plugins, Agent skills, MCP servers
 
+## Remote MCP catalog and scoped connections — `/api/remote-mcp`
+
+See [remote MCP guide](../../docs/remote-mcp.md). These routes require a session, except the OAuth callback and public client metadata document:
+
+- `GET /catalog?search=&cursor=`: public HTTPS Streamable HTTP servers from the official registry, latest versions and paginated results.
+- `POST /catalog/install`: `{ name, version, remoteIndex, mode: 'oauth' | 'api_key' }`; imports an explicitly selected registry version as a private plugin. No secrets in the definition.
+- `GET /:id/status?agentId=...` or `?boardId=...`: connection status without credentials. Requires read access to exactly one scope.
+- `POST /:id/auth-url`: `{ agentId? , boardId?, clientId?, clientSecret? }`, returns `{ authUrl }`; OAuth discovery/registration and an encrypted, expiring PKCE flow.
+- `POST /:id/api-key`: `{ agentId?, boardId?, apiKey, headerName?, prefix?: '' | 'Bearer ' }`; encrypted scoped key storage.
+- `POST /:id/test`: `{ agentId?, boardId? }`, returns `{ success, toolCount }` after connecting and discovering tools.
+- `POST /:id/disconnect`: `{ agentId?, boardId? }`, removes the connection and pending OAuth flows.
+- `GET /oauth/callback`: public; single-use state, PKCE and renewed scope authorization protect the token exchange.
+- `GET /oauth/client-metadata`: public OAuth client metadata, no secrets.
+
+All POST connection routes require edit access to exactly one scope. There is no implicit user-account fallback. Board inheritance at execution time uses the agent's persisted board.
+
 Sources: `api/src/routes/plugins.ts`, `agentSkills.ts`, `mcpServers.ts`. All routes require JWT.
 
 The product distinguishes three closely-related concepts:

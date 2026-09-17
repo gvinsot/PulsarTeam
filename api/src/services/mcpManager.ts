@@ -44,6 +44,7 @@ export interface McpServerEntry {
   name: string;
   url: string;
   apiKey?: string;
+  remoteAuth?: 'oauth' | 'api_key';
   enabled?: boolean;
   status?: string;
   error?: string | null;
@@ -61,6 +62,8 @@ interface McpServerInput {
   icon?: string;
   apiKey?: string;
   enabled?: boolean;
+  remoteAuth?: 'oauth' | 'api_key';
+  registryKey?: string;
 }
 
 /** Per-agent MCP credentials, keyed by server id. */
@@ -402,6 +405,9 @@ export class MCPManager {
       description: config.description || '',
       icon: config.icon || '🔌',
       apiKey: config.apiKey || '',
+      ...(config.remoteAuth
+        ? { remoteAuth: config.remoteAuth, registryKey: config.registryKey }
+        : {}),
       builtin: false,
       enabled: config.enabled !== false,
       tools: [],
@@ -411,10 +417,10 @@ export class MCPManager {
       updatedAt: new Date().toISOString(),
     };
 
+    await saveMcpServer(server, { throwOnPersistError: !!config.remoteAuth });
     this.servers.set(id, server);
-    await saveMcpServer(server);
 
-    if (server.enabled && server.url) {
+    if (server.enabled && server.url && !server.remoteAuth) {
       this.connect(id).catch(() => {});
     }
 
@@ -474,6 +480,8 @@ export class MCPManager {
       server = await this.ensureBuiltinServerRegistered(id);
     }
     if (!server) throw new Error(`MCP server ${id} not found`);
+    if (server.remoteAuth)
+      throw new Error('Ce MCP nécessite une connexion explicite sur un agent ou un board.');
     if (!server.url) throw new Error(`MCP server "${server.name}" has no URL`);
 
     await this.disconnect(id);
@@ -689,6 +697,14 @@ export class MCPManager {
     }
 
     // Check if agent has custom auth for this server
+    if (server.remoteAuth) {
+      if (server.enabled === false) throw new Error('MCP désactivé');
+      const { remoteScopeForAgent, useRemoteClient } = await import('./remoteMcp.js');
+      const scope = await remoteScopeForAgent(server.id, agentId);
+      return useRemoteClient(server, scope, async client =>
+        this._shape(await client.callTool(toolName, args))
+      );
+    }
     const agentAuth = agentMcpAuth[server.id];
     if (agentId && agentAuth?.apiKey) {
       return this._callToolWithAgentAuth(server, toolName, args, agentId, agentAuth.apiKey);
@@ -785,6 +801,35 @@ export class MCPManager {
     const tools: AgentMcpTool[] = [];
     const unavailable: UnavailableMcpServer[] = [];
 
+    // Remote tool inventories are account-specific. Never cache them on the
+    // globally shared server definition or reuse another agent's inventory.
+    const remoteIds = mcpServerIds.filter(id => this.getById(id)?.remoteAuth);
+    for (const id of remoteIds) {
+      const server = this.getById(id)!;
+      try {
+        if (server.enabled === false) throw new Error('MCP désactivé');
+        const { remoteScopeForAgent, useRemoteClient } = await import('./remoteMcp.js');
+        const scope = await remoteScopeForAgent(id, agentId);
+        const discovered = await useRemoteClient(server, scope, async client => client.tools);
+        for (const tool of discovered)
+          tools.push({
+            serverId: id,
+            serverName: server.name,
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          });
+      } catch {
+        unavailable.push({
+          serverId: id,
+          serverName: server.name,
+          status: 'disconnected',
+          reason: 'Connectez ou vérifiez ce MCP dans les plugins de l’agent ou du board.',
+        });
+      }
+    }
+    mcpServerIds = mcpServerIds.filter(id => !remoteIds.includes(id));
+
     // Every entry is a promise whose rejection is already swallowed by a .catch below.
     const reconnectPromises: Promise<unknown>[] = [];
     for (const serverId of mcpServerIds) {
@@ -876,6 +921,9 @@ export class MCPManager {
       if (!serverId || entries.has(serverId)) return;
       const server = this.getById(serverId);
       if (!server || server.enabled === false || !server.url) return;
+      // Scoped remote secrets stay in the API. Runners access them through
+      // the Pulsar gateway, never through a frozen bearer in a config file.
+      if (server.remoteAuth) return;
 
       // This config is written into the CLI runner's config file at spawn and
       // the CLI holds the Authorization header in memory for its whole session,

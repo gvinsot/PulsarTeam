@@ -11,7 +11,7 @@ import type { OAuthProviderSpec } from './oauthProviderRoutes.js';
 
 /**
  * OneDrive OAuth2 routes — unified token store.
- * Resolution: agent → board → user → error
+ * Resolution: agent → board → error
  *
  * The OAuth client credentials, redirect URI, and callback dispatcher are
  * shared across all Microsoft plugins (OneDrive, Outlook, …) via

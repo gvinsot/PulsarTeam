@@ -305,7 +305,7 @@ export function getOAuthTokensByScope(scopeType: ScopeType, scopeId: string): OA
 }
 
 /**
- * Resolve the full token record with fallback chain: agent → board → user.
+ * Resolve the full token record with fallback chain: agent → board.
  * For providers with refresh tokens (Gmail, OneDrive), auto-refresh if expired
  * — a refresh failure (or an expired token with no refresh capability) falls
  * through to the next scope.
@@ -323,42 +323,9 @@ export async function resolveOAuthTokenRecord(
   const scopes: Array<{ type: ScopeType; id: string }> = [];
   if (agentId) scopes.push({ type: 'agent', id: agentId });
   if (boardId) scopes.push({ type: 'board', id: boardId });
-  // user-level fallback: scan for any 'user' scoped tokens
-  scopes.push({ type: 'user', id: '__any__' });
 
   for (const scope of scopes) {
-    let token: OAuthTokenRecord | null = null;
-
-    if (scope.id === '__any__') {
-      // Scan for any user-scoped token for this provider. Falls through to a
-      // DB query when the cache has none — covers the cross-replica case where
-      // env A persisted a user-scoped token but env B hasn't seen the NOTIFY yet.
-      for (const [key, record] of tokenCache) {
-        if (key.startsWith(`${provider}:user:`)) {
-          token = record;
-          break;
-        }
-      }
-      if (!token) {
-        const pool = getPool();
-        if (pool) {
-          try {
-            const result = await pool.query(
-              `SELECT ${TOKEN_COLUMNS} FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 LIMIT 1`,
-              [provider, 'user']
-            );
-            if (result.rows.length > 0) token = rowToRecord(result.rows[0]);
-          } catch (err) {
-            console.error(
-              '[OAuthStore] resolveAccessToken user-scope DB fallback failed:',
-              (err as Error).message
-            );
-          }
-        }
-      }
-    } else {
-      token = await fetchOAuthTokenWithDbFallback(provider, scope.type, scope.id);
-    }
+    const token = await fetchOAuthTokenWithDbFallback(provider, scope.type, scope.id);
 
     if (!token) continue;
 
@@ -382,7 +349,8 @@ export async function resolveOAuthTokenRecord(
 }
 
 /**
- * Resolve an access token with fallback chain: agent → board → user.
+ * Resolve an access token with fallback chain: agent → board. User accounts
+ * are never selected implicitly; connect the intended agent or board instead.
  * For providers with refresh tokens (Gmail, OneDrive), auto-refresh if expired.
  * The refreshFn is provider-specific and handles token refresh.
  */

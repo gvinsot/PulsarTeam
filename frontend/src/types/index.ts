@@ -1,4 +1,5 @@
 // ── Domain types barrel ─────────────────────────────────────────────────────
+export type { RemoteMcpStatus, RegistryServer, RegistryPage } from './config';
 //
 // The rest of the SPA imports from here and nowhere else:
 //

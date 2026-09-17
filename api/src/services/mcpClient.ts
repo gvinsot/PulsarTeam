@@ -1,6 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import {
+  UnauthorizedError,
+  type OAuthClientProvider,
+} from '@modelcontextprotocol/sdk/client/auth.js';
 
 // Tool-call timeout. The SDK default is 60s, which is too short for tools like
 // gmail send_email with attachments, code-index index_folder, or multi-page
@@ -42,7 +46,15 @@ export class MCPClient {
    */
   async connect(
     url: string,
-    { headers }: { headers?: Record<string, string> } = {}
+    {
+      headers,
+      authProvider,
+      fetch: fetchFn,
+    }: {
+      headers?: Record<string, string>;
+      authProvider?: OAuthClientProvider;
+      fetch?: typeof globalThis.fetch;
+    } = {}
   ): Promise<{ tools: any[] }> {
     await this.close();
 
@@ -51,18 +63,36 @@ export class MCPClient {
 
     // Try Streamable HTTP transport first
     try {
-      this.transport = new StreamableHTTPClientTransport(parsedUrl, { requestInit });
+      this.transport = new StreamableHTTPClientTransport(parsedUrl, {
+        requestInit,
+        authProvider,
+        fetch: fetchFn,
+      });
       this.client = new Client({ name: this.clientName, version: '1.0.0' });
       await this.client.connect(this.transport);
       console.log(`🔌 [MCP] Connected via Streamable HTTP to ${url}`);
     } catch (err) {
+      // An OAuth challenge must return to the connection UI, not trigger a
+      // second consent flow through the legacy transport.
+      if (
+        authProvider ||
+        (fetchFn && !(err instanceof Error && /\b(404|405)\b/.test(err.message))) ||
+        err instanceof UnauthorizedError
+      ) {
+        await this.close();
+        throw err;
+      }
       // Fallback to SSE transport for older servers
       console.log(`🔌 [MCP] Streamable HTTP failed for ${url}, trying SSE fallback...`);
       try {
         await this.close();
         this.transport = new SSEClientTransport(parsedUrl, {
           requestInit,
-          eventSourceInit: { fetch: (u: any, init: any) => fetch(u, { ...init, ...requestInit }) },
+          authProvider,
+          fetch: fetchFn,
+          eventSourceInit: {
+            fetch: (u: any, init: any) => (fetchFn || fetch)(u, { ...init, ...requestInit }),
+          },
         });
         this.client = new Client({ name: this.clientName, version: '1.0.0' });
         await this.client.connect(this.transport);

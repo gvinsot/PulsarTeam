@@ -98,6 +98,7 @@ export default function OAuthConnectWidget({
 
   // window.setInterval id (DOM lib: a number), or null when no poll is armed.
   const pollRef = useRef<number | null>(null);
+  const popupRef = useRef<Window | null>(null);
   // `?? undefined` only so the null case type-checks: clearInterval(null) and
   // clearInterval(undefined) are both no-ops.
   useEffect(() => () => clearInterval(pollRef.current ?? undefined), []);
@@ -105,6 +106,12 @@ export default function OAuthConnectWidget({
   // Listen for OAuth callback messages from the popup window
   useEffect(() => {
     const handleMessage = async (event: MessageEvent<unknown>) => {
+      if (
+        event.origin !== window.location.origin ||
+        !popupRef.current ||
+        event.source !== popupRef.current
+      )
+        return;
       const data = event.data;
       if (!isMessageFrame(data) || data.type !== config.messageType) return;
       // Shared-client dispatchers (e.g. the unified Microsoft OAuth redirect)
@@ -132,6 +139,19 @@ export default function OAuthConnectWidget({
   const handleConnect = async (opts?: OAuthAuthUrlOptions) => {
     setError(null);
     setConnecting(true);
+    // Open synchronously in the click handler: metadata discovery / dynamic
+    // client registration may outlive the browser's popup activation window.
+    const popup = window.open(
+      'about:blank',
+      config.popupName,
+      'width=600,height=700,toolbar=no,menubar=no'
+    );
+    popupRef.current = popup;
+    if (!popup) {
+      setError('Popup blocked. Please allow popups for this site.');
+      setConnecting(false);
+      return;
+    }
     try {
       const { authUrl } = await config.api.getAuthUrl(
         agentId || undefined,
@@ -139,23 +159,7 @@ export default function OAuthConnectWidget({
         opts
       );
 
-      // Open OAuth popup
-      const width = 600;
-      const height = 700;
-      const left = window.screenX + (window.innerWidth - width) / 2;
-      const top = window.screenY + (window.innerHeight - height) / 2;
-
-      const popup = window.open(
-        authUrl,
-        config.popupName,
-        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
-      );
-
-      if (!popup) {
-        setError('Popup blocked. Please allow popups for this site.');
-        setConnecting(false);
-        return;
-      }
+      popup.location.href = authUrl;
 
       // Poll only for popup closure detection
       // The server-rendered oauth-redirect page reports the result via postMessage
@@ -165,9 +169,11 @@ export default function OAuthConnectWidget({
           clearInterval(pollRef.current ?? undefined);
           pollRef.current = null;
           setConnecting(false);
+          void fetchStatus();
         }
       }, 500);
     } catch (err) {
+      popup.close();
       setError(errorMessage(err));
       setConnecting(false);
     }

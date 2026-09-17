@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { X, Wrench, Loader, Puzzle } from 'lucide-react';
 import { api } from '../../api';
+import McpRegistryCatalog from '../plugins/McpRegistryCatalog';
 import {
   AssignedPluginCard,
   AvailablePluginRow,
@@ -95,6 +96,7 @@ export default function BoardPluginsTab({ board, onClose }: BoardPluginsTabProps
 
         {/* Content */}
         <div className="flex-1 overflow-auto p-4 space-y-5">
+          <McpRegistryCatalog boardId={board.id} onInstalled={() => void loadData()} />
           {/* Assigned plugins */}
           <div>
             <h3 className="font-medium text-dark-200 text-sm mb-3">

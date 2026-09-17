@@ -243,6 +243,34 @@ const MIGRATIONS: Migration[] = [
      WHERE human_viewed_at IS NULL AND source->>'type' IN ('mcp', 'api')
        AND deleted_at IS NULL AND is_template IS NOT TRUE`,
   ]),
+  sqlMigration(
+    '202609170001_remote_mcp_connections',
+    'scoped remote MCP connections and OAuth flows',
+    [
+      `CREATE TABLE IF NOT EXISTS remote_mcp_connections (
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE, scope_type TEXT NOT NULL CHECK (scope_type IN ('agent', 'board')),
+      scope_id TEXT NOT NULL, secret TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (server_id, scope_type, scope_id)
+    )`,
+      `CREATE TABLE IF NOT EXISTS remote_mcp_oauth_flows (
+      state_hash TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE, scope_type TEXT NOT NULL,
+      scope_id TEXT NOT NULL, secret TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL
+    )`,
+      'CREATE INDEX IF NOT EXISTS idx_remote_mcp_flows_expiry ON remote_mcp_oauth_flows (expires_at)',
+      `CREATE OR REPLACE FUNCTION cleanup_remote_mcp_scope() RETURNS trigger LANGUAGE plpgsql AS $$
+     DECLARE kind TEXT;
+     BEGIN
+       kind := CASE TG_TABLE_NAME WHEN 'agents' THEN 'agent' ELSE 'board' END;
+       DELETE FROM remote_mcp_connections WHERE scope_type=kind AND scope_id=OLD.id::text;
+       DELETE FROM remote_mcp_oauth_flows WHERE scope_type=kind AND scope_id=OLD.id::text;
+       RETURN OLD;
+     END; $$`,
+      'DROP TRIGGER IF EXISTS cleanup_remote_mcp_agent ON agents',
+      'CREATE TRIGGER cleanup_remote_mcp_agent AFTER DELETE ON agents FOR EACH ROW EXECUTE FUNCTION cleanup_remote_mcp_scope()',
+      'DROP TRIGGER IF EXISTS cleanup_remote_mcp_board ON boards',
+      'CREATE TRIGGER cleanup_remote_mcp_board AFTER DELETE ON boards FOR EACH ROW EXECUTE FUNCTION cleanup_remote_mcp_scope()',
+    ]
+  ),
 ];
 
 /**

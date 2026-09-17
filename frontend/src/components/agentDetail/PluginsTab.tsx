@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X, Wrench, KeyRound, Globe, Lock } from 'lucide-react';
 import { api } from '../../api';
 import PluginEditor from '../PluginEditor';
+import McpRegistryCatalog from '../plugins/McpRegistryCatalog';
 import {
   AssignedPluginCard,
   AvailablePluginRow,
@@ -14,6 +15,7 @@ import type { Agent, Plugin, PluginDraft, PluginMcpEntry } from '../../types';
 // per-MCP key is already stored (the user is expected to provide their own).
 function pluginNeedsCredentials(plugin: Plugin): boolean {
   return (plugin.mcps || []).some((m: PluginMcpEntry) => {
+    if (m.remoteAuth) return false;
     const auth = m.authMode || (m.hasApiKey || m.apiKey ? 'bearer' : 'none');
     return auth === 'bearer' && !m.hasApiKey;
   });
@@ -131,6 +133,7 @@ export default function PluginsTab({
 
   return (
     <div className="p-4 space-y-5 overflow-auto">
+      <McpRegistryCatalog agentId={agent.id} onInstalled={onRefresh} />
       {actionError && (
         <p className="text-xs text-red-400 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg">
           {actionError}
@@ -157,13 +160,15 @@ export default function PluginsTab({
                   )
                 }
                 extraActions={
-                  <button
-                    onClick={() => startActivation(plugin)}
-                    className="p-1.5 text-dark-400 hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-                    title="Modifier mes accès"
-                  >
-                    <KeyRound className="w-3.5 h-3.5" />
-                  </button>
+                  !plugin.mcps.some(m => m.remoteAuth) && (
+                    <button
+                      onClick={() => startActivation(plugin)}
+                      className="p-1.5 text-dark-400 hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+                      title="Modifier mes accès"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                    </button>
+                  )
                 }
               />
             ))}

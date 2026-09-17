@@ -171,7 +171,24 @@ export interface AgentTemplate {
 }
 
 /** sanitizeMcp always emits it, and the zod enum pins the union. */
-export type McpAuthMode = 'none' | 'bearer';
+export type McpAuthMode = 'none' | 'bearer' | 'oauth';
+
+export interface RemoteMcpStatus {
+  configured: boolean;
+  connected: boolean;
+  mode: 'oauth' | 'api_key';
+}
+export interface RegistryServer {
+  name: string;
+  title: string;
+  description: string;
+  version: string;
+  remotes: { url: string; headerNames: string[] }[];
+}
+export interface RegistryPage {
+  servers: RegistryServer[];
+  nextCursor: string | null;
+}
 
 /**
  * One MCP server as embedded INSIDE a plugin — the per-plugin view, carrying its
@@ -180,6 +197,7 @@ export type McpAuthMode = 'none' | 'bearer';
  * Produced by api/src/routes/plugins.ts:47.
  */
 export interface PluginMcpEntry {
+  remoteAuth?: 'oauth' | 'api_key';
   /** For linked MCPs this is the global McpServer id. */
   id: string;
   /** Defaults to 'Unnamed Server'; 'Linked MCP' when the id resolves to nothing. */
@@ -266,6 +284,7 @@ export interface Plugin {
  * A PluginMcpEntry read off the wire is assignable to this; the reverse is not.
  */
 export interface PluginMcpDraft {
+  remoteAuth?: 'oauth' | 'api_key';
   id?: string;
   name: string;
   url: string;

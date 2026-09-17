@@ -44,6 +44,7 @@ function normalizeMcp(mcp: any): McpEntry {
     apiKey: mcp.apiKey || '',
     enabled: mcp.enabled !== false,
     userConfig: mcp.userConfig || {},
+    ...(mcp.remoteAuth ? { remoteAuth: mcp.remoteAuth } : {}),
   };
 }
 
@@ -72,7 +73,11 @@ function normalizeSkill(skill: any, mcpResolver: ((id: string) => any) | null): 
           icon: server.icon || '🔌',
           enabled: server.enabled !== false,
           userConfig: {},
-          authMode: skillMcp?.authMode || undefined,
+          remoteAuth: server.remoteAuth,
+          authMode:
+            server.remoteAuth === 'oauth'
+              ? 'oauth'
+              : skillMcp?.authMode || (server.remoteAuth === 'api_key' ? 'bearer' : undefined),
           apiKey: skillMcp?.apiKey || server.apiKey || '',
         });
       }
@@ -271,14 +276,15 @@ export class SkillManager {
         builtin: false,
         ownerId,
         shared: !!config.shared,
+        ...(config.registry ? { registry: config.registry } : {}),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
       this._mcpResolver
     );
 
+    await saveSkill(skill, { throwOnPersistError: !!config.registry });
     this.skills.set(id, skill);
-    await saveSkill(skill);
     return skill;
   }
 

@@ -294,6 +294,21 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'DELETE /api/agent-skills/:id': ['authenticateToken', 'requireRole(admin|advanced)'],
 
   // ── /api/mcp-servers ──────────────────────────────────────────────
+  // OAuth callbacks cannot require a Pulsar session cookie: an opaque,
+  // expiring, single-use state binds the encrypted PKCE flow to a user/scope;
+  // the handler rechecks that user's current edit access before persisting.
+  'GET /api/remote-mcp/oauth/callback': PUBLIC,
+  // Authorization servers fetch this public CIMD; it contains no credentials.
+  'GET /api/remote-mcp/oauth/client-metadata': PUBLIC,
+  'GET /api/remote-mcp/catalog': ['authenticateToken'],
+  'POST /api/remote-mcp/catalog/install': ['authenticateToken'],
+  // Handlers authorize the explicit agent/board scope (read for status, edit
+  // for every mutation/test). Covered by remoteMcp.test.ts.
+  'GET /api/remote-mcp/:id/status': ['authenticateToken'],
+  'POST /api/remote-mcp/:id/auth-url': ['authenticateToken'],
+  'POST /api/remote-mcp/:id/api-key': ['authenticateToken'],
+  'POST /api/remote-mcp/:id/test': ['authenticateToken'],
+  'POST /api/remote-mcp/:id/disconnect': ['authenticateToken'],
   'GET /api/mcp-servers': ['authenticateToken'],
   'GET /api/mcp-servers/:id': ['authenticateToken'],
   'POST /api/mcp-servers': ['authenticateToken', 'requireRole(admin)'],
@@ -570,7 +585,7 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
  * Pinned so that making a route public is never a side effect of an edit. If
  * you change this number, the reviewer's question is "which route, and why".
  */
-const EXPECTED_PUBLIC_ROUTES = 18;
+const EXPECTED_PUBLIC_ROUTES = 20;
 
 test('every mounted route declares a policy in ROUTE_POLICY', async () => {
   const routes = await loadMountedRoutes();

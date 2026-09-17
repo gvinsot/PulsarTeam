@@ -19,7 +19,7 @@ import type { OAuthProviderSpec } from './oauthProviderRoutes.js';
  *   - user:<username>  (per-user fallback)
  *
  * Resolution order when an agent calls an Outlook MCP tool:
- *   agent tokens → board tokens → user tokens → error
+ *   agent tokens → board tokens → error
  */
 
 const outlookSpec: OAuthProviderSpec<MicrosoftOAuthConfig> = {

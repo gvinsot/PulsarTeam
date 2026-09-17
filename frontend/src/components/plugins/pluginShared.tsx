@@ -12,6 +12,7 @@ import WordPressConnect from '../WordPressConnect';
 import GitHubConnect from '../GitHubConnect';
 import S3Connect from '../S3Connect';
 import LocalFolderConnect from '../LocalFolderConnect';
+import RemoteMcpConnect from './RemoteMcpConnect';
 
 // Map MCP server IDs to their dedicated OAuth/API-key connector widget.
 // An id missing from this map means the MCP doesn't need an interactive
@@ -140,6 +141,15 @@ export function AssignedPluginCard({
             const Connector = MCP_CONNECTOR_MAP[mcpId];
             return <Connector key={mcpId} {...connectorProps} />;
           })}
+        </div>
+      )}
+      {pluginMcps.some(m => m.remoteAuth) && (
+        <div className="px-3 pb-3 space-y-2">
+          {pluginMcps
+            .filter(m => m.remoteAuth)
+            .map(mcp => (
+              <RemoteMcpConnect key={mcp.id} mcp={mcp} {...connectorProps} />
+            ))}
         </div>
       )}
     </div>

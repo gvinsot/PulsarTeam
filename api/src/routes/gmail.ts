@@ -14,10 +14,10 @@ import type { OAuthProviderSpec } from './oauthProviderRoutes.js';
  * Tokens are stored in the unified oauth_tokens table, scoped by:
  *   - agent:<agentId>  (per-agent)
  *   - board:<boardId>  (per-board, shared by all agents on that board)
- *   - user:<username>  (per-user fallback)
+ *   - user:<username>  (explicit user connection, never an agent fallback)
  *
  * Resolution order when an agent calls a Gmail MCP tool:
- *   agent tokens → board tokens → user tokens → error
+ *   agent tokens → board tokens → error
  *
  * The OAuth state lifecycle and redirect callback are shared with Google
  * Drive — see api/src/routes/googleOAuth.ts. Only Gmail-specific auth-url,

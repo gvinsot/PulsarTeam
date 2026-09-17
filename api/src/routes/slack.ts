@@ -9,7 +9,7 @@ import { readSecret } from '../secrets.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 /**
  * Slack OAuth2 routes — unified token store.
- * Resolution: agent → board → user → error
+ * Resolution: agent → board → error
  */
 
 // HKDF domain 'slack' must stay byte-identical across deploys — see oauthState.ts.
