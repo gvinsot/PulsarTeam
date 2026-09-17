@@ -13,11 +13,13 @@ import GitHubConnect from '../GitHubConnect';
 import S3Connect from '../S3Connect';
 import LocalFolderConnect from '../LocalFolderConnect';
 import RemoteMcpConnect from './RemoteMcpConnect';
+import AuthBrowserConnect from './AuthBrowserConnect';
 
 // Map MCP server IDs to their dedicated OAuth/API-key connector widget.
 // An id missing from this map means the MCP doesn't need an interactive
 // connector here (it's wired via global env vars or has no setup UI).
 export const MCP_CONNECTOR_MAP: Record<string, ComponentType<ConnectWidgetProps>> = {
+  'mcp-auth-browser': AuthBrowserConnect,
   'mcp-onedrive': OneDriveConnect,
   'mcp-gmail': GmailConnect,
   'mcp-outlook': OutlookConnect,

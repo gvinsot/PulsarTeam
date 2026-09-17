@@ -40,13 +40,11 @@
 // but never scoped to a tenant: it is a SERVICE credential the API mints for
 // itself. It is accepted as-is so the execution loop keeps working.
 //
-// Residual risk, deliberately left for a separate pass because it lives in the
-// token MINT rather than in this check: the same internal token is written into
-// each CLI runner's MCP config file at spawn (mcpManager.getClaudeMcpConfigForAgent,
-// 24h TTL), so a runner that reads its own config could replay it with another
-// agent's id. Binding that token to the agent it was minted for — an `agentId`
-// claim this function would then enforce — is the fix, and it belongs in
-// mcpManager.ts.
+// MCP runner tokens now carry mcpAgentId/mcpBoardId (mcpManager.ts). The MCP
+// HTTP entry point enforces an exact header/claim match before these helpers.
+// Global service tokens can discover tools without headers, but cannot claim
+// an agent. These helpers still trust internal service sessions on other API
+// surfaces; the binding described here is specifically the MCP HTTP boundary.
 
 import type { NextFunction, Request, Response } from 'express';
 import { checkBoardAccess } from '../middleware/authz.js';

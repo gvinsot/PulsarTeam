@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>PulsarTeam</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>Partager une session</h1>
+    <p id="status" role="status">Vérification de cet onglet…</p>
+    <dl id="details" hidden>
+      <dt>Site source</dt>
+      <dd id="site"></dd>
+      <dt>Serveur destinataire</dt>
+      <dd id="destination"></dd>
+      <dt>Accès accordé à</dt>
+      <dd id="scope"></dd>
+    </dl>
+    <p id="notice" hidden>
+      Vérifiez le compte connecté. Ses cookies, y compris HttpOnly, seront copiés sur ce cluster et
+      accessibles aux agents de cette destination.
+    </p>
+    <label id="storage-option" hidden
+      ><input id="local-storage" type="checkbox" /> Inclure aussi le stockage local du site (si
+      nécessaire à sa connexion).</label
+    >
+    <button id="action" hidden></button><button id="cancel" hidden>Annuler la liaison</button>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

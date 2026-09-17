@@ -14,9 +14,23 @@ import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'public/vendor/**', 'eslint.config.js'],
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'public/vendor/**',
+      'browser-session-extension/vendor/**',
+      'eslint.config.js',
+    ],
   },
   js.configs.recommended,
+  {
+    files: ['browser-session-extension/**/*.{js,mjs}'],
+    languageOptions: { globals: { ...globals.browser, chrome: 'readonly' } },
+  },
+  {
+    files: ['scripts/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
   ...tseslint.configs.recommended,
   {
     files: ['**/*.{ts,tsx}'],

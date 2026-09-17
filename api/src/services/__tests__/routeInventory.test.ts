@@ -535,6 +535,9 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
 
   // ── /api/browser ──────────────────────────────────────────────────
   'ALL /api/browser/mcp': ['authenticateToken'],
+  // Interactive controls additionally enforce real-user and scope ownership.
+  'POST /api/auth-browser/control': ['authenticateToken'],
+  'ALL /api/auth-browser/mcp': ['authenticateToken'],
 
   // ── /api/swarm-api ────────────────────────────────────────────────
   'ALL /api/swarm-api/mcp': ['authenticateToken'],

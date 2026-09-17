@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { BUILTIN_MCP_SERVERS, INTERNAL_MCP_SERVERS } from '../../data/mcpServers.js';
 import { BUILTIN_SKILLS } from '../../data/skills.js';
 import { MCPManager, resolveInternalMcpConfig } from '../mcpManager.js';
+import { internalMcpContextMatches } from '../mcpHttpHandler.js';
 
 test('resolveInternalMcpConfig maps internal MCP URLs and signs an auth token', () => {
   const secret = 'test-secret';
@@ -60,6 +61,7 @@ test('internal MCP agent-context set matches the per-agent credential servers', 
     .sort();
 
   assert.deepEqual(agentContextUrls, [
+    '__internal__auth_browser',
     '__internal__gdrive',
     '__internal__github',
     '__internal__gmail',
@@ -82,6 +84,22 @@ test('internal MCP agent-context set matches the per-agent credential servers', 
       );
     }
   }
+});
+
+test('runner service token is bound to its agent and board, including missing headers', () => {
+  const config = resolveInternalMcpConfig('__internal__auth_browser', {
+    jwtSecret: 'test-key',
+    agentId: 'agent-a',
+    boardId: 'board-a',
+  });
+  const claims = jwt.verify(config.headers.Authorization.slice(7), 'test-key') as any;
+  assert.equal(claims.mcpAgentId, 'agent-a');
+  assert.equal(internalMcpContextMatches(claims, 'agent-a', 'board-a'), true);
+  assert.equal(internalMcpContextMatches(claims, 'agent-b', 'board-a'), false);
+  assert.equal(internalMcpContextMatches(claims, 'agent-a', 'board-b'), false);
+  assert.equal(internalMcpContextMatches(claims, null, null), false);
+  assert.equal(internalMcpContextMatches({ internal: true } as any, 'agent-a', null), false);
+  assert.equal(internalMcpContextMatches({ internal: true } as any, null, null), true);
 });
 
 test('builtin Code Index plugin is wired to the internal MCP server', () => {

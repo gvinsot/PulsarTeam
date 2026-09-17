@@ -35,9 +35,21 @@ export const INTERNAL_MCP_SERVERS = new Map<string, { path: string; agentContext
   ['__internal__aws_s3', { path: '/api/s3/mcp', agentContext: false }],
   ['__internal__auto_learn', { path: '/api/auto-learn/mcp', agentContext: false }],
   ['__internal__browser', { path: '/api/browser/mcp', agentContext: false }],
+  ['__internal__auth_browser', { path: '/api/auth-browser/mcp', agentContext: true }],
 ]);
 
 export const BUILTIN_MCP_SERVERS = [
+  {
+    id: 'mcp-auth-browser',
+    name: 'Authenticated Browser',
+    url: '__internal__auth_browser',
+    description:
+      'Browse a site using an isolated cluster browser session explicitly shared by the user. Interactive login, including supported OAuth/SSO flows.',
+    icon: '🔐',
+    apiKey: '',
+    builtin: true,
+    enabled: true,
+  },
   {
     id: 'mcp-pulsarcd-read',
     name: 'PulsarCD Read',

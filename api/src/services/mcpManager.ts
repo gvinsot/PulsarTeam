@@ -107,10 +107,14 @@ export function resolveInternalMcpConfig(
     port = process.env.PORT || 3001,
     jwtSecret = null,
     expiresIn = '1h',
+    agentId = null,
+    boardId = null,
   }: {
     port?: string | number;
     jwtSecret?: string | null;
     expiresIn?: SignOptions['expiresIn'];
+    agentId?: string | null;
+    boardId?: string | null;
   } = {}
 ): { url: string; headers: Record<string, string> } {
   const def = INTERNAL_MCP_SERVERS.get(serverUrl);
@@ -119,7 +123,12 @@ export function resolveInternalMcpConfig(
   }
 
   const token = jwt.sign(
-    { username: 'internal-mcp', role: 'admin', internal: true },
+    {
+      username: 'internal-mcp',
+      role: 'admin',
+      internal: true,
+      ...(agentId ? { mcpAgentId: agentId, mcpBoardId: boardId } : {}),
+    },
     jwtSecret || getJwtSecret(),
     { expiresIn }
   );
@@ -209,7 +218,10 @@ export class MCPManager {
         `🔌 [MCP] Creating per-agent connection key=${cacheKey.slice(0, 8)}… server="${server.name}"`
       );
       const client = new MCPClient('PulsarTeam');
-      const internalConfig = resolveInternalMcpConfig(server.url);
+      const internalConfig = resolveInternalMcpConfig(server.url, {
+        agentId: extraHeaders['X-Agent-Id'],
+        boardId: extraHeaders['X-Board-Id'],
+      });
       const connectOpts = { headers: { ...extraHeaders, ...internalConfig.headers } };
       await client.connect(internalConfig.url || server.url, connectOpts);
       this.agentClients.set(cacheKey, client);
@@ -930,7 +942,11 @@ export class MCPManager {
       // so the internal token must outlive long coding sessions — with the 1h
       // default, every internal MCP call
       // starts failing with 401 after an hour.
-      const internal = resolveInternalMcpConfig(server.url, { expiresIn: '24h' });
+      const internal = resolveInternalMcpConfig(server.url, {
+        expiresIn: '24h',
+        agentId: agent.id,
+        boardId: agent.boardId,
+      });
       const headers = {
         ...(internal.headers || {}),
       };
