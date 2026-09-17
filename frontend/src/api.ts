@@ -88,6 +88,46 @@ import type {
 const API_BASE = '/api';
 
 const DEFAULT_TIMEOUT_MS = 30000;
+export interface AuthBrowserStatus {
+  configured: boolean;
+  exists: boolean;
+  connected: boolean;
+  canControl?: boolean;
+  sessionId?: string;
+  phase?: 'login' | 'ready';
+  site?: string;
+  expiresAt?: number;
+}
+export interface AuthBrowserControl {
+  agentId?: string;
+  boardId?: string;
+  operation:
+    | 'status'
+    | 'start'
+    | 'frame'
+    | 'click'
+    | 'text'
+    | 'key'
+    | 'wheel'
+    | 'back'
+    | 'home'
+    | 'activate'
+    | 'takeover'
+    | 'disconnect';
+  sessionId?: string;
+  url?: string;
+  loginOrigins?: string[];
+  text?: string;
+  x?: number;
+  y?: number;
+  delta?: number;
+}
+export interface AuthBrowserFrame {
+  image: string;
+  url: string;
+  width: number;
+  height: number;
+}
 // LLM/Docker-bound operations legitimately run for minutes — only guard
 // against requests that hang forever.
 const LONG_TIMEOUT_MS = 600000;
@@ -1277,6 +1317,8 @@ export const api = {
   // Local Folder (desktop bridge — per-user, not agent/board scoped). Status
   // reflects whether THIS user's desktop app is online with a folder shared.
   getLocalFolderStatus: () => get<LocalFolderStatus>('/local-folder/status'),
+  authBrowserControl: <T = AuthBrowserStatus>(input: AuthBrowserControl) =>
+    post<T>('/auth-browser/control', input, { long: true }),
 
   // GitHub OAuth (per-agent / per-board)
   getGitHubStatus: github.status,

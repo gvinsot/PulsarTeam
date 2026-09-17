@@ -46,6 +46,22 @@ function headerValue(raw: string | string[] | undefined): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+/** Runner-held service tokens must not be reusable with another agent's headers.
+ * Unscoped service tokens are for global discovery only, without agent headers.
+ */
+export function internalMcpContextMatches(
+  user: SessionClaims | undefined,
+  agentId: string | null,
+  boardId: string | null
+): boolean {
+  const claims = user as
+    | (SessionClaims & { internal?: boolean; mcpAgentId?: string; mcpBoardId?: string | null })
+    | undefined;
+  if (!claims?.internal) return true;
+  if (!claims.mcpAgentId) return !agentId && !boardId;
+  return claims.mcpAgentId === agentId && (claims.mcpBoardId || null) === boardId;
+}
+
 /**
  * Create an Express handler for an internal MCP endpoint (Streamable HTTP).
  * This bridges HTTP requests to the MCP server: POST-only check, agent-context
@@ -82,6 +98,16 @@ export function createMcpHttpHandler(
     try {
       const agentId = headerValue(req.headers['x-agent-id']);
       const boardId = headerValue(req.headers['x-board-id']);
+
+      if (!internalMcpContextMatches(req.user, agentId, boardId)) {
+        res
+          .status(403)
+          .json({
+            error:
+              'MCP service token does not match this agent/board. Refresh the runner configuration.',
+          });
+        return;
+      }
 
       if (agentId || boardId) {
         // Claimed agent context needs a session to be judged against. The

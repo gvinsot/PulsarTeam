@@ -24,6 +24,8 @@ import { CodeIndexService } from './services/codeIndexService.js';
 import { createCodeIndexMcpHandler } from './services/codeIndexMcp.js';
 import { createGandiDnsMcpHandler } from './services/gandiDnsMcp.js';
 import { createBrowserMcpHandler } from './services/browserMcp.js';
+import { createAuthBrowserMcpHandler } from './services/authBrowserMcp.js';
+import { authBrowserRoutes } from './routes/authBrowser.js';
 import { pluginRoutes } from './routes/plugins.js';
 import { agentSkillRoutes } from './routes/agentSkills.js';
 import { mcpServerRoutes } from './routes/mcpServers.js';
@@ -263,6 +265,7 @@ app.use('/api/jira', authenticateToken, jiraRoutes());
 app.use('/api/wordpress', authenticateToken, wordpressRoutes());
 app.use('/api/s3', authenticateToken, s3Routes());
 app.use('/api/local-folder', authenticateToken, localFolderRoutes());
+app.use('/api/auth-browser', authenticateToken, authBrowserRoutes());
 app.use('/api/github', authenticateToken, githubRoutes());
 app.use('/api/boards', authenticateToken, boardRoutes(agentManager));
 app.use('/api/tasks', authenticateToken, taskRoutes);
@@ -313,6 +316,7 @@ const mcpMounts: Array<[string, (req: any, res: any) => any]> = [
   ['/api/gandi-dns/mcp', createGandiDnsMcpHandler(mcpManager)],
   ['/api/auto-learn/mcp', createAutoLearnMcpHandler()],
   ['/api/browser/mcp', createBrowserMcpHandler()],
+  ['/api/auth-browser/mcp', createAuthBrowserMcpHandler()],
   // Internal Swarm API MCP endpoint (JWT auth — used by agents via mcpManager)
   ['/api/swarm-api/mcp', createSwarmApiMcpHandler(agentManager)],
   // Pulsar Gateway MCP — the single always-on MCP injected into CLI runners
