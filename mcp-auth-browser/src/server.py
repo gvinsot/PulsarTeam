@@ -8,6 +8,7 @@ import base64
 import contextlib
 import hmac
 import os
+import json
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -40,7 +41,8 @@ class Command(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: str = Field(pattern=r"^(agent|board):[a-zA-Z0-9_-]{1,200}$")
     operation: Literal["status", "start", "frame", "click", "text", "key", "wheel", "back", "home",
-                       "activate", "takeover", "disconnect", "read", "navigate", "scroll"]
+                       "activate", "takeover", "disconnect", "read", "navigate", "scroll",
+                       "prepare_import", "import"]
     session_id: str | None = Field(default=None, max_length=100)
     controller: str | None = Field(default=None, max_length=200)
     url: str = Field(default="", max_length=4000)
@@ -49,6 +51,7 @@ class Command(BaseModel):
     x: int = Field(default=0, ge=0, le=1279)
     y: int = Field(default=0, ge=0, le=799)
     delta: int = Field(default=0, ge=-1400, le=1400)
+    storage: dict | None = None
 
 
 class Session:
@@ -80,7 +83,7 @@ class Session:
         if self.phase != "ready":
             raise HTTPException(409, "Connexion en cours : attendez que l’utilisateur partage la session.")
 
-    async def open(self, playwright, url):
+    async def open(self, playwright, url, storage=None):
         proxy_url = await self.proxy.start()
         self.browser = await playwright.chromium.launch(
             headless=True, chromium_sandbox=True,
@@ -91,7 +94,8 @@ class Session:
             args=["--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
         self.context = await self.browser.new_context(
             viewport={"width": 1280, "height": 800}, accept_downloads=False,
-            service_workers="block", permissions=[])
+            service_workers="block", permissions=[],
+            **({"storage_state": storage} if storage is not None else {}))
 
         async def route(request_route):
             request = request_route.request
@@ -135,12 +139,77 @@ class Session:
 
 
 sessions: dict[str, Session] = {}
+pending_imports: dict[str, dict] = {}
 creation_lock = asyncio.Lock()
+
+
+def import_storage(raw, origin):
+    """No caller-controlled cookie domain or storage origin reaches Chromium."""
+    if not isinstance(raw, dict) or set(raw) - {"cookies", "localStorage"}:
+        raise ValueError("Invalid storage")
+    if len(json.dumps(raw).encode()) > 512_000:
+        raise ValueError("Storage too large")
+    cookies, local = raw.get("cookies", []), raw.get("localStorage", [])
+    if not isinstance(cookies, list) or len(cookies) > 200 or not isinstance(local, list) or len(local) > 200:
+        raise ValueError("Too many entries")
+    result = []
+    seen = set()
+    for c in cookies:
+        if not isinstance(c, dict) or set(c) - {"name", "value", "path", "expires", "httpOnly", "sameSite"}:
+            raise ValueError("Invalid cookie")
+        name, value, path = c.get("name"), c.get("value"), c.get("path", "/")
+        if (not isinstance(name, str) or not name or len(name) > 256 or
+                any(ord(x) < 33 or ord(x) > 126 or x in "=;," for x in name) or
+                not isinstance(value, str) or len(value) > 8192 or
+                any(ord(x) < 32 or ord(x) == 127 for x in value) or
+                not isinstance(path, str) or not path.startswith("/") or len(path) > 2000 or
+                any(ord(x) < 32 or ord(x) == 127 for x in path)):
+            raise ValueError("Invalid cookie fields")
+        same_site = c.get("sameSite", "Lax")
+        expires = c.get("expires", -1)
+        http_only = c.get("httpOnly", False)
+        if (same_site not in {"Strict", "Lax", "None"} or type(http_only) is not bool or
+                type(expires) not in {int, float} or not (-1 <= expires <= 253402300799)):
+            raise ValueError("Invalid cookie attributes")
+        if (name, path) in seen:
+            raise ValueError("Ambiguous cookie")
+        seen.add((name, path))
+        if expires != -1 and expires <= time.time():
+            continue
+        # Strip parent domains: the imported credential is scoped to this exact host.
+        result.append({"name": name, "value": value, "domain": urlsplit(origin).hostname,
+                       "path": path, "secure": True, "httpOnly": http_only,
+                       "sameSite": same_site, "expires": expires})
+    local_seen = set()
+    for entry in local:
+        if (not isinstance(entry, dict) or set(entry) != {"name", "value"} or
+                not isinstance(entry["name"], str) or len(entry["name"]) > 1000 or
+                not isinstance(entry["value"], str) or len(entry["value"]) > 65536 or
+                entry["name"] in local_seen):
+            raise ValueError("Invalid local storage")
+        local_seen.add(entry["name"])
+    if not result and not local:
+        raise ValueError("No session data")
+    return {"cookies": result, "origins": [{"origin": origin, "localStorage": local}]}
+
+
+def pending_status(pending, controller):
+    return {"exists": True, "connected": False, "phase": "pending",
+            "sessionId": pending["id"], "site": pending["origin"],
+            "expiresAt": int(pending["expires"] * 1000),
+            "canControl": controller == pending["controller"]}
+
+
+def expire_imports():
+    for scope, pending in list(pending_imports.items()):
+        if pending["expires"] <= time.time():
+            pending_imports.pop(scope, None)
 
 
 async def reap():
     while True:
         await asyncio.sleep(30)
+        expire_imports()
         for scope, session in list(sessions.items()):
             async with session.lock:
                 if session.expired() and sessions.get(scope) is session:
@@ -160,6 +229,7 @@ async def lifespan(app):
             await task
         await asyncio.gather(*(s.close() for s in sessions.values()), return_exceptions=True)
         sessions.clear()
+        pending_imports.clear()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -185,6 +255,60 @@ async def snapshot(session):
 
 
 async def execute(cmd: Command):
+    expire_imports()
+    if cmd.operation == "prepare_import":
+        if not cmd.controller:
+            raise HTTPException(403, "Connexion utilisateur requise")
+        origin = https_origin(cmd.url)
+        await public_addresses(urlsplit(origin).hostname)
+        async with creation_lock:
+            if cmd.scope in sessions or cmd.scope in pending_imports:
+                raise HTTPException(409, "Déconnectez la session existante.")
+            if len(pending_imports) >= 100:
+                raise HTTPException(429, "Trop de connexions en attente.")
+            pending = {"id": str(uuid.uuid4()), "origin": origin, "controller": cmd.controller,
+                       "expires": time.time() + 600}
+            pending_imports[cmd.scope] = pending
+            return pending_status(pending, cmd.controller)
+    if cmd.operation == "import":
+        async with creation_lock:
+            pending = pending_imports.get(cmd.scope)
+            if not pending or pending["expires"] <= time.time() or pending.get("consumed"):
+                raise HTTPException(409, "Connexion expirée")
+            if cmd.controller != pending["controller"] or cmd.session_id != pending["id"]:
+                raise HTTPException(403, "Connexion incorrecte")
+            state = import_storage(cmd.storage, pending["origin"])
+            if cmd.scope in sessions:
+                raise HTTPException(409, "Une session existe déjà")
+            if len(sessions) >= MAX_SESSIONS:
+                raise HTTPException(429, "Capacité atteinte")
+            # Consume before I/O, but keep the scope reserved during launch so
+            # agents cannot fall through to their board's different account.
+            pending["consumed"] = True
+            session = Session(cmd.controller, pending["origin"], [])
+            session.phase = "ready"
+            try:
+                await session.open(app.state.playwright, session.origin, state)
+                if pending_imports.get(cmd.scope) is not pending or pending["expires"] <= time.time():
+                    raise HTTPException(409, "Transfert annulé ou expiré")
+                if https_origin(session.active_page().url) != session.origin:
+                    raise HTTPException(409, "Le site demande une nouvelle connexion")
+                sessions[cmd.scope] = session
+                return {**session.status(), "canControl": True}
+            except BaseException:
+                await session.close()
+                raise
+            finally:
+                if pending_imports.get(cmd.scope) is pending:
+                    pending_imports.pop(cmd.scope)
+    pending = pending_imports.get(cmd.scope)
+    if pending:
+        if cmd.operation == "status":
+            return pending_status(pending, cmd.controller)
+        if cmd.operation == "disconnect" and cmd.controller and cmd.session_id == pending["id"]:
+            pending_imports.pop(cmd.scope)
+            return {"exists": False, "connected": False}
+        raise HTTPException(409, "Transfert de session en attente")
     if cmd.operation == "start":
         if not cmd.controller:
             raise HTTPException(403, "Connexion utilisateur requise")

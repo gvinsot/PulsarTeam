@@ -94,39 +94,27 @@ export interface AuthBrowserStatus {
   connected: boolean;
   canControl?: boolean;
   sessionId?: string;
-  phase?: 'login' | 'ready';
+  phase?: 'pending' | 'login' | 'ready';
   site?: string;
   expiresAt?: number;
 }
 export interface AuthBrowserControl {
   agentId?: string;
   boardId?: string;
-  operation:
-    | 'status'
-    | 'start'
-    | 'frame'
-    | 'click'
-    | 'text'
-    | 'key'
-    | 'wheel'
-    | 'back'
-    | 'home'
-    | 'activate'
-    | 'takeover'
-    | 'disconnect';
+  operation: 'status' | 'prepare_import' | 'import' | 'activate' | 'takeover' | 'disconnect';
   sessionId?: string;
   url?: string;
-  loginOrigins?: string[];
-  text?: string;
-  x?: number;
-  y?: number;
-  delta?: number;
-}
-export interface AuthBrowserFrame {
-  image: string;
-  url: string;
-  width: number;
-  height: number;
+  storage?: {
+    cookies: {
+      name: string;
+      value: string;
+      path: string;
+      expires: number;
+      httpOnly: boolean;
+      sameSite: 'Strict' | 'Lax' | 'None';
+    }[];
+    localStorage: { name: string; value: string }[];
+  };
 }
 // LLM/Docker-bound operations legitimately run for minutes — only guard
 // against requests that hang forever.

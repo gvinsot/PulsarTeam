@@ -85,6 +85,21 @@ test('human control rejects service sessions, other scopes, and injected control
       [{ operation: 'status', agentId: 'a' }, { 'x-service': 'yes' }, 403],
       [{ operation: 'frame', agentId: 'a', controller: 'bob' }, {}, 400],
       [{ operation: 'read', agentId: 'a' }, {}, 400],
+      [{ operation: 'start', agentId: 'a', url: 'https://example.com' }, {}, 400],
+      [{ operation: 'import', agentId: 'a', storage: { cookies: [], localStorage: [] } }, {}, 400],
+      [
+        {
+          operation: 'import',
+          agentId: 'a',
+          sessionId: '00000000-0000-4000-8000-000000000000',
+          storage: {
+            cookies: [{ name: 'session', value: 'secret-not-for-errors', domain: '.evil.test' }],
+            localStorage: [],
+          },
+        },
+        {},
+        400,
+      ],
     ] as const) {
       permitted.push('a');
       const res = await fetch(url, {
@@ -93,8 +108,83 @@ test('human control rejects service sessions, other scopes, and injected control
         body: JSON.stringify(body),
       });
       assert.equal(res.status, expected);
+      assert.ok(!(await res.text()).includes('secret-not-for-errors'));
     }
   } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test('an unreachable worker is distinguished from a missing secret without exposing transport details', async () => {
+  process.env.AUTH_BROWSER_KEY = 'test-browser-key-with-at-least-32-characters';
+  const stub = mock.method(globalThis, 'fetch', async () => {
+    throw new Error('network failure with private diagnostic do-not-leak');
+  });
+  try {
+    await assert.rejects(
+      browserCommand({ type: 'agent', id: 'a' }, 'status'),
+      e =>
+        e instanceof Error &&
+        e.message.includes('secret est configuré') &&
+        !e.message.includes('do-not-leak')
+    );
+  } finally {
+    stub.mock.restore();
+  }
+});
+
+test('session import forwards only the authenticated controller and authorized scope', async () => {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = { userId: 'alice', username: 'alice', role: 'admin' } as any;
+    next();
+  });
+  app.use(authBrowserRoutes());
+  permitted.push('selected-board');
+  const server = createServer(app);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const request = globalThis.fetch;
+  let forwarded: any;
+  const stub = mock.method(globalThis, 'fetch', async (_url: unknown, options: RequestInit) => {
+    forwarded = JSON.parse(String(options.body));
+    return new Response(JSON.stringify({ exists: true, connected: true }), { status: 200 });
+  });
+  try {
+    const result = await request(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}/control`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operation: 'import',
+          boardId: 'selected-board',
+          sessionId: '00000000-0000-4000-8000-000000000000',
+          storage: {
+            cookies: [
+              {
+                name: 'session',
+                value: 'synthetic-secret',
+                path: '/',
+                expires: -1,
+                httpOnly: true,
+                sameSite: 'Lax',
+              },
+            ],
+            localStorage: [],
+          },
+        }),
+      }
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.headers.get('cache-control'), 'no-store');
+    assert.equal(forwarded.controller, 'alice');
+    assert.equal(forwarded.scope, 'board:selected-board');
+    assert.equal(forwarded.session_id, '00000000-0000-4000-8000-000000000000');
+    assert.equal(forwarded.storage.cookies[0].httpOnly, true);
+    assert.ok(!(await result.text()).includes('synthetic-secret'));
+  } finally {
+    stub.mock.restore();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });

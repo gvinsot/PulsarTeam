@@ -7,7 +7,7 @@ export interface BrowserStatus {
   exists: boolean;
   connected: boolean;
   canControl?: boolean;
-  phase?: 'login' | 'ready';
+  phase?: 'pending' | 'login' | 'ready';
   sessionId?: string;
   site?: string;
   expiresAt?: number;
@@ -32,24 +32,33 @@ export async function browserCommand<T = BrowserStatus>(
   operation: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
-  if (!browserConfigured()) throw new Error('Le navigateur authentifié n’est pas configuré.');
-  const response = await fetch(
-    `${process.env.AUTH_BROWSER_SERVICE_URL || 'http://mcp-auth-browser:8000'}/command`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${readSecret('AUTH_BROWSER_KEY')}`,
-      },
-      body: JSON.stringify({ ...params, scope: `${scope.type}:${scope.id}`, operation }),
-      signal: AbortSignal.timeout(55_000),
-      redirect: 'error',
-    }
-  );
+  if (!browserConfigured())
+    throw new BrowserCommandError('Le navigateur authentifié n’est pas configuré.', 503);
+  let response: Response;
+  try {
+    response = await fetch(
+      `${process.env.AUTH_BROWSER_SERVICE_URL || 'http://mcp-auth-browser:8000'}/command`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${readSecret('AUTH_BROWSER_KEY')}`,
+        },
+        body: JSON.stringify({ ...params, scope: `${scope.type}:${scope.id}`, operation }),
+        signal: AbortSignal.timeout(55_000),
+        redirect: 'error',
+      }
+    );
+  } catch {
+    throw new BrowserCommandError(
+      'Le secret est configuré, mais le service de navigateur est injoignable. Vérifiez son état et sa liaison réseau avec l’API.',
+      503
+    );
+  }
   if (!response.ok) {
     // Never forward arbitrary worker/Playwright response bodies or credentials.
     const errors: Record<number, string> = {
-      400: 'URL ou commande invalide. Utilisez une URL HTTPS publique.',
+      400: 'URL, commande ou données de session invalides. Utilisez un site HTTPS public.',
       403: 'Accès au navigateur refusé : vérifiez le propriétaire de la session et le domaine.',
       409: 'Session absente, expirée, occupée ou non partagée. Vérifiez la connexion dans les plugins.',
       429: 'Capacité de navigateurs atteinte. Fermez une session avant de réessayer.',

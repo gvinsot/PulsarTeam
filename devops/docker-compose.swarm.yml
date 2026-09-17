@@ -798,6 +798,8 @@ services:
   # Dedicated, ephemeral authenticated browser; no Traefik/public port, no DB network.
   # Provision AUTH_BROWSER_KEY to enable it. One replica owns the live sessions.
   mcp-auth-browser:
+    # Per-service seccomp + no-new-privileges are reconciled by the post-deploy
+    # hook, since this CLI ignores service security_opt during stack deploy.
     build:
       context: ..
       dockerfile: mcp-auth-browser/Dockerfile
@@ -811,10 +813,20 @@ services:
     security_opt:
       - no-new-privileges:true
     read_only: true
-    tmpfs:
-      - /tmp:size=1G,mode=1777
+    # Swarm needs a mount spec; the top-level `tmpfs` shortcut is not applied
+    # by our deployment path, leaving /tmp on the read-only root filesystem.
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 1073741824
     deploy:
       replicas: 1
+      # Keep interactive credentials off a cross-node hop, and avoid relying
+      # on cross-node encrypted-overlay connectivity for the login stream.
+      placement:
+        constraints:
+          - node.hostname == server-b
       resources:
         limits:
           memory: 4G

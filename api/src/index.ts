@@ -525,6 +525,12 @@ app.use(function errorHandler(
   next: express.NextFunction
 ) {
   if (res.headersSent) return next(err);
+  // A JSON-parser failure can include the credential payload in its message.
+  // Never log or return that payload for browser session imports, even in dev.
+  if (req.path === '/api/auth-browser/control') {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(400).json({ error: 'Commande ou session à transférer invalide.' });
+  }
   if (err instanceof ZodError) {
     return res.status(400).json(formatZodError(err));
   }
