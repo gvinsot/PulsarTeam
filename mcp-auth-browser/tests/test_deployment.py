@@ -42,6 +42,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(privileges['Seccomp']['Mode'], 'custom')
         self.assertEqual(container, original)
 
+    def test_post_hook_targets_the_stack_pulsarcd_deploys(self):
+        # PulsarCD exports DEPLOY_STACK_NAME to hooks, not STACK_NAME.
+        hook = (path.parent / 'docker-compose.post.sh').read_text()
+        self.assertIn('DEPLOYED_STACK="${DEPLOY_STACK_NAME:-${STACK_NAME:-pulsarteam}}"', hook)
+
     def test_rejects_wrong_stack_before_mutation(self):
         with patch.object(deployment, 'request', return_value={
             'Spec': {'Labels': {'com.docker.stack.namespace': 'another-stack'}}
