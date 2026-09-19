@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import express from 'express';
 import { setPool } from '../database/connection.js';
 import * as network from '../remoteMcpFetch.js';
+import { PULSAR_TEAM_MCP_SERVERS } from '../../data/pulsarTeamMcp.js';
 
 process.env.ENCRYPTION_KEY = 'remote-mcp-tests-only-0123456789abcdef0123456789abcdef';
 const connections = new Map<string, string>();
@@ -219,6 +220,36 @@ test('OAuth discovers metadata, registers, persists encrypted PKCE, exchanges co
     'refresh-2'
   );
   assert.equal(locks.size, 0);
+});
+
+test('PulsarTeam plugins discover and call existing surfaces with attachment-scoped keys', async t => {
+  const calls: { url: string; authorization: string | null }[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string, init?: RequestInit) => {
+    calls.push({
+      url: String(input),
+      authorization: new Headers(init?.headers).get('Authorization'),
+    });
+    return fixtureFetch(source, init);
+  });
+  for (const builtin of PULSAR_TEAM_MCP_SERVERS) {
+    await store.writeRemoteCredentials(builtin.id, scope, {
+      url: builtin.url,
+      mode: 'api_key',
+      apiKey: 'access-scoped-key',
+      headerName: 'Authorization',
+      prefix: 'Bearer ',
+    });
+    const attachment = await remote.remoteScopeForAgent(builtin.id, 'agent-a');
+    const result = await remote.useRemoteClient(builtin, attachment, async client => {
+      assert.equal(client.tools[0].name, 'read');
+      return client.callTool('read', {});
+    });
+    assert.equal(result.content[0].text, 'account-a');
+    await assert.rejects(remote.remoteScopeForAgent(builtin.id, 'agent-b'), /Connectez/);
+    assert.ok(calls.some(c => c.url === builtin.url));
+  }
+  assert.equal(toolCalls, 3);
+  assert.ok(calls.every(c => c.authorization === 'Bearer access-scoped-key'));
 });
 
 test('CIMD avoids dynamic registration when advertised', async () => {

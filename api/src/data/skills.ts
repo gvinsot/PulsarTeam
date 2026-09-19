@@ -147,62 +147,58 @@ CODE INDEX
 When the Code Index MCP server is available, use native mcp_call with server "Code Index". Start with its list_repos tool, reuse an existing repo ID when possible, and otherwise index the current project before searching symbols or semantic matches.`,
   },
   {
+    id: 'skill-pulsar-team-admin',
+    name: 'PulsarTeam Admin',
+    description: 'Configure agents, boards, projects, workflows and shares via PulsarTeam Admin',
+    category: 'general',
+    icon: '⚙️',
+    builtin: true,
+    mcpServerIds: ['mcp-pulsar-team-admin'],
+    instructions: `Use native mcp_call with server "PulsarTeam Admin" and the tool names and schemas listed in the MCP Tools section.
+
+This plugin uses /api/mcp/admin. Connect an admin-scoped API key on the agent or its board. The key scope selects tools; the owner's live role and resource permissions still determine access.
+
+Use list_boards, list_projects, list_plugins, list_mcp_servers and list_agent_skills to discover resources. Read get_agent or get_board before modifying configuration. Agent tools create, update, delete and attach tools; project and board tools configure projects, boards, workflows and shares. list_users requires the actual admin role.
+
+Preserve omitted secrets and configuration fields. set_board_workflow takes the full columns list; omitting transitions preserves them, while [] removes them. Use the Management plugin for task operations.`,
+  },
+  {
+    // Preserve the former plugin ID so existing agent/board assignments survive.
     id: 'skill-delegation',
-    name: 'Delegation & Management',
-    description: 'Manage agents and create tasks via the Swarm API MCP tools',
+    name: 'PulsarTeam Management',
+    description:
+      'Create, delegate, run and manage tasks and recurring rules via PulsarTeam Management',
     category: 'general',
     icon: '👥',
     builtin: true,
-    mcpServerIds: ['mcp-swarm-api'],
-    instructions: `You can manage agents and delegate work using the Swarm API MCP tools.
+    mcpServerIds: ['mcp-pulsar-team-management'],
+    instructions: `Use native mcp_call with server "PulsarTeam Management" and the tool names and schemas listed in the MCP Tools section.
 
-The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Use the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.
+This plugin uses /api/mcp/management. Connect a management-scoped or admin-scoped API key on the agent or its board. Every operation respects the key owner's live permissions.
 
-## AVAILABLE TOOLS
+1. Use list_boards to discover board IDs and workflow columns, and list_agents to discover executors.
+2. Use create_task with board_id and task. Tasks are created unassigned; use delegate_task with task_id and agent_id to assign one.
+3. Use start_task or resume_task to request execution and get_task to monitor asynchronous progress. Use stop_task to interrupt a task.
+4. Use update_task for metadata, status and completion; use list_tasks and search_tasks to inspect work and history.
+5. Use set_task_recurrence and the task-template tools to manage recurring work.
 
-the native mcp_call tool (server: Swarm API; tool: list_agents; arguments: {})
-  — List all agents with their status, role, project, current task, and open task count.
-  Optional filters: {"project": "MyApp"} or {"status": "idle"}.
+Board and agent configuration belongs to the Admin plugin. Never use the legacy Swarm API add_task or get_agent_status names on this server.`,
+  },
+  {
+    id: 'skill-pulsar-team-insert',
+    name: 'PulsarTeam Insert',
+    description: 'Create tasks on the board bound to an insert API key via PulsarTeam Insert',
+    category: 'general',
+    icon: '📥',
+    builtin: true,
+    mcpServerIds: ['mcp-pulsar-team-insert'],
+    instructions: `Use native mcp_call with server "PulsarTeam Insert" and the tool names and schemas listed in the MCP Tools section.
 
-the native mcp_call tool (server: Swarm API; tool: get_agent_status; arguments: {"agent_name": "Developer"})
-  — Get detailed status for a specific agent: current task, full task list, metrics.
-  Use agent_name or agent_id.
+This plugin uses /api/mcp/insert. Connect a board-bound insert API key on the agent or its board. Admin and management keys do not open this surface. The destination board and permitted columns come exclusively from the insert key, not from the agent's board or tool arguments.
 
-the native mcp_call tool (server: Swarm API; tool: list_boards; arguments: {})
-  — List all task boards with their workflow columns. Use this to discover board IDs before adding tasks.
+Use get_board with {} to discover the target board's name and available columns. Use create_task with task and optional title, description, priority, due_date, task_type, is_manual, status, repository or storage fields. Do not pass board_id.
 
-the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Implement password reset in src/auth/"})
-  — Add a task to a board. board_id is REQUIRED — use list_boards first.
-  Tasks are always created unassigned on the board; any agent watching the board can pick them up.
-  Optional: project, status (workflow column), repo_full_name, storage_path.
-
-the native mcp_call tool (server: Swarm API; tool: search_tasks; arguments: {"query": "password reset", "only_completed": true, "limit": 20})
-  — Search the task history with optional free-text query and filters.
-  Optional filters: agent_id, agent_name, project, board_id, status, repo_full_name,
-    created_after / created_before, completed_after / completed_before (ISO timestamps),
-    only_completed (bool), include_deleted (bool), limit (default 50, max 200), offset.
-  Use to dig up past work, check whether something has already been done, audit an agent's
-  history, or find tasks similar to the one you are about to delegate.
-
-## DELEGATION WORKFLOW
-
-1. First, check available agents:
-   the native mcp_call tool (server: Swarm API; tool: list_agents; arguments: {"status": "idle"})
-
-2. Add tasks to a board (always pass board_id). Tasks are created unassigned and any agent watching the board can pick them up:
-   the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Read src/auth/ and implement password reset", "project": "MyApp"})
-   the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Write unit tests for the user service", "project": "MyApp"})
-   the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Investigate flaky test in src/checkout/", "project": "MyApp"})
-
-3. Monitor progress:
-   the native mcp_call tool (server: Swarm API; tool: get_agent_status; arguments: {"agent_name": "Developer"})
-
-## IMPORTANT
-- Tasks are executed asynchronously — agents pick them up from their queue and work autonomously.
-- board_id is ALWAYS required on add_task. Call list_boards first to discover IDs.
-- add_task creates an UNASSIGNED task on the board. To assign work to a specific agent, the agent must pick the task up from the board itself — the MCP no longer supports targeting an agent at creation time.
-- Check agent status to monitor task progress and verify completion.`,
+Only get_board and create_task are available. Tasks cannot be read, assigned, updated, run or deleted here. Inserted tasks are external and await human approval before execution. If a failed response includes task_id, report it instead of blindly retrying and creating a duplicate.`,
   },
   {
     id: 'skill-onedrive',

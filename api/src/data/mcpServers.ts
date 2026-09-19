@@ -1,3 +1,5 @@
+import { PULSAR_TEAM_MCP_SERVERS } from './pulsarTeamMcp.js';
+
 /**
  * Internal MCP server definitions, keyed by the `__internal__*` URL sentinel
  * used in BUILTIN_MCP_SERVERS. Kept as a sibling map (NOT extra fields on the
@@ -40,6 +42,7 @@ export const INTERNAL_MCP_SERVERS = new Map<string, { path: string; agentContext
 ]);
 
 export const BUILTIN_MCP_SERVERS = [
+  ...PULSAR_TEAM_MCP_SERVERS,
   {
     id: 'mcp-linkedin',
     name: 'LinkedIn',

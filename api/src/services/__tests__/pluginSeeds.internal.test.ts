@@ -57,7 +57,13 @@ const skills = firstArrayExport(skillsModule);
 const mcpServers = firstArrayExport(mcpServersModule);
 
 test('seeded builtin plugins reference the canonical MCP server ids', () => {
-  for (const skillName of ['OneDrive', 'Code Index']) {
+  for (const skillName of [
+    'OneDrive',
+    'Code Index',
+    'PulsarTeam Admin',
+    'PulsarTeam Management',
+    'PulsarTeam Insert',
+  ]) {
     const skill = skills.find(entry => isRecord(entry) && entry.name === skillName);
     assert.ok(skill, `Expected seeded plugin for ${skillName}`);
 
@@ -72,4 +78,28 @@ test('seeded builtin plugins reference the canonical MCP server ids', () => {
       `${skillName} should reference canonical MCP server id "${mcpServerId}", got: ${refs.join(', ') || '(none)'}`
     );
   }
+});
+
+test('Management replaces Delegation without breaking existing plugin assignments', async () => {
+  const { SkillManager } = await import('../skillManager.js');
+  const { MCPManager } = await import('../mcpManager.js');
+  const manager = new SkillManager();
+  const mcps = new MCPManager();
+  manager.setMcpResolver(id => mcps.getById(id));
+  manager.skills.set('skill-delegation', {
+    id: 'skill-delegation',
+    name: 'Delegation & Management',
+    description: '',
+    builtin: true,
+    userConfig: {},
+    mcpServerIds: ['mcp-swarm-api'],
+    mcps: [{ id: 'mcp-swarm-api', name: 'Swarm API', url: '__internal__swarm_api' }] as any,
+  });
+  await manager.seedDefaults(skillsModule.BUILTIN_SKILLS);
+  const management = manager.getById('skill-delegation')!;
+  assert.equal(management.name, 'PulsarTeam Management');
+  assert.deepEqual(management.mcpServerIds, ['mcp-pulsar-team-management']);
+  assert.equal(management.mcps[0].remoteAuth, 'api_key');
+  assert.equal(management.mcps[0].authMode, 'bearer');
+  assert.ok(!manager.getAll().some(p => p.name === 'Delegation & Management'));
 });

@@ -6,6 +6,7 @@ import {
 } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthClientMetadata } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { MCPClient } from './mcpClient.js';
+import { scopedMcpFetch } from './pulsarTeamMcpFetch.js';
 import { remoteMcpFetch, validateRemoteUrl } from './remoteMcpFetch.js';
 import { getAgentById } from './database/agents.js';
 import {
@@ -175,7 +176,7 @@ export async function useRemoteClient<T>(
     }
     const client = new MCPClient('PulsarTeam-Remote');
     try {
-      const options: Parameters<MCPClient['connect']>[1] = { fetch: remoteMcpFetch };
+      const options: Parameters<MCPClient['connect']>[1] = { fetch: scopedMcpFetch(server) };
       if (credentials.mode === 'oauth') {
         if (!credentials.tokens)
           throw new UnauthorizedError('Reconnectez ce MCP dans les plugins.');

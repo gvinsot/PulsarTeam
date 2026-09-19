@@ -304,6 +304,7 @@ export class MCPManager {
           id: def.id,
           name: def.name,
           url: def.url,
+          ...('remoteAuth' in def ? { remoteAuth: def.remoteAuth } : {}),
           description: def.description,
           icon: def.icon,
           builtin: true,
@@ -335,7 +336,7 @@ export class MCPManager {
    */
   async connectAll() {
     const enabled = Array.from(this.servers.values()).filter(s => {
-      if (s.enabled === false) return false;
+      if (s.enabled === false || s.remoteAuth) return false;
       // Skip external servers without apiKey — they need per-agent auth
       if (!s.apiKey && s.url && !s.url.startsWith('__internal__')) {
         const internal = resolveInternalMcpConfig(s.url);

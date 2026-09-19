@@ -1,5 +1,26 @@
 # Plugins, Agent skills, MCP servers
 
+## PulsarTeam built-in plugins
+
+The former **Delegation & Management** plugin is replaced by:
+
+| Plugin | MCP endpoint | Required key |
+|---|---|---|
+| PulsarTeam Admin | `/api/mcp/admin` | `admin` |
+| PulsarTeam Management | `/api/mcp/management` | `management` or `admin` |
+| PulsarTeam Insert | `/api/mcp/insert` | Board-bound `insert` |
+
+Management keeps the `skill-delegation` identifier so existing agent and board
+assignments survive. Built-in seeding updates its instructions and MCP binding.
+Connect a key in the plugin's connector on the agent or board, then test the
+connection. Keys are encrypted and scoped to that attachment; CLI agents use
+them through the Pulsar Gateway. Insert's target board is determined by its key.
+
+These plugins call the existing key-authenticated endpoints on loopback, with
+no internal service JWT. Only the three canonical server IDs and their exact
+URLs may use this transport; remote catalog servers retain the public-HTTPS
+guard and redirects are refused. No Read surface is introduced.
+
 ## Remote MCP catalog and scoped connections — `/api/remote-mcp`
 
 See [remote MCP guide](../../docs/remote-mcp.md). These routes require a session, except the OAuth callback and public client metadata document:

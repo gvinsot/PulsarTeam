@@ -129,6 +129,26 @@ test('builtin MCP servers remain discoverable before explicit seeding', () => {
   assert.ok(byName);
   assert.equal(byName.id, 'mcp-code-index');
 });
+test('PulsarTeam servers keep scoped auth after reseeding and never connect globally', async () => {
+  const manager = new MCPManager();
+  const definitions = BUILTIN_MCP_SERVERS.filter(s => s.id.startsWith('mcp-pulsar-team-'));
+  assert.equal(definitions.length, 3);
+  await manager.seedDefaults(definitions);
+  await manager.seedDefaults(definitions);
+  for (const server of definitions) {
+    assert.equal(manager.getById(server.id)?.remoteAuth, 'api_key');
+    manager.servers.get(server.id)!.apiKey = 'legacy-global-key';
+  }
+  // connectAll catches failures, so count attempts independently.
+  let attempts = 0;
+  manager.connect = async () => {
+    attempts++;
+    throw new Error('Global connection forbidden');
+  };
+  await manager.connectAll();
+  assert.equal(attempts, 0);
+});
+
 test('_isSessionExpired matches the session/token expiry heuristics', () => {
   const manager = new MCPManager() as any;
 
