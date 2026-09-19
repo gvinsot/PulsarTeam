@@ -1,15 +1,24 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createMcpHttpHandler, type McpHandlerContext } from './mcpHttpHandler.js';
-import { browserCommand, resolveBrowserScope } from './authBrowser.js';
+import {
+  browserCommand,
+  navigateBrowser,
+  resolveBrowserScope,
+  UNSOLVED_CHALLENGE,
+} from './authBrowser.js';
 import { text, jsonError } from './mcpResponses.js';
 
 export function createAuthBrowserMcpServer(ctx: Pick<McpHandlerContext, 'agentId' | 'boardId'>) {
   const server = new McpServer({ name: 'Authenticated Browser', version: '1.0.0' });
-  async function call(operation: string, params = {}) {
+  async function call(operation: string, params: { url?: string; delta?: number } = {}) {
     try {
       const scope = await resolveBrowserScope(ctx.agentId, ctx.boardId);
-      const result = await browserCommand(scope, operation, params);
+      const result =
+        operation === 'navigate' && params.url
+          ? await navigateBrowser<Record<string, unknown>>(scope, params.url)
+          : await browserCommand<Record<string, unknown>>(scope, operation, params);
+      if (result.challenge) return jsonError(UNSOLVED_CHALLENGE);
       return text(JSON.stringify(result));
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : 'Browser unavailable');

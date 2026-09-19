@@ -27,6 +27,8 @@ from crawl4ai import (
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
+from flaresolverr import make_fallback
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -187,6 +189,11 @@ async def _drop_if_redirected_inward(result):
     return result
 
 
+# Last resort for pages crawl4ai judges blocked (Cloudflare challenge…); see
+# flaresolverr.py. None when FLARESOLVERR_URL is unset.
+_flaresolverr_fallback = make_fallback(_assert_public_url)
+
+
 async def _arun_bare(url: str, config: CrawlerRunConfig):
     crawler = await get_crawler()
     try:
@@ -266,6 +273,23 @@ def create_clean_markdown_generator(
         min_word_threshold=word_count_threshold,
     )
     return DefaultMarkdownGenerator(content_filter=prune_filter)
+
+
+NO_CONTENT = "No content extracted."
+
+
+def page_markdown(result) -> str:
+    """Filtered Markdown, else the unfiltered one. The pruning filter can leave a
+    lone blank on short pages (a solved challenge page, a small article), and a
+    blank string is truthy: test the stripped text, not the string."""
+    markdown = result.markdown
+    for attr in ("fit_markdown", "raw_markdown"):
+        value = getattr(markdown, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    if isinstance(markdown, str) and markdown.strip():
+        return markdown
+    return NO_CONTENT
 
 
 @asynccontextmanager
@@ -351,6 +375,7 @@ async def crawl(req: CrawlRequest):
     )
     
     config = CrawlerRunConfig(
+        fallback_fetch_function=_flaresolverr_fallback,
         word_count_threshold=req.word_count_threshold,
         cache_mode=CacheMode.BYPASS,
         markdown_generator=md_generator,
@@ -364,17 +389,7 @@ async def crawl(req: CrawlRequest):
     
     result = await _arun_with_recovery(url=req.url, config=config)
     if result.success:
-        # crawl4ai retourne déjà du markdown dans result.markdown
-        # Préférer fit_markdown (filtré) si disponible, sinon raw_markdown
-        if hasattr(result.markdown, "fit_markdown") and result.markdown.fit_markdown:
-            content = result.markdown.fit_markdown
-        elif hasattr(result.markdown, "raw_markdown") and result.markdown.raw_markdown:
-            content = result.markdown.raw_markdown
-        else:
-            # Fallback si la structure est différente
-            content = str(result.markdown) if result.markdown else "No content extracted."
-        
-        return {"content": content}
+        return {"content": page_markdown(result)}
     return {"error": f"status={result.status_code}, {result.error_message}"}
 
 
@@ -391,6 +406,7 @@ async def crawl_many(req: CrawlManyRequest):
     )
     
     config = CrawlerRunConfig(
+        fallback_fetch_function=_flaresolverr_fallback,
         word_count_threshold=req.word_count_threshold,
         cache_mode=CacheMode.BYPASS,
         markdown_generator=md_generator,
@@ -403,16 +419,7 @@ async def crawl_many(req: CrawlManyRequest):
     pages = []
     for r in results:
         if r.success:
-            # crawl4ai retourne déjà du markdown dans r.markdown
-            # Préférer fit_markdown (filtré) si disponible, sinon raw_markdown
-            if hasattr(r.markdown, "fit_markdown") and r.markdown.fit_markdown:
-                content = r.markdown.fit_markdown
-            elif hasattr(r.markdown, "raw_markdown") and r.markdown.raw_markdown:
-                content = r.markdown.raw_markdown
-            else:
-                content = str(r.markdown) if r.markdown else "No content extracted."
-            
-            pages.append({"url": r.url, "content": content})
+            pages.append({"url": r.url, "content": page_markdown(r)})
         else:
             pages.append({"url": r.url, "error": r.error_message})
     return {"pages": pages}
@@ -426,6 +433,7 @@ async def crawl_many(req: CrawlManyRequest):
 )
 async def get_links(req: GetLinksRequest):
     config = CrawlerRunConfig(
+        fallback_fetch_function=_flaresolverr_fallback,
         cache_mode=CacheMode.BYPASS,
         excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
         remove_overlay_elements=True,
@@ -472,6 +480,7 @@ async def extract(req: ExtractRequest):
         strategy = LLMExtractionStrategy(**extraction_kwargs)
 
         config = CrawlerRunConfig(
+            fallback_fetch_function=_flaresolverr_fallback,
             extraction_strategy=strategy,
             cache_mode=CacheMode.BYPASS,
             excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
@@ -508,6 +517,7 @@ async def search_web(req: SearchRequest):
         )
         
         config = CrawlerRunConfig(
+            fallback_fetch_function=_flaresolverr_fallback,
             word_count_threshold=10,
             cache_mode=CacheMode.BYPASS,
             markdown_generator=md_generator,
@@ -519,17 +529,8 @@ async def search_web(req: SearchRequest):
         result = await _arun_with_recovery(url=search_url, config=config)
         
         if result.success:
-            # Get markdown content from crawled page
-            if hasattr(result.markdown, "fit_markdown") and result.markdown.fit_markdown:
-                content = result.markdown.fit_markdown
-            elif hasattr(result.markdown, "raw_markdown") and result.markdown.raw_markdown:
-                content = result.markdown.raw_markdown
-            elif isinstance(result.markdown, str):
-                content = result.markdown
-            else:
-                content = str(result.markdown) if result.markdown else "No content extracted."
-            
-            if content:
+            content = page_markdown(result)
+            if content != NO_CONTENT:
                 # Add a header to make it clear these are search results
                 formatted_content = f"# Search Results for: {req.query}\n\n{content}"
                 return {"content": formatted_content}

@@ -36,9 +36,21 @@ export const INTERNAL_MCP_SERVERS = new Map<string, { path: string; agentContext
   ['__internal__auto_learn', { path: '/api/auto-learn/mcp', agentContext: false }],
   ['__internal__browser', { path: '/api/browser/mcp', agentContext: false }],
   ['__internal__auth_browser', { path: '/api/auth-browser/mcp', agentContext: true }],
+  ['__internal__linkedin', { path: '/api/linkedin/mcp', agentContext: true }],
 ]);
 
 export const BUILTIN_MCP_SERVERS = [
+  {
+    id: 'mcp-linkedin',
+    name: 'LinkedIn',
+    url: '__internal__linkedin',
+    description:
+      'LinkedIn — search people, companies, jobs and posts, read profiles, company pages and the feed with the LinkedIn session the user shared from their browser (read-only, per agent or board)',
+    icon: '💼',
+    apiKey: '',
+    builtin: true,
+    enabled: true,
+  },
   {
     id: 'mcp-auth-browser',
     name: 'Authenticated Browser',

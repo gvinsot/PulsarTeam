@@ -67,6 +67,8 @@ services:
       # board receives them). Docker secret → /run/secrets/HOME_FORM_KEY.
       - HOME_FORM_KEY=${HOME_FORM_KEY:-}
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
+      # Solves Cloudflare challenges for the authenticated browser (root URL only).
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
       - AUTH_BROWSER_SERVICE_URL=http://mcp-auth-browser:8000
       - AUTH_BROWSER_KEY=${AUTH_BROWSER_KEY:-}
       - OFFICE_SERVICE_URL=http://office-service:8000

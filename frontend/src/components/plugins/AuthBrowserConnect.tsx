@@ -3,23 +3,32 @@ import { api, type AuthBrowserControl } from '../../api';
 import { useConnectStatus, type ConnectWidgetProps } from '../connect/useConnectStatus';
 import { errorMessage } from '../../utils/errors';
 
+/** A plugin pinned to one site (e.g. LinkedIn): its own session slot, no URL field. */
+export interface BrowserSitePreset {
+  site: NonNullable<AuthBrowserControl['site']>;
+  name: string;
+  url: string;
+}
+
 export default function AuthBrowserConnect({
   agentId,
   boardId,
   onStatusChange,
-}: ConnectWidgetProps) {
-  const [url, setUrl] = useState('https://www.linkedin.com/');
+  preset,
+}: ConnectWidgetProps & { preset?: BrowserSitePreset }) {
+  const site = preset?.site;
+  const [url, setUrl] = useState(preset?.url ?? 'https://www.linkedin.com/');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const bridge = useRef<HTMLDivElement>(null);
   const importing = useRef(false);
   const getStatus = useCallback(
     (agentId?: string, boardId?: string) =>
-      api.authBrowserControl({ operation: 'status', agentId, boardId }),
-    []
+      api.authBrowserControl({ operation: 'status', agentId, boardId, site }),
+    [site]
   );
   const { status, fetchStatus, statusError, loading, retry } = useConnectStatus(
-    'auth-browser',
+    site ?? 'auth-browser',
     getStatus,
     agentId,
     boardId,
@@ -45,6 +54,7 @@ export default function AuthBrowserConnect({
             operation: 'import',
             agentId,
             boardId,
+            site,
             sessionId: status.sessionId,
             storage: detail.storage,
           });
@@ -63,7 +73,7 @@ export default function AuthBrowserConnect({
     };
     node.addEventListener('pulsar:browser-import', receive);
     return () => node.removeEventListener('pulsar:browser-import', receive);
-  }, [agentId, boardId, status.phase, status.canControl, status.sessionId, fetchStatus]);
+  }, [agentId, boardId, site, status.phase, status.canControl, status.sessionId, fetchStatus]);
 
   async function action(operation: AuthBrowserControl['operation']) {
     setBusy(true);
@@ -86,8 +96,10 @@ export default function AuthBrowserConnect({
         operation,
         agentId,
         boardId,
+        site,
         sessionId: status.sessionId,
-        ...(operation === 'prepare_import' ? { url } : {}),
+        // A pinned site is chosen server-side, never sent from the client.
+        ...(operation === 'prepare_import' && !preset ? { url } : {}),
       });
       await fetchStatus();
     } catch (e) {
@@ -102,7 +114,9 @@ export default function AuthBrowserConnect({
   return (
     <div className="space-y-2 border-t border-dark-700 pt-3 text-xs">
       <p className="text-dark-300">
-        Connexion dans votre navigateur. Navigation des agents sur le cluster.
+        {preset
+          ? `Connexion à ${preset.name} dans votre navigateur. Navigation des agents sur le cluster, en lecture seule.`
+          : 'Connexion dans votre navigateur. Navigation des agents sur le cluster.'}
       </p>
       <p className="text-dark-400">
         Session pour {agentId ? 'cet agent' : 'ce board et ses agents'}.
@@ -120,29 +134,35 @@ export default function AuthBrowserConnect({
       )}
       {!status.exists ? (
         <>
-          <label className="block">
-            Adresse du site
-            <input
-              aria-label="Adresse du site"
-              type="url"
-              className="block w-full bg-dark-900 border border-dark-600 rounded p-2 mt-1"
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-            />
-          </label>
+          {!preset && (
+            <label className="block">
+              Adresse du site
+              <input
+                aria-label="Adresse du site"
+                type="url"
+                className="block w-full bg-dark-900 border border-dark-600 rounded p-2 mt-1"
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+              />
+            </label>
+          )}
           <button
             type="button"
             className={button}
             disabled={busy || !status.configured || (!agentId && !boardId)}
             onClick={() => void action('prepare_import')}
           >
-            {busy ? 'Préparation…' : 'Connecter dans mon navigateur'}
+            {busy
+              ? 'Préparation…'
+              : preset
+                ? `Se connecter à ${preset.name}`
+                : 'Connecter dans mon navigateur'}
           </button>
         </>
       ) : (
         <>
           <p className="text-dark-300 break-all">
-            {status.site} —{' '}
+            {preset?.name ?? status.site} —{' '}
             {status.connected
               ? 'Session partagée sur le cluster'
               : status.phase === 'pending'
@@ -227,6 +247,14 @@ export default function AuthBrowserConnect({
         refusée par le site, notamment LinkedIn, peut ne pas fonctionner sur le cluster. Une
         expiration nécessite un nouveau transfert.
       </p>
+      {site === 'linkedin' && (
+        <p className="text-dark-400">
+          Les agents lisent avec votre compte (recherche, profils, pages entreprise, fil), sans
+          jamais écrire ni envoyer de message, au rythme d’une page toutes les 3 s et de 120 pages
+          par heure au maximum. LinkedIn restreint l’automatisation de son site et peut limiter un
+          compte : partagez de préférence un compte dont vous acceptez ce risque.
+        </p>
+      )}
       {busy && <p className="text-dark-300">Opération en cours…</p>}
       {(error || statusError) && (
         <p role="alert" className="text-red-400">

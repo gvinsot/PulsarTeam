@@ -64,6 +64,47 @@ révoque pas automatiquement les autorisations chez le fournisseur.
   Le domaine de PulsarTeam lui-même ne peut pas être exporté. Seules les métadonnées de liaison résident dans
   `chrome.storage.session`, jamais les cookies.
 
+## Plugin LinkedIn
+
+Le plugin intégré **LinkedIn** (`mcp-linkedin`, MCP `/api/linkedin/mcp`) applique
+ce même mécanisme à `https://www.linkedin.com`, sans adresse à saisir :
+
+1. Ajouter le plugin **LinkedIn** à un agent ou à un board, puis cliquer
+   **Se connecter à LinkedIn**.
+2. Avec l’extension : **Ouvrir le site** (LinkedIn s’ouvre, déjà connecté si c’est
+   le cas dans ce profil), vérifier le compte, puis **Transférer la session**
+   depuis l’onglet LinkedIn.
+3. Le worker ouvre `/feed/` avec la copie. Si LinkedIn redirige vers la connexion,
+   l’authwall ou un challenge, l’import échoue immédiatement avec un message
+   explicite ; rien n’est partagé.
+
+La session LinkedIn occupe un emplacement distinct (`linkedin:agent:<id>` ou
+`linkedin:board:<id>` dans le worker) : un agent peut avoir à la fois LinkedIn et
+un autre site dans le Navigateur authentifié, et aucun des deux MCP ne lit la
+session de l’autre. Le site n’est jamais choisi par le client : l’API et le worker
+imposent `https://www.linkedin.com`, et la connexion à distance (`start`) y est refusée.
+Elle compte dans la limite globale de 6 sessions. Ne préparez pas en même temps
+les deux connexions sur la même page : l’extension exige une seule demande par onglet.
+
+Outils (lecture seule, sortie en Markdown comme le plugin Web Browser) :
+
+- `linkedin_status` : session partagée, portée et expiration.
+- `linkedin_search` : personnes, entreprises, offres, posts ou tout ; `page`, `location` (offres).
+- `linkedin_profile` : profil par URL, identifiant public ou `me`, et sections
+  (expérience, formation, compétences, activité…).
+- `linkedin_company` : page entreprise/école/vitrine et ses sections.
+- `linkedin_feed`, `linkedin_open` (toute page `www.linkedin.com`), `linkedin_scroll`.
+
+Garde-fous : les URL sont reconstruites et normalisées vers `www.linkedin.com` ;
+les pages de connexion, réglages, déconnexion et les segments d’action (`logout`,
+`delete`, `unfollow`, `withdraw`…) sont refusés avant tout appel au worker. Le
+worker lit le contenu de `<main>` après stabilisation du rendu, ne renvoie que les
+liens de profils, entreprises, offres et posts (sans paramètres de suivi), et
+signale une page de connexion sans la lire. Rythme : une page toutes les 3 s au
+plus et 120 pages par heure par session ; au-delà, l’outil répond une erreur
+indiquant le délai. Ce plafond protège le compte partagé ; il ne garantit pas que
+LinkedIn accepte cet usage (voir ci-dessous).
+
 ## OAuth et LinkedIn
 
 Il s’agit de **connexion web interactive**, y compris OAuth/SSO lorsque le site
@@ -75,9 +116,10 @@ L’OAuth officiel LinkedIn autorise des appels à ses API selon les produits et
 permissions accordés ; il ne fournit pas un navigateur connecté à linkedin.com.
 LinkedIn interdit diverses formes d’automatisation de son site et peut restreindre
 un compte. La compatibilité de cette implémentation avec une vraie connexion
-LinkedIn n’est pas validée. Aucune technique de dissimulation ou de contournement
-des protections n’est intégrée. Utiliser l’API officielle pour les usages couverts
-par les permissions accordées à l’application.
+LinkedIn n’est pas validée. Seuls les challenges Cloudflare sont résolus
+automatiquement (voir ci-dessous) ; LinkedIn n’utilise pas Cloudflare, et aucune
+autre technique de dissimulation n’est intégrée. Utiliser l’API officielle pour
+les usages couverts par les permissions accordées à l’application.
 
 Sources : [OAuth LinkedIn](https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow),
 [règles LinkedIn](https://www.linkedin.com/help/linkedin/answer/a1340567/automated-activity-on-linkedin?lang=en),
@@ -106,6 +148,26 @@ sont jamais exportées. Les cookies liés à un appareil, les cookies partitionn
 IndexedDB et sessionStorage ne sont pas pris en charge. Un site peut refuser une
 session copiée à cause du changement de navigateur/IP ou demander un nouveau
 challenge. La connexion locale ne contourne pas ces restrictions.
+
+### Challenges Cloudflare (FlareSolverr)
+
+Quand la page principale répond `cf-mitigated: challenge`, le worker ne la lit
+pas et le signale. L’API demande alors au service interne FlareSolverr de résoudre
+**la racine du site uniquement** (`https://hôte/`), sans cookie ni chemin de la
+page, puis renvoie au worker les seuls cookies Cloudflare (`cf_clearance`,
+`__cf_bm`, `_cfuvid`) et le User-Agent du solveur, auquel `cf_clearance` est lié.
+Le worker reconstruit son contexte avec ce User-Agent en conservant la session de
+l’utilisateur, puis recharge la page. Une seule tentative par navigation ; en cas
+d’échec l’outil renvoie une erreur et l’agent rend la main.
+
+FlareSolverr ne reçoit jamais les cookies d’un utilisateur : il est sur le réseau
+`backend`, sans authentification, accessible aux runners. Le worker n’y a pas
+accès ; c’est l’API (`FLARESOLVERR_URL`) qui l’appelle. `cf_clearance` est aussi
+lié à l’IP de sortie : FlareSolverr et le worker doivent sortir par la même IP
+publique (cas des nœuds du cluster). Le User-Agent adopté change pour le reste de
+la session, ce qu’un site liant sa session au navigateur peut refuser.
+Le plugin Web Browser (`mcp-browser`) utilise aussi FlareSolverr, directement, en
+dernier recours quand crawl4ai détecte une page bloquée.
 
 Les cookies ne sont pas persistés dans une base ou un volume. Le profil temporaire
 de Chromium réside dans `/tmp`, un tmpfs dans la stack. Expiration absolue : 8 h ;

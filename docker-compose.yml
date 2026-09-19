@@ -57,6 +57,8 @@ services:
       - AIDER_SERVICE_URL=http://aider-service:8000
       - CODEX_SERVICE_URL=http://codex-service:8000
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
+      # Solves Cloudflare challenges for the authenticated browser (root URL only).
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
       - OFFICE_SERVICE_URL=${OFFICE_SERVICE_URL:-http://office-service:8000}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - MCP_ACTIONS_ENDPOINT=${MCP_ACTIONS_ENDPOINT:-}
