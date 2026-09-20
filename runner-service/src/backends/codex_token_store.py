@@ -10,6 +10,7 @@ stores it encrypted at rest.
 import os
 import json
 import time
+from datetime import datetime
 from typing import Optional, Tuple
 
 import httpx
@@ -99,6 +100,65 @@ def save_owner_blob(owner_id: str, blob: dict) -> bool:
             time.sleep(_PERSIST_BACKOFF[attempt])
     logger.error(f"[Codex Owner Auth] Failed to persist token for {owner_id}: {last_err}")
     return False
+
+
+def _blob_freshness(blob: Optional[dict]) -> float:
+    """How recent a given auth.json blob is, as unix-seconds. Used to decide
+    which of two copies of the SAME account's credentials wins.
+
+    OpenAI rotates the refresh_token on every grant and revokes the one it
+    replaces, so "newest wins" is not a nicety: handing a CLI an older copy
+    hands it a token the rotation already killed, and the CLI reports
+    "your refresh token was revoked".
+
+    The access_token's `exp` claim is the authoritative ordering (it moves
+    forward on every refresh); `last_refresh` is the fallback for blobs whose
+    JWT can't be parsed. Returns 0.0 when neither is readable — an API-key
+    blob has no ordering, so it never wins a comparison."""
+    if not isinstance(blob, dict):
+        return 0.0
+    # Deferred: codex_oauth imports this module, so this can't be top-level.
+    from .codex_oauth import access_token_expires_at
+
+    try:
+        exp = float(access_token_expires_at(blob))
+    except Exception:
+        exp = 0.0
+    if exp:
+        return exp
+    last_refresh = blob.get("last_refresh") or ""
+    try:
+        return datetime.fromisoformat(last_refresh.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def save_owner_blob_if_newer(owner_id: str, blob: dict) -> bool:
+    """Persist `blob` only when the store doesn't already hold a fresher copy.
+
+    The mirroring paths (terminal creds watcher, post-exec push-back,
+    hydration) can each be holding a stale local auth.json — a replica that
+    spawned before someone else's refresh, say. Pushing that back would
+    replace a live refresh_token with a revoked one for every other consumer,
+    so the store is kept monotonic and only explicit user actions (upload,
+    OAuth login) may move it backwards via `save_owner_blob`.
+
+    Returns True when the store ends up holding `blob` or something newer.
+    """
+    if not owner_id or not isinstance(blob, dict):
+        return False
+    _invalidate_owner_cache(owner_id)
+    stored = _fetch_owner_record(owner_id)
+    if isinstance(stored, dict):
+        if stored == blob:
+            return True
+        if _blob_freshness(stored) > _blob_freshness(blob):
+            logger.info(
+                f"[Codex Owner Auth] Skipped push for owner {owner_id}: "
+                f"the store already holds a fresher token"
+            )
+            return True
+    return save_owner_blob(owner_id, blob)
 
 
 def invalidate_owner_blob(owner_id: str):
@@ -201,6 +261,18 @@ async def hydrate_agent_auth(agent_user: Optional[dict], owner_id: Optional[str]
     current, _ = read_local_auth(agent_user)
     if current == blob:
         return True
+    # Never hand the CLI an older copy than the one already on disk: the
+    # local file may hold a refresh_token the CLI rotated after this replica
+    # last pushed, and the rotation revoked the stored one. Mirror it up
+    # instead — this is the path that catches a rotation the terminal's creds
+    # watcher missed (container churn, watcher-less window).
+    if isinstance(current, dict) and _blob_freshness(current) > _blob_freshness(blob):
+        logger.info(
+            f"[Codex Auth] Local auth.json is newer than the stored one for owner "
+            f"{owner_id} — pushing the rotated token up instead of overwriting"
+        )
+        await run_blocking(save_owner_blob_if_newer, owner_id, current)
+        return True
     try:
         await run_blocking(write_local_auth, agent_user, blob)
         logger.info(f"[Codex Auth] Hydrated auth.json for owner {owner_id}")
@@ -218,7 +290,7 @@ async def push_agent_auth_if_changed(agent_user: Optional[dict], owner_id: Optio
         return False
     if baseline_mtime is not None and mtime <= baseline_mtime:
         return False
-    return await run_blocking(save_owner_blob, owner_id, current)
+    return await run_blocking(save_owner_blob_if_newer, owner_id, current)
 
 
 # --- Auth status helpers (used by the backend's auth_status endpoints) -------

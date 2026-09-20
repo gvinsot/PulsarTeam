@@ -52,6 +52,7 @@ from .codex_token_store import (
     auth_file_path,
     load_owner_blob,
     save_owner_blob,
+    save_owner_blob_if_newer,
     write_local_auth,
     auth_method_for_blob,
     global_auth_method,
@@ -269,18 +270,26 @@ class CodexBackend(CliBackend):
         # session lives for hours — without a poll the fresh blob only gets
         # pushed back at session close, and if the container restarts
         # before then the stale team-api record overwrites the file again.
-        captured_owner = owner_id
+        captured_owner = self._resolve_owner_id(owner_id, agent_user)
         captured_user = agent_user
 
         def _persist_blob(blob: dict) -> None:
             if not captured_owner:
-                # No owner → no team-api persistence; the per-agent HOME is
-                # already on the volumed /app/data, so the local auth.json
-                # survives restarts on its own.
+                # No owner anywhere (a global, agent-less deployment): nothing
+                # to key a team-api record on. /app/data is NOT persisted in
+                # the swarm deployment (see devops/docker-compose.swarm.yml),
+                # so this blob dies with the container — log it rather than
+                # dropping it silently.
+                logger.warning(
+                    "[Codex Auth] Refreshed auth.json for an owner-less agent — "
+                    "nowhere to persist it, it will be lost when the container moves"
+                )
                 return
-            ok = save_owner_blob(captured_owner, blob)
+            ok = save_owner_blob_if_newer(captured_owner, blob)
             if not ok:
-                raise RuntimeError(f"save_owner_blob failed for owner {captured_owner}")
+                # Raising is the watcher's retry signal: the marker doesn't
+                # advance, so the next tick tries this blob again.
+                raise RuntimeError(f"save_owner_blob_if_newer failed for owner {captured_owner}")
 
         def _creds_dedup_key(blob: dict) -> Optional[str]:
             tokens = (blob or {}).get("tokens") or {}
@@ -393,6 +402,7 @@ class CodexBackend(CliBackend):
 
     async def _hydrate_for_exec(self, agent_id: Optional[str], owner_id: Optional[str]) -> Optional[float]:
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        owner_id = self._resolve_owner_id(owner_id, agent_user)
         # Pull the owner-shared blob from team-api into the agent's local
         # ~/.codex/auth.json (per-agent HOME). Same pattern as claude-code's
         # owner-token hydration.
@@ -410,20 +420,35 @@ class CodexBackend(CliBackend):
                 except OSError as e:
                     logger.warning(f"[Codex Auth] refresh ok but write_local_auth failed: {e}")
                 if owner_id:
-                    await run_blocking(save_owner_blob, owner_id, new_blob)
+                    await run_blocking(save_owner_blob_if_newer, owner_id, new_blob)
                 logger.info("[Codex Auth] Refreshed access_token via refresh_token grant")
             else:
                 logger.warning("[Codex Auth] Token expired and refresh failed — codex may prompt for re-login")
         _, mtime = read_local_auth(agent_user)
         return mtime
 
+    @staticmethod
+    def _resolve_owner_id(owner_id: Optional[str], agent_user: Optional[dict]) -> Optional[str]:
+        """The owner the auth blob belongs to, falling back to the one recorded
+        on the agent's unix user.
+
+        Not every caller carries the header: a terminal attach without
+        `owner_id`, or a task injected by the workflow engine, would otherwise
+        run with owner_id=None — which silently disables BOTH hydration and
+        the push-back of a rotated refresh_token. `ensure_agent_user` already
+        resolved the owner from team-api, so use it."""
+        if owner_id:
+            return owner_id
+        return (agent_user or {}).get("owner_id") or None
+
     async def _push_back_if_changed(self, agent_id: Optional[str],
                                     owner_id: Optional[str],
                                     baseline_mtime: Optional[float]) -> None:
-        if not owner_id:
-            return
         try:
             agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+            owner_id = self._resolve_owner_id(owner_id, agent_user)
+            if not owner_id:
+                return
             await push_agent_auth_if_changed(agent_user, owner_id, baseline_mtime)
         except Exception as e:
             logger.warning(f"[Codex Auth] push-back failed for owner {owner_id}: {e}")

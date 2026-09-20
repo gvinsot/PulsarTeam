@@ -63,6 +63,14 @@ from secret_filter import redact_secrets
 # negligible.
 CREDS_SYNC_INTERVAL_SEC = float(os.getenv("TERMINAL_CREDS_SYNC_INTERVAL_SEC", "5.0"))
 
+# Same poll, slower, for a session that closed while its tmux session kept
+# running (see _maybe_detach_creds_watcher). Nobody is typing in that terminal
+# any more; we are only there to catch the CLI's own background token refresh,
+# which happens a handful of times per token lifetime.
+DETACHED_CREDS_SYNC_INTERVAL_SEC = float(
+    os.getenv("TERMINAL_DETACHED_CREDS_SYNC_INTERVAL_SEC", "60.0")
+)
+
 
 # Tunables — picked to be safe defaults, not necessarily optimal. Operators
 # can override via env if a deployment ever needs to.
@@ -462,6 +470,55 @@ class _FileWatcher:
         logger.info(self._log_success(value))
 
 
+# ── Detached creds watchers ─────────────────────────────────────────────────
+#
+# A PtySession's creds watcher normally dies with the session, which is right
+# as long as the session's death also ends the CLI. It doesn't always: the
+# kill-session in close() is best-effort (a busy tmux server can time it out),
+# and the CLI then keeps running orphaned in tmux. An orphaned CLI still
+# refreshes its OAuth token in the background, and a refresh nobody mirrors
+# back to the store is lost — worse than lost for codex, whose refresh_token
+# rotates: the copy the store keeps serving was revoked by that very refresh,
+# so the next spawn gets "your refresh token was revoked".
+#
+# So when a session closes over a tmux session that is still alive, its
+# watcher is handed over here and keeps polling until tmux really goes away.
+_DETACHED_CREDS_WATCHERS: dict[str, asyncio.Task] = {}
+
+
+def _start_detached_creds_watcher(
+    agent_id: str,
+    watcher: _FileWatcher,
+    still_alive: Callable[[], Awaitable[bool]],
+) -> None:
+    cancel_detached_creds_watcher(agent_id)
+
+    async def _run() -> None:
+        try:
+            while await still_alive():
+                await asyncio.sleep(DETACHED_CREDS_SYNC_INTERVAL_SEC)
+                await watcher.poll_once()
+            # The CLI is gone: one last look, in case it refreshed between the
+            # previous tick and its exit.
+            await watcher.poll_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[Terminal] detached creds sync failed for {agent_id}: {e}")
+        finally:
+            _DETACHED_CREDS_WATCHERS.pop(agent_id, None)
+
+    _DETACHED_CREDS_WATCHERS[agent_id] = asyncio.create_task(_run())
+
+
+def cancel_detached_creds_watcher(agent_id: str) -> None:
+    """Stop the detached watcher for `agent_id`, if any. Called before a new
+    session starts so the fresh watcher owns the file alone."""
+    task = _DETACHED_CREDS_WATCHERS.pop(agent_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
 @dataclass
 class _Client:
     """One attached observer. We hold callbacks (not WebSocket objects
@@ -688,6 +745,19 @@ class PtySession:
             full, cwd=self.cwd, env=self._tmux_env(),
             preexec_fn=self.preexec_fn, capture_output=True, timeout=timeout,
         )
+
+    async def _tmux_session_alive(self) -> bool:
+        """True when this session's tmux session still exists — i.e. the CLI
+        outlived the broker. Blocking tmux call, so off the event loop."""
+        if not self._tmux_session:
+            return False
+        try:
+            res = await asyncio.to_thread(
+                self._tmux_run, ["has-session", "-t", self._tmux_session]
+            )
+        except Exception:
+            return False
+        return res.returncode == 0
 
     def _ensure_tmux_session(self) -> None:
         """Create the detached tmux session running the CLI if it doesn't yet
@@ -1744,6 +1814,21 @@ class PtySession:
 
         self._idle_timer = asyncio.create_task(_reap_after_idle())
 
+    async def _maybe_detach_creds_watcher(self) -> None:
+        """Hand this session's creds watcher over to the module-level registry
+        when the CLI survived the close (see _start_detached_creds_watcher)."""
+        if self._creds_watcher is None:
+            return
+        if not await self._tmux_session_alive():
+            return
+        logger.info(
+            f"[Terminal] tmux session for agent {self.agent_id} outlived its broker "
+            f"— keeping the credentials mirror running while the CLI is alive"
+        )
+        _start_detached_creds_watcher(
+            self.agent_id, self._creds_watcher, self._tmux_session_alive
+        )
+
     async def close(self) -> None:
         """Best-effort shutdown: send SIGTERM, wait briefly, then SIGKILL."""
         if self._closed:
@@ -1788,6 +1873,11 @@ class PtySession:
                 )
             except Exception as e:
                 logger.debug(f"[Terminal] tmux kill-session failed for {self.agent_id}: {e}")
+            # kill-session is best-effort (it can time out against a busy tmux
+            # server). When it didn't take, the CLI is still running with no
+            # session watching it — keep mirroring its credentials so a
+            # background token refresh isn't lost.
+            await self._maybe_detach_creds_watcher()
 
         # Try to terminate the subprocess. The runner container has
         # restricted capabilities so direct signals can EPERM when the
@@ -1943,6 +2033,9 @@ async def get_or_create_session(
             files_on_change=recipe.get("files_on_change"),
             usage_watch=recipe.get("usage_watch"),
         )
+        # The new session's watcher takes over the file; a leftover detached
+        # one would poll the same path with a stale baseline.
+        cancel_detached_creds_watcher(agent_id)
         await session.start()
         _SESSIONS[agent_id] = session
         return session

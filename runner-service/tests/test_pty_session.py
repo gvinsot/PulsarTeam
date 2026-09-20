@@ -445,3 +445,84 @@ def test_latched_auth_errors_mask_quoted_values_whole(line, leak):
     session.set_auth_error(line)
     assert leak not in session.auth_error
     assert "[redacted]" in session.auth_error
+
+
+# ── Credential mirroring past the session's death ───────────────────────────
+#
+# close() kills the tmux session, but that kill is best-effort: against a busy
+# tmux server it can time out and leave the CLI running. An orphaned CLI still
+# refreshes its OAuth token in the background, and for codex that refresh
+# ROTATES the refresh_token — a rotation nobody mirrors back leaves the store
+# serving a token OpenAI has already revoked.
+
+
+def _creds_session(tmp_path, blob, pushed):
+    import json
+    from subprocess import CompletedProcess
+
+    path = tmp_path / "auth.json"
+    path.write_text(json.dumps(blob), encoding="utf-8")
+    session = PtySession(
+        agent_id="creds-agent",
+        cmd=["codex"],
+        cwd=str(tmp_path),
+        env={},
+        creds_watch_path=str(path),
+        creds_on_change=pushed.append,
+        creds_dedup_key=lambda b: (b.get("tokens") or {}).get("access_token"),
+    )
+    session._tmux_session = "pt-creds-agent"
+    session._creds_watcher.capture_baseline()
+    return session, path, CompletedProcess
+
+
+def _rewrite(path, blob):
+    """Write `blob` with a definitely-newer mtime (the watcher is mtime-gated
+    and a test writes both copies within the same filesystem tick)."""
+    import json
+
+    path.write_text(json.dumps(blob), encoding="utf-8")
+    stamp = os.path.getmtime(path) + 2
+    os.utime(path, (stamp, stamp))
+
+
+@pytest.mark.asyncio
+async def test_close_keeps_mirroring_when_the_cli_outlived_the_session(tmp_path, monkeypatch):
+    pushed = []
+    session, path, CompletedProcess = _creds_session(
+        tmp_path, {"tokens": {"access_token": "at-1", "refresh_token": "rt-1"}}, pushed
+    )
+    # kill-session didn't take: has-session still reports the CLI alive.
+    monkeypatch.setattr(session, "_tmux_run",
+                        lambda args, **kw: CompletedProcess(args, 0, stdout=b"", stderr=b""))
+    monkeypatch.setattr(pty_session_module, "DETACHED_CREDS_SYNC_INTERVAL_SEC", 0.01)
+
+    await session.close()
+    assert "creds-agent" in pty_session_module._DETACHED_CREDS_WATCHERS
+    assert pushed == []  # nothing changed yet — the final sync is a no-op
+
+    # The orphaned CLI refreshes its token with no session left to watch it.
+    rotated = {"tokens": {"access_token": "at-2", "refresh_token": "rt-2"}}
+    _rewrite(path, rotated)
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        if pushed:
+            break
+
+    assert pushed == [rotated]
+    pty_session_module.cancel_detached_creds_watcher("creds-agent")
+
+
+@pytest.mark.asyncio
+async def test_close_detaches_nothing_when_the_tmux_session_is_gone(tmp_path, monkeypatch):
+    pushed = []
+    session, _path, CompletedProcess = _creds_session(
+        tmp_path, {"tokens": {"access_token": "at-1"}}, pushed
+    )
+    # kill-session worked: has-session now fails.
+    monkeypatch.setattr(session, "_tmux_run",
+                        lambda args, **kw: CompletedProcess(args, 1, stdout=b"", stderr=b""))
+
+    await session.close()
+
+    assert "creds-agent" not in pty_session_module._DETACHED_CREDS_WATCHERS

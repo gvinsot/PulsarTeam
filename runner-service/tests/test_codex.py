@@ -52,3 +52,16 @@ def test_build_command_uses_full_auto_when_dangerous_permissions_disabled():
 
     assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
     assert "--full-auto" in cmd
+
+
+def test_resolve_owner_id_falls_back_to_the_agents_own_owner():
+    """A terminal attach or an injected task may arrive without the owner
+    header. Without the fallback, both hydration AND the push-back of a
+    rotated refresh_token silently no-op, and the store keeps serving a
+    revoked token."""
+    resolve = CodexBackend._resolve_owner_id
+
+    assert resolve("owner-header", {"owner_id": "owner-user"}) == "owner-header"
+    assert resolve(None, {"owner_id": "owner-user"}) == "owner-user"
+    assert resolve(None, {"owner_id": ""}) is None
+    assert resolve(None, None) is None
