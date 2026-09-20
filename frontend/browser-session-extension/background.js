@@ -57,12 +57,35 @@ async function inspect(tabId) {
       throw new ExtensionError('PAIR_EXPIRED');
     }
     const tab = await chrome.tabs.get(tabId);
-    if (tabId === pair.sourceTabId && httpsOrigin(tab.url) === pair.site) {
-      return { mode: 'share', pair };
+    if (tabId === pair.sourceTabId) {
+      let currentOrigin;
+      try {
+        currentOrigin = httpsOrigin(tab.url);
+      } catch {
+        // Never expose an authentication callback's full URL in the popup.
+      }
+      if (currentOrigin === pair.site) return { mode: 'share', pair };
+      return { mode: 'site_changed', pair, currentOrigin };
     }
     return { mode: 'waiting', pair };
   }
   return { mode: 'start', pair: await requestFromTab(tabId) };
+}
+
+async function returnToTab(restart) {
+  if (transferring) throw new ExtensionError('TRANSFER_BUSY');
+  const { pair } = await chrome.storage.session.get('pair');
+  if (!pair) throw new ExtensionError('PAIR_MISSING');
+  try {
+    const tab = await chrome.tabs.update(restart ? pair.appTabId : pair.sourceTabId, {
+      active: true,
+    });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } catch {
+    throw new ExtensionError(restart ? 'APP_UNAVAILABLE' : 'SOURCE_UNAVAILABLE');
+  }
+  if (restart) await release(pair);
+  return { ok: true };
 }
 
 async function begin(message) {
@@ -239,6 +262,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         return begin(message);
       case 'transfer':
         return transfer(message);
+      case 'return_to_website':
+        return returnToTab(false);
+      case 'restart':
+        return returnToTab(true);
       case 'cancel': {
         if (transferring) throw new ExtensionError('TRANSFER_BUSY');
         const { pair } = await chrome.storage.session.get('pair');

@@ -22,7 +22,8 @@ async function popup(t, options = {}) {
           if (options.inspectError) return options.inspectError;
           return {
             result: {
-              mode: 'share',
+              mode: options.mode || 'share',
+              currentOrigin: options.currentOrigin,
               pair: {
                 site: 'https://www.linkedin.com',
                 appOrigin: 'https://pulsar.test',
@@ -62,6 +63,33 @@ test('opening the popup preserves the actionable diagnostic returned by the back
   assert.equal(element('status').textContent, diagnostic);
   assert.equal(element('action').hidden, true);
   assert.equal(state.closed, false);
+});
+
+test('an origin mismatch shows a recovery action instead of an inert waiting screen', async t => {
+  const { element, state } = await popup(t, {
+    mode: 'site_changed',
+    currentOrigin: 'https://linkedin.com',
+  });
+  assert.match(element('status').textContent, /https:\/\/linkedin\.com/);
+  assert.match(element('status').textContent, /https:\/\/www\.linkedin\.com/);
+  assert.match(element('status').textContent, /cancel the old connection request/);
+  assert.equal(element('action').hidden, false);
+  assert.equal(element('action').textContent, 'Restart in PulsarTeam');
+  assert.equal(element('cancel').hidden, false);
+  assert.equal(element('storage-option').hidden, true);
+  await element('action').onclick();
+  assert.deepEqual(state.messages.at(-1), { type: 'restart' });
+  assert.equal(state.closed, true);
+  assert.ok(state.messages.every(message => message.type !== 'transfer'));
+});
+
+test('opening the popup in another tab offers a return to the original website tab', async t => {
+  const { element, state } = await popup(t, { mode: 'waiting' });
+  assert.equal(element('action').hidden, false);
+  assert.equal(element('action').textContent, 'Return to website tab');
+  await element('action').onclick();
+  assert.deepEqual(state.messages.at(-1), { type: 'return_to_website' });
+  assert.equal(state.closed, true);
 });
 
 test('a failed transfer displays its safe diagnostic and permits a deliberate retry', async t => {

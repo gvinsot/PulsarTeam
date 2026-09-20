@@ -27,7 +27,9 @@ LinkedIn session is not automatically moved to another plugin; reconnect explici
    **Developer mode**, click **Load unpacked**, and select the extracted folder.
    The source lives in `frontend/browser-session-extension`; `npm run dev` and
    `npm run build` generate the archive. This extension is not published in a store.
-3. Enter the exact HTTPS website origin and click **Connect in my browser**. The
+3. Enter the exact HTTPS website origin and click **Connect in my browser**.
+   LinkedIn's `https://linkedin.com` is normalized to `https://www.linkedin.com`
+   before pairing, so the request and permissions match its signed-in website. The
    request is tied to your user and the selected agent or board, and expires after
    ten minutes. No cluster browser is started yet.
 4. Open the extension from that PulsarTeam tab. Check the source website and
@@ -56,8 +58,13 @@ Disconnecting here neither signs out your local browser nor revokes provider acc
 
 ## Update or troubleshoot the extension
 
-Version **1.0.3** transfers the current signed-in page URL and is required by the
-new import endpoint. Older extensions are rejected with an update instruction.
+Version **1.0.4** explains when the website tab is on a different origin and offers
+**Restart in PulsarTeam**. Cancel the old request there and reconnect with the final
+signed-in website address. Opening the popup in another tab offers **Return to
+website tab**. A redirect does not silently extend permissions or transfer cookies.
+
+Version 1.0.3 introduced transfer of the current signed-in page URL, required by the
+new import endpoint. Earlier extensions are rejected with an update instruction.
 Labels and explanations are in English. It includes the transfer
 fix from 1.0.1: parent-domain and host cookies with the same name and path are
 merged only when every imported field is identical. Conflicting cookies are still
@@ -149,7 +156,7 @@ not published as a ready session.
 ## Deployment
 
 Deploy the API, frontend and `mcp-auth-browser` worker together for this handoff
-contract, then reload extension 1.0.3 and transfer a fresh session. The worker
+contract, then reload extension 1.0.4 and transfer a fresh session. The worker
 deployment destroys its existing in-memory sessions.
 
 Provision the same random **AUTH_BROWSER_KEY**, at least 32 characters, for

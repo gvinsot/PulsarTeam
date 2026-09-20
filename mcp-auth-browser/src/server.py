@@ -388,6 +388,10 @@ async def execute(cmd: Command):
         if not cmd.controller:
             raise HTTPException(403, "Connexion utilisateur requise")
         origin = https_origin(cmd.url)
+        # LinkedIn's signed-in website uses www. Bind the request to that exact
+        # origin BEFORE granting extension permissions or collecting cookies.
+        if origin == "https://linkedin.com":
+            origin = "https://www.linkedin.com"
         await public_addresses(urlsplit(origin).hostname)
         async with creation_lock:
             if cmd.scope in sessions or cmd.scope in pending_imports:

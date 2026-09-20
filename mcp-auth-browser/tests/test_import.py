@@ -25,6 +25,27 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
             return await server.execute(server.Command(scope='board:chosen', controller='alice',
                 operation='prepare_import', url='https://www.site.test/feed'))
 
+    async def test_linkedin_request_uses_exact_signed_in_origin_before_pairing(self):
+        with patch.object(server, 'public_addresses', AsyncMock(return_value=[])) as resolve:
+            result = await server.execute(server.Command(scope='agent:linkedin', controller='alice',
+                operation='prepare_import', url='https://linkedin.com/'))
+        self.assertEqual(result['site'], 'https://www.linkedin.com')
+        self.assertEqual(server.pending_imports['agent:linkedin']['origin'], result['site'])
+        resolve.assert_awaited_once_with('www.linkedin.com')
+        self.assertFalse(server.sessions)
+        with self.assertRaises(ValueError):
+            await server.execute(server.Command(scope='agent:linkedin', controller='alice',
+                operation='import', session_id=result['sessionId'], storage=STATE,
+                url='https://linkedin.com/'))
+
+    async def test_other_sites_are_not_rewritten_or_widened(self):
+        for i, origin in enumerate(['https://www.linkedin.com', 'https://example.com',
+                                    'https://linkedin.com.evil.test', 'https://login.linkedin.com']):
+            with patch.object(server, 'public_addresses', AsyncMock(return_value=[])):
+                result = await server.execute(server.Command(scope=f'agent:site{i}', controller='alice',
+                    operation='prepare_import', url=origin))
+            self.assertEqual(result['site'], origin)
+
     async def test_nonce_binds_user_scope_and_site_and_is_single_use(self):
         prepared = await self.prepare()
         base = dict(scope='board:chosen', controller='alice', operation='import',

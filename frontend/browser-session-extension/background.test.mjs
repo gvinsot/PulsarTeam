@@ -26,6 +26,7 @@ async function background(t, options = {}) {
     sourceTabId: 2,
     grantedOrigins: ['https://www.linkedin.com/*', 'https://linkedin.com/*'],
     grantedCookies: true,
+    ...options.pair,
   };
   const state = {
     pair,
@@ -34,6 +35,7 @@ async function background(t, options = {}) {
     removedPermissions: [],
     clearedAlarms: [],
     cookieReads: 0,
+    focusedWindows: [],
   };
   let listener;
   const chrome = {
@@ -62,10 +64,15 @@ async function background(t, options = {}) {
       remove: async permissions => state.removedPermissions.push(permissions),
     },
     tabs: {
-      get: async id => ({ id, url: `${pair.site}/feed/`, incognito: false }),
-      update: async id => state.activated.push(id),
+      get: async id => ({ id, url: options.sourceUrl || `${pair.site}/feed/`, incognito: false }),
+      update: async id => {
+        if (options.tabUnavailable) throw new Error('private-browser-details');
+        state.activated.push(id);
+        return { id, windowId: 7 };
+      },
       onRemoved: { addListener() {} },
     },
+    windows: { update: async id => state.focusedWindows.push(id) },
     cookies: {
       getAllCookieStores: async () => [{ id: 'default', tabIds: [pair.sourceTabId] }],
       getAll: async () => {
@@ -111,9 +118,55 @@ async function background(t, options = {}) {
   return {
     chrome,
     state,
+    send,
     transfer: () => send({ type: 'transfer', tabId: pair.sourceTabId }),
   };
 }
+
+test('a LinkedIn www redirect is explained without reading cookies or silently widening the request', async t => {
+  const { send, state, transfer } = await background(t, {
+    pair: { site: 'https://linkedin.com' },
+    sourceUrl: 'https://www.linkedin.com/feed/?code=private-callback',
+  });
+  const response = await send({ type: 'inspect', tabId: 2 });
+  assert.equal(response.result.mode, 'site_changed');
+  assert.equal(response.result.currentOrigin, 'https://www.linkedin.com');
+  assert.equal(response.result.pair.site, 'https://linkedin.com');
+  assert.doesNotMatch(JSON.stringify(response), /private-callback|code=/);
+  assert.equal((await transfer()).code, 'SOURCE_CHANGED');
+  assert.equal(state.cookieReads, 0);
+  assert.equal(state.imports.length, 0);
+});
+
+test('the matching website offers transfer while another tab offers a return to the paired tab', async t => {
+  const { send, state } = await background(t);
+  assert.equal((await send({ type: 'inspect', tabId: 2 })).result.mode, 'share');
+  assert.equal((await send({ type: 'inspect', tabId: 99 })).result.mode, 'waiting');
+  assert.deepEqual(await send({ type: 'return_to_website', tabId: 99 }), { result: { ok: true } });
+  assert.deepEqual(state.activated, [2]);
+  assert.deepEqual(state.focusedWindows, [7]);
+  assert.ok(state.pair);
+  assert.equal(state.cookieReads, 0);
+});
+
+test('restarting releases the obsolete pair and returns to its PulsarTeam tab', async t => {
+  const { send, state } = await background(t);
+  assert.deepEqual(await send({ type: 'restart', tabId: 99 }), { result: { ok: true } });
+  assert.deepEqual(state.activated, [1]);
+  assert.deepEqual(state.focusedWindows, [7]);
+  assert.equal(state.pair, undefined);
+  assert.ok(state.removedPermissions.length);
+  assert.equal(state.imports.length, 0);
+});
+
+test('a missing recovery tab has a safe diagnostic and still allows cancellation', async t => {
+  const { send, state } = await background(t, { tabUnavailable: true });
+  const response = await send({ type: 'return_to_website' });
+  assert.equal(response.code, 'SOURCE_UNAVAILABLE');
+  assert.doesNotMatch(JSON.stringify(response), /private-browser-details/);
+  await send({ type: 'cancel' });
+  assert.equal(state.pair, undefined);
+});
 
 test('same-value cookies on the parent and selected host transfer once, then release the pair', async t => {
   const { transfer, state } = await background(t, {

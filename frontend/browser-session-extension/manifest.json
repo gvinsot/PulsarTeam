@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PulsarTeam — Authenticated Browser",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Sign in using your browser and explicitly share a website session with your PulsarTeam cluster.",
   "minimum_chrome_version": "120",
   "incognito": "not_allowed",

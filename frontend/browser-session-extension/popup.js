@@ -1,4 +1,5 @@
 import { ExtensionError, safeErrorMessage } from './errors.mjs';
+import { permissionOrigins } from './core.mjs';
 
 const $ = id => document.getElementById(id);
 const send = async message => {
@@ -9,7 +10,7 @@ const send = async message => {
 
 async function main() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const { mode, pair } = await send({ type: 'inspect', tabId: tab.id });
+  const { mode, pair, currentOrigin } = await send({ type: 'inspect', tabId: tab.id });
   $('details').hidden = false;
   $('site').textContent = pair.site;
   $('destination').textContent = pair.appOrigin;
@@ -20,6 +21,11 @@ async function main() {
       : mode === 'share'
         ? 'You sign in on your own computer. The session is shared only with this destination.'
         : 'Sign in using the website tab opened by this extension, then reopen the extension from that tab.';
+  if (mode === 'site_changed') {
+    $('status').textContent =
+      `This tab is on ${currentOrigin || 'a different address'}, but the request is for ${pair.site}. ` +
+      'Finish signing in and return to the requested website. If the signed-in website uses a different address (for example www), restart in PulsarTeam: cancel the old connection request and enter the final website address. Nothing has been transferred.';
+  }
   $('cancel').hidden = mode === 'start';
   $('cancel').onclick = async () => {
     try {
@@ -29,7 +35,22 @@ async function main() {
       $('status').textContent = safeErrorMessage(error);
     }
   };
-  if (mode === 'waiting') return;
+  if (mode === 'waiting' || mode === 'site_changed') {
+    $('action').hidden = false;
+    $('action').textContent =
+      mode === 'waiting' ? 'Return to website tab' : 'Restart in PulsarTeam';
+    $('action').onclick = async () => {
+      $('action').disabled = true;
+      try {
+        await send({ type: mode === 'waiting' ? 'return_to_website' : 'restart' });
+        window.close();
+      } catch (error) {
+        $('status').textContent = safeErrorMessage(error);
+        $('action').disabled = false;
+      }
+    };
+    return;
+  }
   $('action').hidden = false;
   $('action').textContent = mode === 'start' ? 'Open website' : 'Transfer session';
   $('notice').hidden = mode !== 'share';
@@ -72,4 +93,3 @@ async function main() {
 main().catch(error => {
   $('status').textContent = safeErrorMessage(error);
 });
-import { permissionOrigins } from './core.mjs';
