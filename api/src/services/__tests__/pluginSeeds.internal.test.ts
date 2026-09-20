@@ -63,6 +63,7 @@ test('seeded builtin plugins reference the canonical MCP server ids', () => {
     'PulsarTeam Admin',
     'PulsarTeam Management',
     'PulsarTeam Insert',
+    'Authenticated Browser',
   ]) {
     const skill = skills.find(entry => isRecord(entry) && entry.name === skillName);
     assert.ok(skill, `Expected seeded plugin for ${skillName}`);
@@ -78,6 +79,23 @@ test('seeded builtin plugins reference the canonical MCP server ids', () => {
       `${skillName} should reference canonical MCP server id "${mcpServerId}", got: ${refs.join(', ') || '(none)'}`
     );
   }
+});
+
+test('Authenticated Browser keeps existing assignments while retiring the LinkedIn plugin', async () => {
+  const { SkillManager } = await import('../skillManager.js');
+  const { MCPManager } = await import('../mcpManager.js');
+  const manager = new SkillManager();
+  const mcps = new MCPManager();
+  manager.setMcpResolver(id => mcps.getById(id));
+  const current = manager.getById('skill-auth-browser')!;
+  manager.skills.set(current.id, { ...current, name: 'Navigateur authentifié' });
+  await manager.seedDefaults(skillsModule.BUILTIN_SKILLS);
+  const browser = manager.getById(current.id)!;
+  assert.equal(browser.name, 'Authenticated Browser');
+  assert.deepEqual(browser.mcpServerIds, ['mcp-auth-browser']);
+  assert.equal(manager.getById('skill-linkedin'), null);
+  assert.equal(mcps.getById('mcp-linkedin'), null);
+  assert.ok(!mcpServersModule.INTERNAL_MCP_SERVERS.has('__internal__linkedin'));
 });
 
 test('Management replaces Delegation without breaking existing plugin assignments', async () => {

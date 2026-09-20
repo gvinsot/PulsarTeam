@@ -103,9 +103,21 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                     await source.wait_for_url('https://www.site.test/')
                     await source.get_by_text('Connecter', exact=True).click()
                     await source.get_by_role('heading').wait_for()
-                    self.assertEqual(len(await context.cookies('https://www.site.test')), 1)
+                    # Domain and host can both carry the same cookie name.
+                    # Reject a conflicting session with a safe reason,
+                    # then merge strictly identical copies in the real MV3 path.
+                    host_cookie = dict(name='sid', value='synthetic-other-session',
+                                       domain='www.site.test', path='/',
+                                       httpOnly=True, secure=True, sameSite='Lax')
+                    await context.add_cookies([host_cookie])
+                    self.assertEqual(len(await context.cookies('https://www.site.test')), 2)
+                    refused = await send(dict(type='transfer', tabId=stored['sourceTabId']))
+                    self.assertEqual(refused['code'], 'AMBIGUOUS_COOKIES')
+                    self.assertNotIn('synthetic-', str(refused))
+                    self.assertNotIn('board:extension', server.sessions)
+                    await context.add_cookies([{**host_cookie, 'value': 'synthetic-httponly'}])
                     cookie_count = await worker.evaluate('async () => (await chrome.cookies.getAll({url:"https://www.site.test/"})).length')
-                    self.assertEqual(cookie_count, 1, 'Extension must read the selected host cookie')
+                    self.assertEqual(cookie_count, 2, 'Extension must read both parent and selected host cookies')
                     self.assertNotIn('synthetic-httponly', await source.evaluate('document.cookie'))
                     transferred = await send(dict(type='transfer', tabId=stored['sourceTabId'], includeLocalStorage=True))
                     self.assertEqual(transferred, {'result': {'ok': True}})

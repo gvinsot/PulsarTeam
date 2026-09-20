@@ -538,8 +538,6 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   // Interactive controls additionally enforce real-user and scope ownership.
   'POST /api/auth-browser/control': ['authenticateToken'],
   'ALL /api/auth-browser/mcp': ['authenticateToken'],
-  // LinkedIn reuses /api/auth-browser/control (site: 'linkedin') for its connection.
-  'ALL /api/linkedin/mcp': ['authenticateToken'],
 
   // ── /api/swarm-api ────────────────────────────────────────────────
   'ALL /api/swarm-api/mcp': ['authenticateToken'],

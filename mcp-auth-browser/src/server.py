@@ -2,7 +2,6 @@
 
 One Chromium process per scope. Interactive login is a HUMAN-only API; MCP can
 only read, navigate or scroll a session explicitly released by that human.
-A `linkedin:` scope prefix is a separate slot pinned to www.linkedin.com.
 """
 import asyncio
 import base64
@@ -13,7 +12,6 @@ import json
 import re
 import time
 import uuid
-from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -31,62 +29,6 @@ IDLE_SECONDS = 30 * 60
 HUMAN_OPS = {"frame", "click", "text", "key", "wheel", "back", "home", "activate", "takeover", "disconnect"}
 KEYS = {"Enter", "Tab", "Shift+Tab", "Backspace", "Delete", "Escape", "ArrowLeft",
         "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Control+A", "Meta+A"}
-
-LINKEDIN_ORIGIN = "https://www.linkedin.com"
-# Where LinkedIn sends a copied session it refuses: login, auth wall, challenge.
-LINKEDIN_LOGIN_PATHS = ("/login", "/uas/", "/authwall", "/checkpoint/", "/signup", "/m/login")
-LINKEDIN_ENTITY = re.compile(
-    r"^/(?:in|company|school|showcase|jobs/view|feed/update|posts|pulse|events|groups|newsletters)/[^/?#]+")
-# Paced like a person reading, to keep the shared account within LinkedIn's limits.
-LINKEDIN_MIN_INTERVAL = 3.0
-LINKEDIN_PAGES_PER_HOUR = 120
-LINKEDIN_SNAPSHOT = """() => {
-    const root = document.querySelector('main') || document.body;
-    const links = [];
-    for (const a of (root ? root.querySelectorAll('a[href]') : [])) {
-        if (a.origin !== location.origin || a.protocol !== 'https:') continue;
-        links.push({text: (a.innerText || a.getAttribute('aria-label') || '').slice(0, 300), url: a.href});
-        if (links.length >= 500) break;
-    }
-    return {url: location.href, title: document.title,
-            text: (root?.innerText || '').slice(0, 60000), links};
-}"""
-
-
-def scope_site(scope: str) -> str | None:
-    """The origin a site-pinned scope may use; None for the generic browser."""
-    return LINKEDIN_ORIGIN if scope.startswith("linkedin:") else None
-
-
-def linkedin_login_wall(url: str) -> bool:
-    try:
-        return https_origin(url) != LINKEDIN_ORIGIN or urlsplit(url).path.startswith(LINKEDIN_LOGIN_PATHS)
-    except ValueError:
-        return True
-
-
-def linkedin_links(raw) -> list[dict]:
-    """Profile/company/job/post links only, without tracking query strings."""
-    found: dict[str, dict] = {}
-    for link in raw if isinstance(raw, list) else []:
-        if not isinstance(link, dict) or not isinstance(link.get("url"), str):
-            continue
-        try:
-            if https_origin(link["url"]) != LINKEDIN_ORIGIN:
-                continue
-        except ValueError:
-            continue
-        match = LINKEDIN_ENTITY.match(urlsplit(link["url"]).path)
-        if not match:
-            continue
-        url = LINKEDIN_ORIGIN + match.group(0) + "/"
-        text = " ".join(str(link.get("text") or "").split())[:200]
-        if url in found:
-            found[url]["text"] = found[url]["text"] or text
-        elif len(found) < 150:
-            found[url] = {"text": text, "url": url}
-    return list(found.values())
-
 
 # Cloudflare challenges: the API has FlareSolverr solve the site's root and sends
 # back only these cookies plus the solver's user agent, which cf_clearance is
@@ -129,7 +71,7 @@ def secret():
 
 class Command(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    scope: str = Field(pattern=r"^(linkedin:)?(agent|board):[a-zA-Z0-9_-]{1,200}$")
+    scope: str = Field(pattern=r"^(agent|board):[a-zA-Z0-9_-]{1,200}$")
     operation: Literal["status", "start", "frame", "click", "text", "key", "wheel", "back", "home",
                        "activate", "takeover", "disconnect", "read", "navigate", "scroll",
                        "clearance", "prepare_import", "import"]
@@ -148,32 +90,16 @@ class Command(BaseModel):
 
 
 class Session:
-    def __init__(self, controller, origin, login_origins, kind="site"):
+    def __init__(self, controller, origin, login_origins):
         self.id = str(uuid.uuid4())
         self.controller = controller
         self.origin = origin
         self.login_origins = {origin, *login_origins}
-        self.kind = kind
         self.phase = "login"
         self.created = self.used = time.time()
         self.browser = self.context = self.page = None
         self.proxy = PublicProxy()
         self.lock = asyncio.Lock()
-        self.page_loads = deque()
-
-    async def pace(self):
-        """LinkedIn only: space page loads and cap them per hour (None = go ahead)."""
-        now = time.time()
-        while self.page_loads and now - self.page_loads[0] >= 3600:
-            self.page_loads.popleft()
-        if len(self.page_loads) >= LINKEDIN_PAGES_PER_HOUR:
-            return {"limited": True, "retryAfterSeconds": int(3600 - (now - self.page_loads[0])) + 1}
-        if self.page_loads:
-            wait = LINKEDIN_MIN_INTERVAL - (now - self.page_loads[-1])
-            if wait > 0:
-                await asyncio.sleep(wait)
-        self.page_loads.append(time.time())
-        return None
 
     def expired(self):
         now = time.time()
@@ -358,42 +284,10 @@ async def health():
     return {"ok": True, "configured": len(secret()) >= 32}
 
 
-async def settle(page):
-    """LinkedIn renders client-side: wait until the main content stops growing."""
-    with contextlib.suppress(Exception):
-        await page.wait_for_selector("main", state="attached", timeout=10000)
-    previous = -1
-    for _ in range(12):
-        await page.wait_for_timeout(500)
-        try:
-            size = await page.evaluate(
-                "() => ((document.querySelector('main') || document.body)?.innerText || '').length")
-        except Exception:
-            return
-        if size and size == previous:
-            return
-        previous = size
-
-
-async def linkedin_snapshot(session):
-    page = session.active_page()
-    # A login wall means LinkedIn refused the copied session: report it, never read it.
-    if linkedin_login_wall(page.url):
-        return {"loginRequired": True}
-    await settle(page)
-    if linkedin_login_wall(page.url):
-        return {"loginRequired": True}
-    data = await page.evaluate(LINKEDIN_SNAPSHOT)
-    return {"url": data.get("url"), "title": data.get("title"), "text": data.get("text"),
-            "links": linkedin_links(data.get("links"))}
-
-
 async def snapshot(session):
     page = session.active_page()
     if https_origin(page.url) != session.origin:
         raise HTTPException(409, "La session a quitté le site autorisé. Reconnectez-vous.")
-    if session.kind == "linkedin":
-        return await linkedin_snapshot(session)
     # No arbitrary evaluation, cookies, storage, inputs or network headers are exposed.
     return await page.evaluate("""() => ({
         url: location.href, title: document.title,
@@ -410,8 +304,6 @@ async def execute(cmd: Command):
         if not cmd.controller:
             raise HTTPException(403, "Connexion utilisateur requise")
         origin = https_origin(cmd.url)
-        if scope_site(cmd.scope) not in {None, origin}:
-            raise HTTPException(400, "Site non autorisé pour ce plugin")
         await public_addresses(urlsplit(origin).hostname)
         async with creation_lock:
             if cmd.scope in sessions or cmd.scope in pending_imports:
@@ -437,20 +329,14 @@ async def execute(cmd: Command):
             # Consume before I/O, but keep the scope reserved during launch so
             # agents cannot fall through to their board's different account.
             pending["consumed"] = True
-            linkedin = scope_site(cmd.scope) == LINKEDIN_ORIGIN
-            session = Session(cmd.controller, pending["origin"], [],
-                              kind="linkedin" if linkedin else "site")
+            session = Session(cmd.controller, pending["origin"], [])
             session.phase = "ready"
             try:
-                # The LinkedIn home page stays public when logged out; the feed does not.
-                start = LINKEDIN_ORIGIN + "/feed/" if linkedin else session.origin
-                await session.open(app.state.playwright, start, state)
+                await session.open(app.state.playwright, session.origin, state)
                 if pending_imports.get(cmd.scope) is not pending or pending["expires"] <= time.time():
                     raise HTTPException(409, "Transfert annulé ou expiré")
                 if https_origin(session.active_page().url) != session.origin:
                     raise HTTPException(409, "Le site demande une nouvelle connexion")
-                if linkedin and linkedin_login_wall(session.active_page().url):
-                    raise HTTPException(401, "LinkedIn refuse la session transférée")
                 sessions[cmd.scope] = session
                 return {**session.status(), "canControl": True}
             except BaseException:
@@ -471,9 +357,6 @@ async def execute(cmd: Command):
         if not cmd.controller:
             raise HTTPException(403, "Connexion utilisateur requise")
         origin = https_origin(cmd.url)
-        if scope_site(cmd.scope):
-            # Pinned sites are connected only by importing a local browser session.
-            raise HTTPException(400, "Connexion à distance non disponible pour ce plugin")
         login_origins = [https_origin(u) for u in cmd.login_origins]
         await public_addresses(urlsplit(cmd.url).hostname)
         async with creation_lock:
@@ -571,17 +454,12 @@ async def execute(cmd: Command):
                                     if c["name"] not in CLEARANCE_COOKIES] + cookies
                 await session.new_context(state, cmd.user_agent)
                 page = session.page
-            if session.kind == "linkedin" and (limited := await session.pace()):
-                return limited
-            # Shorter for LinkedIn: settle() still has to fit in the 50 s command budget.
             response = await page.goto(cmd.url, wait_until="domcontentloaded",
-                                       timeout=25000 if session.kind == "linkedin" else 30000)
+                                       timeout=30000)
             if cloudflare_challenge(response):
                 # The API may answer with a `clearance` command; never read the challenge.
                 return {"challenge": True}
         elif cmd.operation == "scroll":
-            if session.kind == "linkedin" and (limited := await session.pace()):
-                return limited
             await page.mouse.wheel(0, cmd.delta)
             await page.wait_for_timeout(400)
         return await snapshot(session)

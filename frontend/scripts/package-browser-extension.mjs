@@ -17,6 +17,7 @@ const files = [
   'manifest.json',
   'background.js',
   'core.mjs',
+  'errors.mjs',
   'popup.html',
   'popup.js',
   'popup.css',

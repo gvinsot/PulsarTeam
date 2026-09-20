@@ -1,7 +1,15 @@
+import { ExtensionError } from './errors.mjs';
+import { getDomain } from './vendor/tldts.mjs';
+
 export function httpsOrigin(value) {
-  const url = new URL(value);
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ExtensionError('HTTPS_REQUIRED');
+  }
   if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443'))
-    throw new Error('Une origine HTTPS est requise.');
+    throw new ExtensionError('HTTPS_REQUIRED');
   return url.origin;
 }
 
@@ -16,10 +24,9 @@ export function validateRequest(value, appUrl, now = Date.now()) {
     value.expiresAt <= now ||
     value.expiresAt > now + 610_000
   )
-    throw new Error('Demande absente ou expirée. Recommencez dans PulsarTeam.');
+    throw new ExtensionError('REQUEST_INVALID');
   const site = httpsOrigin(value.site);
-  if (site === appOrigin || site !== value.site)
-    throw new Error('Le site doit être distinct de PulsarTeam.');
+  if (site === appOrigin || site !== value.site) throw new ExtensionError('SITE_MUST_DIFFER');
   permissionOrigins(site, appOrigin);
   return {
     version: 1,
@@ -33,19 +40,16 @@ export function validateRequest(value, appUrl, now = Date.now()) {
 
 export function sessionCookies(cookies, site, now = Date.now() / 1000) {
   const host = new URL(httpsOrigin(site)).hostname;
-  const seen = new Set();
+  const seen = new Map();
   const result = [];
   for (const c of cookies) {
     const domain = c.domain.replace(/^\./, '').toLowerCase();
     if (!(host === domain || (!c.hostOnly && host.endsWith('.' + domain)))) continue;
     // Device/partition-bound credentials cannot be silently broadened.
-    if (c.partitionKey) throw new Error('Les cookies partitionnés ne sont pas pris en charge.');
+    if (c.partitionKey) throw new ExtensionError('PARTITIONED_COOKIES');
     if (!c.session && c.expirationDate <= now) continue;
     const key = JSON.stringify([c.name, c.path]);
-    if (seen.has(key))
-      throw new Error('Cookies ambigus pour ce site. Utilisez un profil navigateur dédié.');
-    seen.add(key);
-    result.push({
+    const imported = {
       name: c.name,
       value: c.value,
       path: c.path,
@@ -53,20 +57,34 @@ export function sessionCookies(cookies, site, now = Date.now() / 1000) {
       httpOnly: c.httpOnly,
       sameSite:
         c.sameSite === 'no_restriction' ? 'None' : c.sameSite === 'strict' ? 'Strict' : 'Lax',
-    });
+    };
+    const previous = seen.get(key);
+    if (previous) {
+      // Parent and host cookies become host-only at import. They can merge only
+      // when every exported field agrees; never guess which session should win.
+      if (
+        previous.value !== imported.value ||
+        previous.expires !== imported.expires ||
+        previous.httpOnly !== imported.httpOnly ||
+        previous.sameSite !== imported.sameSite
+      ) {
+        throw new ExtensionError('AMBIGUOUS_COOKIES');
+      }
+      continue;
+    }
+    seen.set(key, imported);
+    result.push(imported);
   }
-  if (result.length > 200) throw new Error('Trop de cookies pour ce site.');
+  if (result.length > 200) throw new ExtensionError('TOO_MANY_COOKIES');
   return result;
 }
-import { getDomain } from './vendor/tldts.mjs';
-
 export function permissionOrigins(site, appOrigin) {
   const host = new URL(httpsOrigin(site)).hostname;
   const root = getDomain(host, { allowPrivateDomains: true, extractHostname: false });
   const appHost = new URL(httpsOrigin(appOrigin)).hostname;
   const appRoot = getDomain(appHost, { allowPrivateDomains: true, extractHostname: false });
   if (host === appHost || (root && root === appRoot)) {
-    throw new Error('Ne partagez pas les cookies du domaine PulsarTeam lui-même.');
+    throw new ExtensionError('APP_DOMAIN_FORBIDDEN');
   }
   // Chrome also requires permission for the parent domain of a Domain cookie.
   // Exact hosts only, stopping before any public/private suffix; no wildcard.

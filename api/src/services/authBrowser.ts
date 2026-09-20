@@ -2,10 +2,7 @@ import { readSecret } from '../secrets.js';
 import { getAgentById } from './database.js';
 import { solveCloudflare } from './flaresolverr.js';
 
-/** A site-pinned plugin gets its own worker slot, separate from the generic browser. */
-export type BrowserSite = 'linkedin';
-export type BrowserScope = { type: 'agent' | 'board'; id: string; site?: BrowserSite };
-export const LINKEDIN_ORIGIN = 'https://www.linkedin.com';
+export type BrowserScope = { type: 'agent' | 'board'; id: string };
 export interface BrowserStatus {
   configured: boolean;
   exists: boolean;
@@ -22,7 +19,7 @@ export function browserConfigured() {
 }
 
 export function workerScope(scope: BrowserScope) {
-  return `${scope.site ? `${scope.site}:` : ''}${scope.type}:${scope.id}`;
+  return `${scope.type}:${scope.id}`;
 }
 
 export class BrowserCommandError extends Error {
@@ -41,7 +38,7 @@ export async function browserCommand<T = BrowserStatus>(
   params: Record<string, unknown> = {}
 ): Promise<T> {
   if (!browserConfigured())
-    throw new BrowserCommandError('Le navigateur authentifié n’est pas configuré.', 503);
+    throw new BrowserCommandError('Authenticated Browser is not configured.', 503);
   let response: Response;
   try {
     response = await fetch(
@@ -59,21 +56,21 @@ export async function browserCommand<T = BrowserStatus>(
     );
   } catch {
     throw new BrowserCommandError(
-      'Le secret est configuré, mais le service de navigateur est injoignable. Vérifiez son état et sa liaison réseau avec l’API.',
+      'The secret is configured, but the browser service is unreachable. Check its status and its network connection to the API.',
       503
     );
   }
   if (!response.ok) {
     // Never forward arbitrary worker/Playwright response bodies or credentials.
     const errors: Record<number, string> = {
-      400: 'URL, commande ou données de session invalides. Utilisez un site HTTPS public.',
-      401: 'Le site a refusé la session transférée et demande une nouvelle connexion. Reconnectez-vous puis transférez à nouveau.',
-      403: 'Accès au navigateur refusé : vérifiez le propriétaire de la session et le domaine.',
-      409: 'Session absente, expirée, occupée ou non partagée. Vérifiez la connexion dans les plugins.',
-      429: 'Capacité de navigateurs atteinte. Fermez une session avant de réessayer.',
+      400: 'Invalid URL, command or session data. Use a public HTTPS website.',
+      401: 'The website rejected the transferred session and requires a new login. Sign in again, then transfer the session.',
+      403: 'Browser access denied: check the session owner and website domain.',
+      409: 'Session missing, expired, busy or not shared. Check the connection in the plugin.',
+      429: 'Browser capacity reached. Close a session before trying again.',
     };
     throw new BrowserCommandError(
-      errors[response.status] || 'Le navigateur est indisponible. Réessayez ou reconnectez-vous.',
+      errors[response.status] || 'The browser is unavailable. Try again or reconnect.',
       errors[response.status] ? response.status : 503
     );
   }
@@ -109,25 +106,22 @@ export async function resolveBrowserScope(
   agentId: string | null,
   boardId: string | null,
   {
-    site,
     getAgent = getAgentById,
     status = (s: BrowserScope) => browserCommand(s, 'status'),
   }: {
-    site?: BrowserSite;
     getAgent?: (id: string) => Promise<{ boardId?: string | null } | null | undefined>;
     status?: (s: BrowserScope) => Promise<BrowserStatus>;
   } = {}
 ): Promise<BrowserScope> {
-  const inSite = (scope: BrowserScope): BrowserScope => (site ? { ...scope, site } : scope);
   if (agentId) {
     const agent = await getAgent(agentId);
-    if (!agent) throw new Error('Agent introuvable.');
-    const own = inSite({ type: 'agent', id: agentId });
+    if (!agent) throw new Error('Agent not found.');
+    const own: BrowserScope = { type: 'agent', id: agentId };
     const ownStatus = await status(own);
     // A pending login must not fall through into another account on the board.
     if (ownStatus.exists || !agent.boardId) return own;
-    return inSite({ type: 'board', id: agent.boardId });
+    return { type: 'board', id: agent.boardId };
   }
-  if (boardId) return inSite({ type: 'board', id: boardId });
-  throw new Error('Un agent ou un board explicite est requis.');
+  if (boardId) return { type: 'board', id: boardId };
+  throw new Error('An explicit agent or board is required.');
 }

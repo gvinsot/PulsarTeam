@@ -25,7 +25,6 @@ import { createCodeIndexMcpHandler } from './services/codeIndexMcp.js';
 import { createGandiDnsMcpHandler } from './services/gandiDnsMcp.js';
 import { createBrowserMcpHandler } from './services/browserMcp.js';
 import { createAuthBrowserMcpHandler } from './services/authBrowserMcp.js';
-import { createLinkedInMcpHandler } from './services/linkedinMcp.js';
 import { authBrowserRoutes } from './routes/authBrowser.js';
 import { pluginRoutes } from './routes/plugins.js';
 import { agentSkillRoutes } from './routes/agentSkills.js';
@@ -318,7 +317,6 @@ const mcpMounts: Array<[string, (req: any, res: any) => any]> = [
   ['/api/auto-learn/mcp', createAutoLearnMcpHandler()],
   ['/api/browser/mcp', createBrowserMcpHandler()],
   ['/api/auth-browser/mcp', createAuthBrowserMcpHandler()],
-  ['/api/linkedin/mcp', createLinkedInMcpHandler()],
   // Internal Swarm API MCP endpoint (JWT auth — used by agents via mcpManager)
   ['/api/swarm-api/mcp', createSwarmApiMcpHandler(agentManager)],
   // Pulsar Gateway MCP — the single always-on MCP injected into CLI runners

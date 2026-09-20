@@ -30,17 +30,6 @@ test('scope resolution never adopts a claimed board or another user session', as
     }),
     { type: 'agent', id: 'a' }
   );
-  // The LinkedIn plugin resolves the same way, inside its own worker slot.
-  const probed: unknown[] = [];
-  assert.deepEqual(
-    await resolveBrowserScope('a', 'claimed-board', {
-      site: 'linkedin',
-      getAgent,
-      status: async s => (probed.push(s), { exists: false, connected: false, configured: true }),
-    }),
-    { type: 'board', id: 'actual-board', site: 'linkedin' }
-  );
-  assert.deepEqual(probed, [{ type: 'agent', id: 'a', site: 'linkedin' }]);
   await assert.rejects(resolveBrowserScope(null, null, { getAgent, status }));
   await assert.rejects(
     resolveBrowserScope('missing', 'claimed-board', { getAgent: async () => null, status })
@@ -96,6 +85,7 @@ test('human control rejects service sessions, other scopes, and injected control
       [{ operation: 'status', agentId: 'a' }, { 'x-service': 'yes' }, 403],
       [{ operation: 'frame', agentId: 'a', controller: 'bob' }, {}, 400],
       [{ operation: 'read', agentId: 'a' }, {}, 400],
+      [{ operation: 'prepare_import', agentId: 'a', site: 'linkedin' }, {}, 400],
       [{ operation: 'start', agentId: 'a', url: 'https://example.com' }, {}, 400],
       [{ operation: 'import', agentId: 'a', storage: { cookies: [], localStorage: [] } }, {}, 400],
       [
@@ -126,50 +116,6 @@ test('human control rejects service sessions, other scopes, and injected control
   }
 });
 
-test('LinkedIn connection is pinned to its own slot and to www.linkedin.com', async () => {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    req.user = { userId: 'alice', username: 'alice', role: 'admin' } as any;
-    next();
-  });
-  app.use(authBrowserRoutes());
-  permitted.push('li-agent');
-  process.env.AUTH_BROWSER_KEY = 'test-browser-key-with-at-least-32-characters';
-  const server = createServer(app);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const request = globalThis.fetch;
-  const forwarded: any[] = [];
-  const stub = mock.method(globalThis, 'fetch', async (_url: unknown, options: RequestInit) => {
-    forwarded.push(JSON.parse(String(options.body)));
-    return new Response(JSON.stringify({ exists: true, connected: false }), { status: 200 });
-  });
-  const control = (body: object) =>
-    request(`http://127.0.0.1:${(server.address() as AddressInfo).port}/control`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: 'li-agent', ...body }),
-    });
-  try {
-    assert.equal((await control({ operation: 'prepare_import', site: 'linkedin' })).status, 200);
-    assert.equal(forwarded[0].scope, 'linkedin:agent:li-agent');
-    assert.equal(forwarded[0].url, 'https://www.linkedin.com/');
-    const other = await control({
-      operation: 'prepare_import',
-      site: 'linkedin',
-      url: 'https://evil.test/',
-    });
-    assert.equal(other.status, 400);
-    assert.equal(forwarded.length, 1);
-    assert.equal((await control({ operation: 'status', site: 'github' })).status, 400);
-    assert.equal((await control({ operation: 'status' })).status, 200);
-    assert.equal(forwarded[1].scope, 'agent:li-agent');
-  } finally {
-    stub.mock.restore();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-  }
-});
-
 test('an unreachable worker is distinguished from a missing secret without exposing transport details', async () => {
   process.env.AUTH_BROWSER_KEY = 'test-browser-key-with-at-least-32-characters';
   const stub = mock.method(globalThis, 'fetch', async () => {
@@ -180,7 +126,7 @@ test('an unreachable worker is distinguished from a missing secret without expos
       browserCommand({ type: 'agent', id: 'a' }, 'status'),
       e =>
         e instanceof Error &&
-        e.message.includes('secret est configuré') &&
+        e.message.includes('secret is configured') &&
         !e.message.includes('do-not-leak')
     );
   } finally {

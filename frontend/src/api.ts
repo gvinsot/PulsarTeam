@@ -102,8 +102,6 @@ export interface AuthBrowserControl {
   agentId?: string;
   boardId?: string;
   operation: 'status' | 'prepare_import' | 'import' | 'activate' | 'takeover' | 'disconnect';
-  /** Site-pinned plugin slot (LinkedIn); absent for the generic authenticated browser. */
-  site?: 'linkedin';
   sessionId?: string;
   url?: string;
   storage?: {

@@ -1,8 +1,9 @@
+import { ExtensionError, safeErrorMessage } from './errors.mjs';
+
 const $ = id => document.getElementById(id);
 const send = async message => {
   const response = await chrome.runtime.sendMessage(message);
-  if (response?.error || !response?.result)
-    throw new Error(response?.error || 'Extension indisponible.');
+  if (response?.error || !response?.result) throw new ExtensionError(response?.code);
   return response.result;
 };
 
@@ -15,18 +16,22 @@ async function main() {
   $('scope').textContent = pair.scope;
   $('status').textContent =
     mode === 'start'
-      ? 'Autorisez PulsarTeam, le site et ses domaines parents pour accéder aux cookies de connexion, puis connectez-vous dans l’onglet qui va s’ouvrir.'
+      ? 'Allow access to PulsarTeam, the website and its parent domains to read session cookies, then sign in using the tab that opens.'
       : mode === 'share'
-        ? 'La connexion se fait sur votre poste. Le partage est valable pour cette destination uniquement.'
-        : 'Connectez-vous dans l’onglet du site ouvert par cette extension, puis rouvrez l’extension depuis cet onglet.';
+        ? 'You sign in on your own computer. The session is shared only with this destination.'
+        : 'Sign in using the website tab opened by this extension, then reopen the extension from that tab.';
   $('cancel').hidden = mode === 'start';
   $('cancel').onclick = async () => {
-    await send({ type: 'cancel' });
-    window.close();
+    try {
+      await send({ type: 'cancel' });
+      window.close();
+    } catch (error) {
+      $('status').textContent = safeErrorMessage(error);
+    }
   };
   if (mode === 'waiting') return;
   $('action').hidden = false;
-  $('action').textContent = mode === 'start' ? 'Ouvrir le site' : 'Transférer la session';
+  $('action').textContent = mode === 'start' ? 'Open website' : 'Transfer session';
   $('notice').hidden = mode !== 'share';
   $('storage-option').hidden = mode !== 'share';
   // Read prior grants before the click so permissions.request keeps the user gesture.
@@ -40,7 +45,7 @@ async function main() {
     try {
       if (mode === 'start') {
         const accepted = await chrome.permissions.request({ permissions: ['cookies'], origins });
-        if (!accepted) throw new Error('Permission refusée. Aucun transfert effectué.');
+        if (!accepted) throw new ExtensionError('PERMISSION_DENIED');
         const grantedOrigins = origins.filter((_, i) => !prior[i]);
         try {
           await send({ type: 'begin', pair, grantedOrigins, grantedCookies: !hadCookies });
@@ -50,8 +55,7 @@ async function main() {
           throw error;
         }
       } else {
-        $('status').textContent =
-          'Transfert en cours… Vous pouvez consulter son résultat dans PulsarTeam.';
+        $('status').textContent = 'Transfer in progress… You can check the result in PulsarTeam.';
         await send({
           type: 'transfer',
           tabId: tab.id,
@@ -60,13 +64,12 @@ async function main() {
       }
       window.close();
     } catch (error) {
-      $('status').textContent = error.message;
+      $('status').textContent = safeErrorMessage(error);
       $('action').disabled = false;
     }
   };
 }
-main().catch(() => {
-  $('status').textContent =
-    'Dans PulsarTeam, cliquez sur « Connecter dans mon navigateur », puis ouvrez cette extension depuis ce même onglet.';
+main().catch(error => {
+  $('status').textContent = safeErrorMessage(error);
 });
 import { permissionOrigins } from './core.mjs';

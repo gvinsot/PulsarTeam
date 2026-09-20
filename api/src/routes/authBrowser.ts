@@ -7,7 +7,7 @@ import {
   checkBoardIdAccess,
 } from '../lib/agentAccess.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
-import { BrowserCommandError, LINKEDIN_ORIGIN } from '../services/authBrowser.js';
+import { BrowserCommandError } from '../services/authBrowser.js';
 import { browserCommand, browserConfigured, type BrowserScope } from '../services/authBrowser.js';
 
 // Never accept cookie domains, alternate storage origins or arbitrary browser state.
@@ -51,14 +51,12 @@ const schema = z
       .regex(/^[a-zA-Z0-9_-]{1,200}$/)
       .optional(),
     operation: z.enum(['status', 'prepare_import', 'import', 'activate', 'takeover', 'disconnect']),
-    // Site-pinned plugin (LinkedIn): its own session slot, and the site is not selectable.
-    site: z.enum(['linkedin']).optional(),
     sessionId: z.string().uuid().optional(),
     url: z.string().url().max(4000).optional(),
     storage: storageSchema.optional(),
   })
   .strict()
-  .refine(s => Boolean(s.agentId) !== Boolean(s.boardId), 'Choisissez un agent ou un board.');
+  .refine(s => Boolean(s.agentId) !== Boolean(s.boardId), 'Choose an agent or a board.');
 
 export function authBrowserRoutes() {
   const router = Router();
@@ -70,15 +68,13 @@ export function authBrowserRoutes() {
       const user = sessionUser(req, res);
       if (!user) return;
       if (!user.userId || isInternalServiceSession(user) || req.apiKey) {
-        res
-          .status(403)
-          .json({ error: 'Une session utilisateur est requise pour connecter le navigateur.' });
+        res.status(403).json({ error: 'A user session is required to connect the browser.' });
         return;
       }
       const parsed = schema.safeParse(req.body);
       // Validation errors must never echo imported credentials.
       if (!parsed.success || Buffer.byteLength(JSON.stringify(req.body)) > 512_000) {
-        res.status(400).json({ error: 'Commande ou session à transférer invalide.' });
+        res.status(400).json({ error: 'Invalid command or session data.' });
         return;
       }
       const input = parsed.data;
@@ -86,19 +82,14 @@ export function authBrowserRoutes() {
         (input.operation === 'import') !== Boolean(input.storage) ||
         (input.operation === 'import' && !input.sessionId)
       ) {
-        res.status(400).json({ error: 'Transfert de session invalide.' });
+        res.status(400).json({ error: 'Invalid session transfer.' });
         return;
       }
       const scope: BrowserScope = {
         ...(input.agentId
           ? { type: 'agent' as const, id: input.agentId }
           : { type: 'board' as const, id: input.boardId! }),
-        ...(input.site ? { site: input.site } : {}),
       };
-      if (input.site === 'linkedin' && input.url && new URL(input.url).origin !== LINKEDIN_ORIGIN) {
-        res.status(400).json({ error: 'Ce plugin se connecte uniquement à www.linkedin.com.' });
-        return;
-      }
       // Importing or inspecting a shared session requires edit access.
       const access =
         scope.type === 'agent'
@@ -112,20 +103,10 @@ export function authBrowserRoutes() {
         res.json({ configured: false, exists: false, connected: false });
         return;
       }
-      const {
-        operation,
-        sessionId,
-        agentId: _agent,
-        boardId: _board,
-        site: _site,
-        ...params
-      } = input;
+      const { operation, sessionId, agentId: _agent, boardId: _board, ...params } = input;
       try {
         const result = await browserCommand(scope, operation, {
           ...params,
-          ...(input.site === 'linkedin' && operation === 'prepare_import'
-            ? { url: `${LINKEDIN_ORIGIN}/` }
-            : {}),
           session_id: sessionId,
           controller: user.userId,
         });
@@ -135,9 +116,7 @@ export function authBrowserRoutes() {
           res.status(error.status).json({ error: error.message });
           return;
         }
-        res
-          .status(503)
-          .json({ error: 'Le service de navigateur est indisponible ou non configuré.' });
+        res.status(503).json({ error: 'The browser service is unavailable or not configured.' });
       }
     })
   );

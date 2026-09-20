@@ -1,21 +1,32 @@
 import { httpsOrigin, validateRequest, sessionCookies, permissionOrigins } from './core.mjs';
+import { ExtensionError, safeErrorMessage } from './errors.mjs';
 
 // Only pairing metadata goes into storage.session. Credentials stay transient.
 let transferring = false;
 async function requestFromTab(tabId, documentId) {
-  const [result] = await chrome.scripting.executeScript({
-    target: { tabId, ...(documentId ? { documentIds: [documentId] } : {}) },
-    func: () => {
-      const nodes = document.querySelectorAll('[data-pulsar-browser-request]');
-      if (nodes.length !== 1) return null;
-      return {
-        request: JSON.parse(nodes[0].getAttribute('data-pulsar-browser-request')),
-        url: location.href,
-      };
-    },
-  });
-  if (!result?.result)
-    throw new Error('Préparez une connexion dans le plugin PulsarTeam, dans cet onglet.');
+  let result;
+  try {
+    [result] = await chrome.scripting.executeScript({
+      target: { tabId, ...(documentId ? { documentIds: [documentId] } : {}) },
+      func: () => {
+        const nodes = document.querySelectorAll('[data-pulsar-browser-request]');
+        if (!nodes.length) return { error: 'REQUEST_MISSING' };
+        if (nodes.length !== 1) return { error: 'REQUEST_MULTIPLE' };
+        try {
+          return {
+            request: JSON.parse(nodes[0].getAttribute('data-pulsar-browser-request')),
+            url: location.href,
+          };
+        } catch {
+          return { error: 'REQUEST_INVALID' };
+        }
+      },
+    });
+  } catch {
+    throw new ExtensionError('APP_UNAVAILABLE');
+  }
+  if (!result?.result) throw new ExtensionError('REQUEST_MISSING');
+  if (result.result.error) throw new ExtensionError(result.result.error);
   return {
     ...validateRequest(result.result.request, result.result.url),
     appTabId: tabId,
@@ -37,7 +48,7 @@ async function inspect(tabId) {
   if (pair) {
     if (pair.expiresAt <= Date.now()) {
       await release(pair);
-      throw new Error('Demande expirée. Annulez puis reconnectez dans PulsarTeam.');
+      throw new ExtensionError('PAIR_EXPIRED');
     }
     const tab = await chrome.tabs.get(tabId);
     if (tabId === pair.sourceTabId && httpsOrigin(tab.url) === pair.site) {
@@ -50,7 +61,7 @@ async function inspect(tabId) {
 
 async function begin(message) {
   const { pair: existing } = await chrome.storage.session.get('pair');
-  if (existing) throw new Error('Annulez la connexion précédente avant de recommencer.');
+  if (existing) throw new ExtensionError('PAIR_EXISTS');
   // Re-read the original document after the native permission prompt.
   const pair = await requestFromTab(message.pair.appTabId, message.pair.appDocumentId);
   if (
@@ -59,14 +70,14 @@ async function begin(message) {
     pair.appOrigin !== message.pair.appOrigin ||
     pair.scope !== message.pair.scope
   ) {
-    throw new Error('La demande a changé. Recommencez.');
+    throw new ExtensionError('REQUEST_CHANGED');
   }
   const permissions = {
     permissions: ['cookies'],
     origins: permissionOrigins(pair.site, pair.appOrigin),
   };
   if (!(await chrome.permissions.contains(permissions)))
-    throw new Error('Autorisation du navigateur manquante.');
+    throw new ExtensionError('PERMISSIONS_REQUIRED');
   const source = await chrome.tabs.create({ url: pair.site, active: false });
   const stored = {
     ...pair,
@@ -81,17 +92,29 @@ async function begin(message) {
 }
 
 async function transfer(message) {
-  if (transferring) throw new Error('Un transfert est déjà en cours.');
+  if (transferring) throw new ExtensionError('TRANSFER_BUSY');
   transferring = true;
   let pair;
   try {
     ({ pair } = await chrome.storage.session.get('pair'));
-    if (!pair || pair.sourceTabId !== message.tabId || pair.expiresAt <= Date.now()) {
-      throw new Error('Onglet incorrect ou demande expirée.');
+    if (!pair) throw new ExtensionError('PAIR_MISSING');
+    if (pair.expiresAt <= Date.now()) throw new ExtensionError('PAIR_EXPIRED');
+    if (pair.sourceTabId !== message.tabId) throw new ExtensionError('SOURCE_CHANGED');
+    if (
+      !(await chrome.permissions.contains({
+        permissions: ['cookies'],
+        origins: permissionOrigins(pair.site, pair.appOrigin),
+      }))
+    )
+      throw new ExtensionError('PERMISSIONS_REQUIRED');
+    let source;
+    try {
+      source = await chrome.tabs.get(pair.sourceTabId);
+    } catch {
+      throw new ExtensionError('SOURCE_UNAVAILABLE');
     }
-    const source = await chrome.tabs.get(pair.sourceTabId);
     if (source.incognito || httpsOrigin(source.url) !== pair.site) {
-      throw new Error('Revenez dans l’onglet du site choisi après la connexion.');
+      throw new ExtensionError('SOURCE_CHANGED');
     }
     const destination = await requestFromTab(pair.appTabId, pair.appDocumentId);
     if (
@@ -100,15 +123,20 @@ async function transfer(message) {
       destination.scope !== pair.scope ||
       destination.appOrigin !== pair.appOrigin
     ) {
-      throw new Error('La destination PulsarTeam a changé. Recommencez.');
+      throw new ExtensionError('REQUEST_CHANGED');
     }
     const stores = (await chrome.cookies.getAllCookieStores()).filter(s =>
       s.tabIds.includes(source.id)
     );
-    if (stores.length !== 1) throw new Error('Impossible d’identifier le profil de cet onglet.');
+    if (stores.length !== 1) throw new ExtensionError('COOKIE_STORE_UNAVAILABLE');
     // Read only cookies that would be sent to the home/current page of this site.
-    const root = await chrome.cookies.getAll({ url: pair.site + '/', storeId: stores[0].id });
-    const current = await chrome.cookies.getAll({ url: source.url, storeId: stores[0].id });
+    let root, current;
+    try {
+      root = await chrome.cookies.getAll({ url: pair.site + '/', storeId: stores[0].id });
+      current = await chrome.cookies.getAll({ url: source.url, storeId: stores[0].id });
+    } catch {
+      throw new ExtensionError('COOKIE_ACCESS_FAILED');
+    }
     const unique = new Map(
       [...root, ...current].map(c => [
         JSON.stringify([c.name, c.domain, c.path, c.partitionKey || null]),
@@ -118,62 +146,75 @@ async function transfer(message) {
     const cookies = sessionCookies([...unique.values()], pair.site);
     let localStorage = [];
     if (message.includeLocalStorage === true) {
-      const [result] = await chrome.scripting.executeScript({
-        target: { tabId: source.id },
-        func: origin => {
-          if (location.origin !== origin) throw new Error('Site changed');
-          return Object.entries(window.localStorage).map(([name, value]) => ({ name, value }));
-        },
-        args: [pair.site],
-      });
-      localStorage = result.result;
+      try {
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId: source.id },
+          func: origin => {
+            if (location.origin !== origin) return null;
+            return Object.entries(window.localStorage).map(([name, value]) => ({ name, value }));
+          },
+          args: [pair.site],
+        });
+        localStorage = result?.result;
+      } catch {
+        throw new ExtensionError('STORAGE_UNAVAILABLE');
+      }
+      if (!Array.isArray(localStorage)) throw new ExtensionError('STORAGE_UNAVAILABLE');
     }
     let storage = { cookies, localStorage };
-    if ((!cookies.length && !localStorage.length) || JSON.stringify(storage).length > 500_000) {
-      throw new Error(
-        'Session vide ou trop volumineuse. Connectez-vous au site avant de transférer.'
-      );
+    if (!cookies.length && !localStorage.length) throw new ExtensionError('SESSION_EMPTY');
+    if (new TextEncoder().encode(JSON.stringify(storage)).length > 500_000)
+      throw new ExtensionError('SESSION_TOO_LARGE');
+    let response;
+    try {
+      [response] = await chrome.scripting.executeScript({
+        target: { tabId: pair.appTabId, documentIds: [pair.appDocumentId] },
+        func: async (expected, storage) => {
+          if (location.origin !== expected.appOrigin) return 'changed';
+          const nodes = document.querySelectorAll('[data-pulsar-browser-request]');
+          if (nodes.length !== 1) return 'changed';
+          const node = nodes[0];
+          const request = JSON.parse(node.getAttribute('data-pulsar-browser-request'));
+          if (
+            request.requestId !== expected.requestId ||
+            request.site !== expected.site ||
+            request.scope !== expected.scope ||
+            request.expiresAt <= Date.now()
+          )
+            return 'changed';
+          delete node.dataset.result;
+          // Same-origin app tab sends using its own authenticated API/CSRF client.
+          // No cookies in DOM attributes, extension messages, URLs or files.
+          node.dispatchEvent(
+            new CustomEvent('pulsar:browser-import', {
+              detail: { requestId: expected.requestId, storage },
+            })
+          );
+          // Release the credential reference while waiting for the app's acknowledgement.
+          // eslint-disable-next-line no-useless-assignment
+          storage = null;
+          const deadline = Date.now() + 65_000;
+          while (!node.dataset.result && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+          return node.dataset.result || 'timeout';
+        },
+        args: [pair, storage],
+      });
+    } catch {
+      throw new ExtensionError('TRANSFER_UNCONFIRMED');
+    } finally {
+      storage = null;
+      // Success or uncertain outcome must be checked in the app, never auto-retried.
+      await release(pair);
+      // Switching tabs closes the popup: only do so when the app has a result
+      // to show. Keep uncertain-outcome diagnostics visible in the popup.
+      if (response?.result === 'success' || response?.result === 'error')
+        await chrome.tabs.update(pair.appTabId, { active: true }).catch(() => {});
     }
-    const [response] = await chrome.scripting.executeScript({
-      target: { tabId: pair.appTabId, documentIds: [pair.appDocumentId] },
-      func: async (expected, storage) => {
-        if (location.origin !== expected.appOrigin) return 'changed';
-        const nodes = document.querySelectorAll('[data-pulsar-browser-request]');
-        if (nodes.length !== 1) return 'changed';
-        const node = nodes[0];
-        const request = JSON.parse(node.getAttribute('data-pulsar-browser-request'));
-        if (
-          request.requestId !== expected.requestId ||
-          request.site !== expected.site ||
-          request.scope !== expected.scope ||
-          request.expiresAt <= Date.now()
-        )
-          return 'changed';
-        delete node.dataset.result;
-        // Same-origin app tab sends using its own authenticated API/CSRF client.
-        // No cookies in DOM attributes, extension messages, URLs or files.
-        node.dispatchEvent(
-          new CustomEvent('pulsar:browser-import', {
-            detail: { requestId: expected.requestId, storage },
-          })
-        );
-        // Release the credential reference while waiting for the app's acknowledgement.
-        // eslint-disable-next-line no-useless-assignment
-        storage = null;
-        const deadline = Date.now() + 65_000;
-        while (!node.dataset.result && Date.now() < deadline) {
-          await new Promise(resolve => setTimeout(resolve, 250));
-        }
-        return node.dataset.result || 'timeout';
-      },
-      args: [pair, storage],
-    });
-    storage = null;
-    // Success or uncertain outcome must be checked in the app, never auto-retried.
-    await release(pair);
-    await chrome.tabs.update(pair.appTabId, { active: true });
-    if (response?.result !== 'success')
-      throw new Error('Vérifiez le résultat du transfert dans PulsarTeam.');
+    if (response?.result === 'changed') throw new ExtensionError('REQUEST_CHANGED');
+    if (response?.result === 'error') throw new ExtensionError('IMPORT_FAILED');
+    if (response?.result !== 'success') throw new ExtensionError('TRANSFER_UNCONFIRMED');
     return { ok: true };
   } finally {
     transferring = false;
@@ -192,22 +233,22 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       case 'transfer':
         return transfer(message);
       case 'cancel': {
-        if (transferring) throw new Error('Attendez la fin du transfert.');
+        if (transferring) throw new ExtensionError('TRANSFER_BUSY');
         const { pair } = await chrome.storage.session.get('pair');
         await release(pair);
         return { ok: true };
       }
       default:
-        throw new Error('Commande inconnue.');
+        throw new ExtensionError('UNEXPECTED');
     }
   };
   run()
     .then(result => respond({ result }))
-    .catch(() => {
+    .catch(error => {
       // Browser exceptions may contain page data. Never forward or log them.
       respond({
-        error:
-          'Opération impossible. Vérifiez le site, les permissions et la demande dans PulsarTeam, puis recommencez.',
+        error: safeErrorMessage(error),
+        code: error instanceof ExtensionError ? error.code : 'UNEXPECTED',
       });
     });
   return true;

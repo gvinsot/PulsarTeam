@@ -3,32 +3,23 @@ import { api, type AuthBrowserControl } from '../../api';
 import { useConnectStatus, type ConnectWidgetProps } from '../connect/useConnectStatus';
 import { errorMessage } from '../../utils/errors';
 
-/** A plugin pinned to one site (e.g. LinkedIn): its own session slot, no URL field. */
-export interface BrowserSitePreset {
-  site: NonNullable<AuthBrowserControl['site']>;
-  name: string;
-  url: string;
-}
-
 export default function AuthBrowserConnect({
   agentId,
   boardId,
   onStatusChange,
-  preset,
-}: ConnectWidgetProps & { preset?: BrowserSitePreset }) {
-  const site = preset?.site;
-  const [url, setUrl] = useState(preset?.url ?? 'https://www.linkedin.com/');
+}: ConnectWidgetProps) {
+  const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const bridge = useRef<HTMLDivElement>(null);
   const importing = useRef(false);
   const getStatus = useCallback(
     (agentId?: string, boardId?: string) =>
-      api.authBrowserControl({ operation: 'status', agentId, boardId, site }),
-    [site]
+      api.authBrowserControl({ operation: 'status', agentId, boardId }),
+    []
   );
   const { status, fetchStatus, statusError, loading, retry } = useConnectStatus(
-    site ?? 'auth-browser',
+    'auth-browser',
     getStatus,
     agentId,
     boardId,
@@ -54,7 +45,6 @@ export default function AuthBrowserConnect({
             operation: 'import',
             agentId,
             boardId,
-            site,
             sessionId: status.sessionId,
             storage: detail.storage,
           });
@@ -73,7 +63,7 @@ export default function AuthBrowserConnect({
     };
     node.addEventListener('pulsar:browser-import', receive);
     return () => node.removeEventListener('pulsar:browser-import', receive);
-  }, [agentId, boardId, site, status.phase, status.canControl, status.sessionId, fetchStatus]);
+  }, [agentId, boardId, status.phase, status.canControl, status.sessionId, fetchStatus]);
 
   async function action(operation: AuthBrowserControl['operation']) {
     setBusy(true);
@@ -89,17 +79,15 @@ export default function AuthBrowserConnect({
           (site.port && site.port !== '443') ||
           site.origin === location.origin
         ) {
-          throw new Error('Ouvrez PulsarTeam en HTTPS et choisissez un site HTTPS distinct.');
+          throw new Error('Open PulsarTeam over HTTPS and choose a different HTTPS website.');
         }
       }
       await api.authBrowserControl({
         operation,
         agentId,
         boardId,
-        site,
         sessionId: status.sessionId,
-        // A pinned site is chosen server-side, never sent from the client.
-        ...(operation === 'prepare_import' && !preset ? { url } : {}),
+        ...(operation === 'prepare_import' ? { url } : {}),
       });
       await fetchStatus();
     } catch (e) {
@@ -114,64 +102,56 @@ export default function AuthBrowserConnect({
   return (
     <div className="space-y-2 border-t border-dark-700 pt-3 text-xs">
       <p className="text-dark-300">
-        {preset
-          ? `Connexion à ${preset.name} dans votre navigateur. Navigation des agents sur le cluster, en lecture seule.`
-          : 'Connexion dans votre navigateur. Navigation des agents sur le cluster.'}
+        Sign in using your browser, then share the session so agents can browse the site on the
+        cluster.
       </p>
       <p className="text-dark-400">
-        Session pour {agentId ? 'cet agent' : 'ce board et ses agents'}.
+        Session for {agentId ? 'this agent' : 'this board and its agents'}.
       </p>
       {!loading && !statusError && status.configured === false && (
-        <p className="text-amber-300">
-          Le service de navigateur doit être configuré par l’administrateur.
-        </p>
+        <p className="text-amber-300">An administrator must configure the browser service.</p>
       )}
-      {loading && <p className="text-dark-400">Vérification du service de navigateur…</p>}
+      {loading && <p className="text-dark-400">Checking the browser service…</p>}
       {statusError && (
         <button type="button" className={button} onClick={retry}>
-          Réessayer la connexion au service
+          Retry service connection
         </button>
       )}
       {!status.exists ? (
         <>
-          {!preset && (
-            <label className="block">
-              Adresse du site
-              <input
-                aria-label="Adresse du site"
-                type="url"
-                className="block w-full bg-dark-900 border border-dark-600 rounded p-2 mt-1"
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-              />
-            </label>
-          )}
+          <label className="block">
+            Website address
+            <input
+              aria-label="Website address"
+              placeholder="https://www.example.com/"
+              type="url"
+              className="block w-full bg-dark-900 border border-dark-600 rounded p-2 mt-1"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+            />
+          </label>
           <button
             type="button"
             className={button}
-            disabled={busy || !status.configured || (!agentId && !boardId)}
+            disabled={busy || !url.trim() || !status.configured || (!agentId && !boardId)}
             onClick={() => void action('prepare_import')}
           >
-            {busy
-              ? 'Préparation…'
-              : preset
-                ? `Se connecter à ${preset.name}`
-                : 'Connecter dans mon navigateur'}
+            {busy ? 'Preparing…' : 'Connect in my browser'}
           </button>
         </>
       ) : (
         <>
           <p className="text-dark-300 break-all">
-            {preset?.name ?? status.site} —{' '}
+            {status.site} —{' '}
             {status.connected
-              ? 'Session partagée sur le cluster'
+              ? 'Session shared on the cluster'
               : status.phase === 'pending'
-                ? 'En attente du transfert'
-                : 'Accès des agents suspendu'}
+                ? 'Waiting for session transfer'
+                : 'Agent access paused'}
           </p>
           {status.expiresAt && (
             <p className="text-dark-400">
-              Expiration au plus tard : {new Date(status.expiresAt).toLocaleString()}.
+              Expires no later than: {new Date(status.expiresAt).toLocaleString('en-GB')}.
             </p>
           )}
           {pending && (
@@ -186,18 +166,13 @@ export default function AuthBrowserConnect({
               })}
             >
               <ol className="list-decimal ml-4 space-y-1 text-dark-200">
-                <li>
-                  Ouvrez l’extension PulsarTeam depuis cet onglet, puis cliquez « Ouvrir le site ».
-                </li>
-                <li>Connectez-vous normalement sur le site et vérifiez le compte affiché.</li>
-                <li>
-                  Dans cet onglet du site, ouvrez l’extension puis cliquez « Transférer la session
-                  ».
-                </li>
+                <li>Open the PulsarTeam extension from this tab, then click “Open website”.</li>
+                <li>Sign in to the website as usual and check the account shown.</li>
+                <li>From the website tab, open the extension and click “Transfer session”.</li>
               </ol>
               <p className="text-amber-300 mt-2">
-                Le transfert copie vos cookies de connexion sur le cluster et donne accès à ce
-                compte aux agents sélectionnés. Gardez cet onglet PulsarTeam ouvert.
+                Transferring copies your session cookies to the cluster and gives the selected
+                agents access to this account. Keep this PulsarTeam tab and connection panel open.
               </p>
             </div>
           )}
@@ -209,7 +184,7 @@ export default function AuthBrowserConnect({
                 className={button}
                 onClick={() => void action(status.connected ? 'takeover' : 'activate')}
               >
-                {status.connected ? 'Suspendre' : 'Reprendre le partage'}
+                {status.connected ? 'Pause sharing' : 'Resume sharing'}
               </button>
             )}
             <button
@@ -218,7 +193,7 @@ export default function AuthBrowserConnect({
               className={button}
               onClick={() => void action('disconnect')}
             >
-              {status.phase === 'pending' ? 'Annuler' : 'Déconnecter'}
+              {status.phase === 'pending' ? 'Cancel' : 'Disconnect'}
             </button>
             <button
               type="button"
@@ -226,36 +201,27 @@ export default function AuthBrowserConnect({
               className={button}
               onClick={() => void fetchStatus()}
             >
-              Actualiser
+              Refresh
             </button>
           </div>
         </>
       )}
       <details className="text-dark-400">
-        <summary className="cursor-pointer">Installer l’extension Chrome / Edge</summary>
+        <summary className="cursor-pointer">Install the Chrome / Edge extension</summary>
         <p className="mt-1">
-          Téléchargez et décompressez l’extension. Dans chrome://extensions ou edge://extensions,
-          activez le mode développeur, puis « Charger l’extension non empaquetée » et sélectionnez
-          ce dossier.
+          Download and extract the extension. Open chrome://extensions or edge://extensions, enable
+          Developer mode, click “Load unpacked” and select the extracted folder. To update an
+          existing installation, replace its files and click “Reload”.
         </p>
         <a href="/extensions/pulsarteam-session.zip" download className="text-indigo-300 underline">
-          Télécharger l’extension
+          Download extension
         </a>
       </details>
       <p className="text-dark-400">
-        La connexion et le MFA restent dans votre navigateur. Une session liée à l’appareil ou
-        refusée par le site, notamment LinkedIn, peut ne pas fonctionner sur le cluster. Une
-        expiration nécessite un nouveau transfert.
+        Login and MFA stay in your browser. Device-bound sessions or sessions rejected by the
+        website may not work on the cluster. Expired sessions require a new transfer.
       </p>
-      {site === 'linkedin' && (
-        <p className="text-dark-400">
-          Les agents lisent avec votre compte (recherche, profils, pages entreprise, fil), sans
-          jamais écrire ni envoyer de message, au rythme d’une page toutes les 3 s et de 120 pages
-          par heure au maximum. LinkedIn restreint l’automatisation de son site et peut limiter un
-          compte : partagez de préférence un compte dont vous acceptez ce risque.
-        </p>
-      )}
-      {busy && <p className="text-dark-300">Opération en cours…</p>}
+      {busy && <p className="text-dark-300">Operation in progress…</p>}
       {(error || statusError) && (
         <p role="alert" className="text-red-400">
           {error || statusError}

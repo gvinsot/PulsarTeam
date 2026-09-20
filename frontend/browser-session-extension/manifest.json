@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "PulsarTeam — Partager une session",
-  "version": "1.0.0",
-  "description": "Connectez-vous dans votre navigateur et partagez explicitement la session d’un site avec votre cluster PulsarTeam.",
+  "name": "PulsarTeam — Authenticated Browser",
+  "version": "1.0.2",
+  "description": "Sign in using your browser and explicitly share a website session with your PulsarTeam cluster.",
   "minimum_chrome_version": "120",
   "incognito": "not_allowed",
   "permissions": ["activeTab", "scripting", "storage", "alarms"],
   "optional_permissions": ["cookies"],
   "optional_host_permissions": ["https://*/*"],
   "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_popup": "popup.html", "default_title": "Partager avec PulsarTeam" }
+  "action": { "default_popup": "popup.html", "default_title": "Share with PulsarTeam" }
 }
