@@ -11,3 +11,4 @@ server/.data/
 **/__pycache__/
 frontend/public/extensions/pulsarteam-session.zip
 frontend/browser-session-extension/vendor/
+.swiftproof/
