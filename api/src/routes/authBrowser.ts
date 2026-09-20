@@ -78,6 +78,13 @@ export function authBrowserRoutes() {
         return;
       }
       const input = parsed.data;
+      if (input.operation === 'import' && !input.url) {
+        res.status(400).json({
+          error:
+            'Update the PulsarTeam extension, then transfer the session from the signed-in website page.',
+        });
+        return;
+      }
       if (
         (input.operation === 'import') !== Boolean(input.storage) ||
         (input.operation === 'import' && !input.sessionId)

@@ -1,4 +1,10 @@
-import { httpsOrigin, validateRequest, sessionCookies, permissionOrigins } from './core.mjs';
+import {
+  httpsOrigin,
+  validateRequest,
+  sessionCookies,
+  permissionOrigins,
+  transferUrl,
+} from './core.mjs';
 import { ExtensionError, safeErrorMessage } from './errors.mjs';
 
 // Only pairing metadata goes into storage.session. Credentials stay transient.
@@ -116,6 +122,7 @@ async function transfer(message) {
     if (source.incognito || httpsOrigin(source.url) !== pair.site) {
       throw new ExtensionError('SOURCE_CHANGED');
     }
+    const startUrl = transferUrl(source.url, pair.site);
     const destination = await requestFromTab(pair.appTabId, pair.appDocumentId);
     if (
       destination.requestId !== pair.requestId ||
@@ -169,7 +176,7 @@ async function transfer(message) {
     try {
       [response] = await chrome.scripting.executeScript({
         target: { tabId: pair.appTabId, documentIds: [pair.appDocumentId] },
-        func: async (expected, storage) => {
+        func: async (expected, storage, url) => {
           if (location.origin !== expected.appOrigin) return 'changed';
           const nodes = document.querySelectorAll('[data-pulsar-browser-request]');
           if (nodes.length !== 1) return 'changed';
@@ -187,7 +194,7 @@ async function transfer(message) {
           // No cookies in DOM attributes, extension messages, URLs or files.
           node.dispatchEvent(
             new CustomEvent('pulsar:browser-import', {
-              detail: { requestId: expected.requestId, storage },
+              detail: { requestId: expected.requestId, storage, url },
             })
           );
           // Release the credential reference while waiting for the app's acknowledgement.
@@ -199,7 +206,7 @@ async function transfer(message) {
           }
           return node.dataset.result || 'timeout';
         },
-        args: [pair, storage],
+        args: [pair, storage, startUrl],
       });
     } catch {
       throw new ExtensionError('TRANSFER_UNCONFIRMED');

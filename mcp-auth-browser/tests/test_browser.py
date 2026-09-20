@@ -33,7 +33,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                         elif u == "https://identity.test/":
                             html = '<button onclick="location.href=\'https://site.test/feed\'">Authorize</button>'
                         elif u == "https://site.test/feed":
-                            html = '<h1>Private feed</h1><input type="password" value="secret-not-for-agent"><a href="/next">Next</a><a href="https://evil.test/">External</a>'
+                            html = '<h1>Private feed</h1><input type="password" hidden value="secret-not-for-agent"><a href="/next">Next</a><a href="https://evil.test/">External</a>'
                         else:
                             html = '<h1>Next private page</h1>'
                         await route.fulfill(status=200, content_type="text/html", body=html)

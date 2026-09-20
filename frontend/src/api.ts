@@ -93,8 +93,11 @@ export interface AuthBrowserStatus {
   exists: boolean;
   connected: boolean;
   canControl?: boolean;
+  canRead?: boolean;
+  browserLocation?: 'server';
+  pageState?: 'loading' | 'ready' | 'empty' | 'login_required' | 'challenge' | 'navigation_failed';
   sessionId?: string;
-  phase?: 'pending' | 'login' | 'ready';
+  phase?: 'pending' | 'login' | 'ready' | 'reauth_required';
   site?: string;
   expiresAt?: number;
 }

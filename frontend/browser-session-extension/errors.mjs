@@ -28,6 +28,8 @@ const messages = Object.freeze({
   TRANSFER_BUSY: 'A transfer is already in progress. Wait for its result in PulsarTeam.',
   SOURCE_CHANGED:
     'After signing in, return to the selected website in the tab opened by the extension.',
+  LOGIN_INCOMPLETE:
+    'Finish signing in and open the account page you want to share, then transfer the session. Login pages and authentication callbacks cannot be shared.',
   SOURCE_UNAVAILABLE: 'The website tab was closed. Cancel pairing and start again in PulsarTeam.',
   COOKIE_STORE_UNAVAILABLE:
     'The browser profile for this tab could not be identified. Use Chrome or Edge outside private browsing.',

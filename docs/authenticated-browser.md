@@ -4,6 +4,11 @@ The built-in **Authenticated Browser** plugin exposes `/api/auth-browser/mcp` in
 PulsarTeam. A private `mcp-auth-browser` worker runs Chromium with Playwright on the
 cluster. It uses a website session explicitly shared from the user's own browser.
 
+The extension performs a **one-time handoff**, not remote control of a local tab:
+local sign-in → cookies, optional local storage and current page URL → PulsarTeam
+API → isolated server Chromium. Every subsequent MCP navigation, read and scroll
+uses that server session. It never sends navigation commands to the extension.
+
 The separate LinkedIn plugin is retired. Use Authenticated Browser with the exact
 website origin, such as `https://www.linkedin.com/` or
 `https://www.legifrance.gouv.fr/`. The plugin provides general page navigation and
@@ -30,24 +35,30 @@ LinkedIn session is not automatically moved to another plugin; reconnect explici
    and to the website's parent domains used for cookies. A dedicated tab opens in
    the same browser profile; no permanent access to all websites is granted.
 5. Sign in normally in that tab, including SSO or MFA if needed. Return to the
-   selected website origin and check the signed-in account.
+   selected website origin, check the signed-in account and open the page to share.
 6. Open the extension from the website tab and click **Transfer session**. Website
-   cookies, including HttpOnly cookies, are copied to the cluster. Include local
+   cookies, including HttpOnly cookies, and the current page URL are copied to the
+   cluster. The server opens that page, not the website's login landing page. Include local
    storage only if the website needs it. Keep the original PulsarTeam tab and
    connection panel open: the page imports the session through its authenticated
    API client and normal CSRF protection.
-7. Agents can now browse the website on the cluster. **Pause sharing** blocks their
+7. The server checks for readable rendered content before confirming the transfer.
+   After success, both local tabs and the local browser may be closed. Agents can
+   now browse the website on the cluster. **Pause sharing** blocks their
    access; **Resume sharing** restores it. **Disconnect** destroys the remote
    copy. To change accounts or renew an expired session, disconnect and reconnect.
 
-Sharing does not prove that the website accepted the copied session. Only its
+The rendering check rejects detected login pages and empty application shells;
+it does not independently verify the account identity on every website. Only its
 creator can import or resume it; authorized editors can revoke it. Users who can
 run the board's agents can access the shared account through those agents.
 Disconnecting here neither signs out your local browser nor revokes provider access.
 
 ## Update or troubleshoot the extension
 
-Version **1.0.2** uses English labels and explanations. It includes the transfer
+Version **1.0.3** transfers the current signed-in page URL and is required by the
+new import endpoint. Older extensions are rejected with an update instruction.
+Labels and explanations are in English. It includes the transfer
 fix from 1.0.1: parent-domain and host cookies with the same name and path are
 merged only when every imported field is identical. Conflicting cookies are still
 rejected; use a dedicated browser profile if needed.
@@ -64,6 +75,15 @@ exceptions are never displayed verbatim because they may contain private data.
 If an import is rejected, read the message in PulsarTeam. If the outcome cannot be
 confirmed, check the session status before reconnecting. A transfer with an
 uncertain outcome cannot be replayed automatically.
+
+`browser_status` reports `browserLocation: "server"` and `canRead` for agent access.
+The human UI's `canControl` flag only grants session management to its creator;
+it is omitted from MCP responses. Local tab focus has no effect on server browsing.
+Ordinary navigation keeps the session ID. Empty content is a bounded rendering
+error, not a successful blank result and not an instruction to repeat sign-in.
+Login redirects require a new explicit local transfer (`reauth_required`). The
+server does not follow them into Google or another identity provider. Popups cannot
+replace the server-owned page, including while sharing is paused.
 
 ## Tools and limitations
 
@@ -123,8 +143,14 @@ FlareSolverr is on the `backend` network without authentication. Only the API
 calls it for this plugin; the isolated worker cannot reach it. The clearance
 also depends on the public egress IP, so worker and solver must use the same IP.
 Changing the User-Agent can cause a website to reject the copied session.
+During initial import, a detected challenge fails the transfer explicitly; it is
+not published as a ready session.
 
 ## Deployment
+
+Deploy the API, frontend and `mcp-auth-browser` worker together for this handoff
+contract, then reload extension 1.0.3 and transfer a fresh session. The worker
+deployment destroys its existing in-memory sessions.
 
 Provision the same random **AUTH_BROWSER_KEY**, at least 32 characters, for
 `team-api` and `mcp-auth-browser`. Do not reuse JWT_SECRET. Both services read
@@ -202,7 +228,10 @@ BROWSER_E2E=1 python -m unittest discover -s mcp-auth-browser/tests -v
 ```
 
 The integration test covers HttpOnly cookies, strict deduplication, local storage,
-origin isolation, session sharing and suspension. Unit tests cover replay,
+origin isolation, session sharing and suspension. It closes the local browser
+before navigating twice on the server with the same session. Chromium regressions
+also cover delayed SPA rendering, empty pages, HTTP login redirects and popup
+isolation. Unit tests cover replay,
 expiration, user/scope substitution, safe diagnostics and uncertain outcomes.
 MV3 tests pre-grant fixture origins; native permission dialogs and installation
 remain manual checks.

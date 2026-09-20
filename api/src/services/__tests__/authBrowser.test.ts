@@ -134,6 +134,28 @@ test('an unreachable worker is distinguished from a missing secret without expos
   }
 });
 
+test('empty server pages and import challenges have explicit private diagnostics', async () => {
+  process.env.AUTH_BROWSER_KEY = 'test-browser-key-with-at-least-32-characters';
+  for (const [status, expected] of [
+    [424, /did not render readable/],
+    [412, /challenge/],
+  ] as const) {
+    const stub = mock.method(
+      globalThis,
+      'fetch',
+      async () => new Response('private-page-do-not-leak', { status })
+    );
+    try {
+      await assert.rejects(
+        browserCommand({ type: 'agent', id: 'a' }, 'read'),
+        e => e instanceof Error && expected.test(e.message) && !e.message.includes('do-not-leak')
+      );
+    } finally {
+      stub.mock.restore();
+    }
+  }
+});
+
 test('session import forwards only the authenticated controller and authorized scope', async () => {
   const app = express();
   app.use(express.json());
@@ -160,6 +182,7 @@ test('session import forwards only the authenticated controller and authorized s
         body: JSON.stringify({
           operation: 'import',
           boardId: 'selected-board',
+          url: 'https://www.site.test/feed',
           sessionId: '00000000-0000-4000-8000-000000000000',
           storage: {
             cookies: [
@@ -181,6 +204,7 @@ test('session import forwards only the authenticated controller and authorized s
     assert.equal(result.headers.get('cache-control'), 'no-store');
     assert.equal(forwarded.controller, 'alice');
     assert.equal(forwarded.scope, 'board:selected-board');
+    assert.equal(forwarded.url, 'https://www.site.test/feed');
     assert.equal(forwarded.session_id, '00000000-0000-4000-8000-000000000000');
     assert.equal(forwarded.storage.cookies[0].httpOnly, true);
     assert.ok(!(await result.text()).includes('synthetic-secret'));

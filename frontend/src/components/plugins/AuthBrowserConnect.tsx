@@ -46,6 +46,7 @@ export default function AuthBrowserConnect({
             agentId,
             boardId,
             sessionId: status.sessionId,
+            url: detail.url,
             storage: detail.storage,
           });
           node.dataset.result = 'success';
@@ -102,8 +103,8 @@ export default function AuthBrowserConnect({
   return (
     <div className="space-y-2 border-t border-dark-700 pt-3 text-xs">
       <p className="text-dark-300">
-        Sign in using your browser, then share the session so agents can browse the site on the
-        cluster.
+        Sign in locally and transfer the session once. All subsequent agent navigation runs in the
+        server browser, independently of your local tabs.
       </p>
       <p className="text-dark-400">
         Session for {agentId ? 'this agent' : 'this board and its agents'}.
@@ -147,7 +148,9 @@ export default function AuthBrowserConnect({
               ? 'Session shared on the cluster'
               : status.phase === 'pending'
                 ? 'Waiting for session transfer'
-                : 'Agent access paused'}
+                : status.phase === 'reauth_required'
+                  ? 'The website requires a new session transfer'
+                  : 'Agent access paused'}
           </p>
           {status.expiresAt && (
             <p className="text-dark-400">
@@ -167,17 +170,21 @@ export default function AuthBrowserConnect({
             >
               <ol className="list-decimal ml-4 space-y-1 text-dark-200">
                 <li>Open the PulsarTeam extension from this tab, then click “Open website”.</li>
-                <li>Sign in to the website as usual and check the account shown.</li>
+                <li>
+                  Sign in to the website, check the account shown and open the page you want to
+                  share.
+                </li>
                 <li>From the website tab, open the extension and click “Transfer session”.</li>
               </ol>
               <p className="text-amber-300 mt-2">
                 Transferring copies your session cookies to the cluster and gives the selected
                 agents access to this account. Keep this PulsarTeam tab and connection panel open.
+                Once the transfer succeeds, you may close both local tabs.
               </p>
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            {status.canControl && status.phase !== 'pending' && (
+            {status.canControl && ['login', 'ready'].includes(status.phase) && (
               <button
                 type="button"
                 disabled={busy}

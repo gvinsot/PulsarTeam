@@ -13,6 +13,23 @@ export function httpsOrigin(value) {
   return url.origin;
 }
 
+export function transferUrl(value, site) {
+  if (httpsOrigin(value) !== site) throw new ExtensionError('SOURCE_CHANGED');
+  const url = new URL(value);
+  const authParams = /^(code|access_token|id_token|oauth_token|oauth_verifier)$/i;
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  if ([...url.searchParams.keys(), ...fragment.keys()].some(key => authParams.test(key)))
+    throw new ExtensionError('LOGIN_INCOMPLETE');
+  const path = decodeURIComponent(url.pathname).toLowerCase().replace(/\/+$/, '');
+  if (
+    /^\/(login|signin|sign-in|auth\/login|oauth\/authorize|uas\/login|authwall|checkpoint|signup|m\/login)(\/|$)/.test(
+      path
+    )
+  )
+    throw new ExtensionError('LOGIN_INCOMPLETE');
+  return url.href;
+}
+
 export function validateRequest(value, appUrl, now = Date.now()) {
   const appOrigin = httpsOrigin(appUrl);
   if (

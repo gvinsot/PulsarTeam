@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from playwright.async_api import async_playwright
 
 from egress import PublicProxy, https_origin, public_addresses
+from page_state import read_page, shared_url
 
 MAX_SESSIONS = 6
 SESSION_SECONDS = 8 * 3600
@@ -100,6 +101,9 @@ class Session:
         self.browser = self.context = self.page = None
         self.proxy = PublicProxy()
         self.lock = asyncio.Lock()
+        self.page_state = "loading"
+        self.navigation_blocked = False
+        self.imported = False
 
     def expired(self):
         now = time.time()
@@ -107,6 +111,8 @@ class Session:
 
     def status(self):
         return {"exists": True, "connected": self.phase == "ready", "phase": self.phase,
+                "browserLocation": "server", "canRead": self.phase == "ready",
+                "pageState": self.page_state,
                 "sessionId": self.id, "site": self.origin,
                 "expiresAt": int((self.created + SESSION_SECONDS) * 1000)}
 
@@ -115,10 +121,13 @@ class Session:
             raise HTTPException(403, "Seul l’utilisateur ayant ouvert cette session peut la contrôler.")
 
     def require_agent(self):
+        if self.phase == "reauth_required":
+            raise HTTPException(401, "Sign in locally and transfer a new session")
         if self.phase != "ready":
             raise HTTPException(409, "Connexion en cours : attendez que l’utilisateur partage la session.")
 
     async def open(self, playwright, url, storage=None):
+        self.imported = storage is not None
         proxy_url = await self.proxy.start()
         self.browser = await playwright.chromium.launch(
             headless=True, chromium_sandbox=True,
@@ -128,7 +137,31 @@ class Session:
                  if k in {"PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SystemRoot", "LOCALAPPDATA"}},
             args=["--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
         await self.new_context(storage)
-        await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        return await self.navigate(url)
+
+    async def navigate(self, url):
+        self.navigation_blocked = False
+        self.page_state = "loading"
+        try:
+            response = await self.active_page().goto(url, wait_until="domcontentloaded", timeout=30000)
+        except HTTPException:
+            raise
+        except Exception:
+            if self.navigation_blocked:
+                self.page_state = "login_required"
+                self.phase = "reauth_required"
+                raise HTTPException(401, "The website redirected outside the shared session")
+            self.page_state = "navigation_failed"
+            raise HTTPException(502, "Server browser navigation failed")
+        if response and not cloudflare_challenge(response):
+            if getattr(response, "status", 200) in {401, 403}:
+                self.page_state = "login_required"
+                self.phase = "reauth_required"
+                raise HTTPException(401, "The website rejected the shared session")
+            if getattr(response, "status", 200) >= 400:
+                self.page_state = "navigation_failed"
+                raise HTTPException(502, "The website returned an error to the server browser")
+        return response
 
     async def new_context(self, storage=None, user_agent=None):
         """(Re)build the single browsing context. Playwright fixes the user agent
@@ -146,8 +179,10 @@ class Session:
                 origin = https_origin(request.url)
                 # Restrict every top-level navigation, including popups/redirects.
                 if request.is_navigation_request() and request.frame.parent_frame is None:
-                    allowed = self.login_origins if self.phase == "login" else {self.origin}
+                    allowed = self.login_origins if self.phase == "login" and not self.imported else {self.origin}
                     if origin not in allowed:
+                        if request.frame.page == self.page:
+                            self.navigation_blocked = True
                         raise ValueError("Navigation outside the configured site")
                 await request_route.fallback()
             except Exception:
@@ -158,21 +193,64 @@ class Session:
         await self.context.route_web_socket("**/*", lambda ws: ws.close())
 
         async def new_page(page):
-            self.page = page
             page.on("dialog", lambda dialog: dialog.dismiss())
             page.on("download", lambda download: download.cancel())
+            if self.phase == "login" and not self.imported:
+                # Legacy human-only controls may follow a login popup. Imported
+                # sessions never enter this path or follow an identity provider.
+                self.page = page
+            else:
+                # A popup must never replace the page the agent owns and reads.
+                with contextlib.suppress(Exception):
+                    await page.close()
 
-        self.context.on("page", new_page)
         self.page = await self.context.new_page()
+        self.page.on("dialog", lambda dialog: dialog.dismiss())
+        self.page.on("download", lambda download: download.cancel())
         self.page.set_default_timeout(10000)
+        await self.guard_redirects(self.page)
+        self.context.on("page", new_page)
         if previous:
             await previous.close()
+
+    async def guard_redirects(self, page):
+        # Playwright routes only the first request of an HTTP redirect chain.
+        # Chromium interception checks every Document request before it leaves,
+        # including redirects that otherwise skip the context.route guard.
+        cdp = await self.context.new_cdp_session(page)
+        tree = await cdp.send("Page.getFrameTree")
+        main_frame = tree["frameTree"]["frame"]["id"]
+
+        async def paused(event):
+            blocked = False
+            if event["frameId"] == main_frame:
+                try:
+                    url = event["request"]["url"]
+                    if self.phase == "login" and not self.imported:
+                        if https_origin(url) not in self.login_origins:
+                            raise ValueError("Outside login origins")
+                    else:
+                        shared_url(url, self.origin)
+                except ValueError:
+                    blocked = True
+                    self.navigation_blocked = True
+                    if self.imported or self.phase != "login":
+                        self.phase = "reauth_required"
+                        self.page_state = "login_required"
+            with contextlib.suppress(Exception):
+                await cdp.send("Fetch.failRequest" if blocked else "Fetch.continueRequest",
+                    {"requestId": event["requestId"], **({"errorReason": "BlockedByClient"} if blocked else {})})
+
+        cdp.on("Fetch.requestPaused", paused)
+        await cdp.send("Fetch.enable", {"patterns": [{"resourceType": "Document", "requestStage": "Request"}]})
 
     def active_page(self):
         pages = [p for p in self.context.pages if not p.is_closed()]
         if not pages:
             raise HTTPException(409, "Navigateur fermé. Reconnectez-vous.")
-        if self.page.is_closed():
+        if self.page is None or self.page.is_closed():
+            if self.phase != "login" or self.imported:
+                raise HTTPException(409, "The server-owned page was closed. Reconnect the browser.")
             self.page = pages[-1]
         return self.page
 
@@ -239,6 +317,7 @@ def import_storage(raw, origin):
 
 def pending_status(pending, controller):
     return {"exists": True, "connected": False, "phase": "pending",
+            "browserLocation": "server", "canRead": False,
             "sessionId": pending["id"], "site": pending["origin"],
             "expiresAt": int(pending["expires"] * 1000),
             "canControl": controller == pending["controller"]}
@@ -286,16 +365,21 @@ async def health():
 
 async def snapshot(session):
     page = session.active_page()
-    if https_origin(page.url) != session.origin:
-        raise HTTPException(409, "La session a quitté le site autorisé. Reconnectez-vous.")
-    # No arbitrary evaluation, cookies, storage, inputs or network headers are exposed.
-    return await page.evaluate("""() => ({
-        url: location.href, title: document.title,
-        text: (document.body?.innerText || '').slice(0, 60000),
-        links: Array.from(document.querySelectorAll('a[href]'))
-          .filter(a => a.origin === location.origin && a.protocol === 'https:')
-          .slice(0, 150).map(a => ({text: (a.innerText || '').slice(0, 200), url: a.href}))
-    })""")
+    if session.navigation_blocked:
+        session.page_state = "login_required"
+        session.phase = "reauth_required"
+        raise HTTPException(401, "The website requires a new local login")
+    try:
+        data = await read_page(page, session.origin)
+        if session.navigation_blocked:
+            raise HTTPException(401, "The website requires a new local login")
+    except HTTPException as error:
+        session.page_state = "login_required" if error.status_code == 401 else "empty"
+        if error.status_code == 401:
+            session.phase = "reauth_required"
+        raise
+    session.page_state = "ready"
+    return data
 
 
 async def execute(cmd: Command):
@@ -321,6 +405,9 @@ async def execute(cmd: Command):
                 raise HTTPException(409, "Connexion expirée")
             if cmd.controller != pending["controller"] or cmd.session_id != pending["id"]:
                 raise HTTPException(403, "Connexion incorrecte")
+            if not cmd.url:
+                raise HTTPException(400, "Update the extension and transfer from the signed-in page")
+            start_url = shared_url(cmd.url, pending["origin"])
             state = import_storage(cmd.storage, pending["origin"])
             if cmd.scope in sessions:
                 raise HTTPException(409, "Une session existe déjà")
@@ -330,13 +417,15 @@ async def execute(cmd: Command):
             # agents cannot fall through to their board's different account.
             pending["consumed"] = True
             session = Session(cmd.controller, pending["origin"], [])
-            session.phase = "ready"
+            session.phase = "importing"
             try:
-                await session.open(app.state.playwright, session.origin, state)
+                response = await session.open(app.state.playwright, start_url, state)
+                if cloudflare_challenge(response):
+                    raise HTTPException(412, "The server browser encountered a website challenge")
+                await snapshot(session)
                 if pending_imports.get(cmd.scope) is not pending or pending["expires"] <= time.time():
                     raise HTTPException(409, "Transfert annulé ou expiré")
-                if https_origin(session.active_page().url) != session.origin:
-                    raise HTTPException(409, "Le site demande une nouvelle connexion")
+                session.phase = "ready"
                 sessions[cmd.scope] = session
                 return {**session.status(), "canControl": True}
             except BaseException:
@@ -351,7 +440,7 @@ async def execute(cmd: Command):
             return pending_status(pending, cmd.controller)
         if cmd.operation == "disconnect" and cmd.controller and cmd.session_id == pending["id"]:
             pending_imports.pop(cmd.scope)
-            return {"exists": False, "connected": False}
+            return {"exists": False, "connected": False, "canRead": False, "browserLocation": "server"}
         raise HTTPException(409, "Transfert de session en attente")
     if cmd.operation == "start":
         if not cmd.controller:
@@ -376,7 +465,7 @@ async def execute(cmd: Command):
     session = sessions.get(cmd.scope)
     if not session:
         if cmd.operation == "status":
-            return {"exists": False, "connected": False}
+            return {"exists": False, "connected": False, "canRead": False, "browserLocation": "server"}
         raise HTTPException(409, "Aucune session. Connectez le navigateur dans les plugins.")
     async with session.lock:
         if sessions.get(cmd.scope) is not session or session.expired():
@@ -384,7 +473,7 @@ async def execute(cmd: Command):
                 sessions.pop(cmd.scope)
                 await session.close()
             if cmd.operation == "status":
-                return {"exists": False, "connected": False}
+                return {"exists": False, "connected": False, "canRead": False, "browserLocation": "server"}
             raise HTTPException(409, "Session expirée. Reconnectez-vous.")
         if cmd.operation == "status":
             return {**session.status(), "canControl": cmd.controller == session.controller}
@@ -412,6 +501,7 @@ async def execute(cmd: Command):
             query = parse_qs(urlsplit(page.url).query)
             if {"code", "access_token", "id_token"} & query.keys() or urlsplit(page.url).fragment:
                 raise HTTPException(409, "Terminez la redirection de connexion avant de partager.")
+            await snapshot(session)
             session.phase = "ready"
             # Close login popups and other tabs before the agent can read.
             for other in list(session.context.pages):
@@ -444,6 +534,7 @@ async def execute(cmd: Command):
         if cmd.operation in {"navigate", "clearance"}:
             if https_origin(cmd.url) != session.origin:
                 raise HTTPException(403, "Navigation limitée au site partagé")
+            shared_url(cmd.url, session.origin)
             if cmd.operation == "clearance":
                 cookies = clearance_cookies(cmd.cookies, session.origin)
                 if not USER_AGENT.fullmatch(cmd.user_agent):
@@ -454,9 +545,9 @@ async def execute(cmd: Command):
                                     if c["name"] not in CLEARANCE_COOKIES] + cookies
                 await session.new_context(state, cmd.user_agent)
                 page = session.page
-            response = await page.goto(cmd.url, wait_until="domcontentloaded",
-                                       timeout=30000)
+            response = await session.navigate(cmd.url)
             if cloudflare_challenge(response):
+                session.page_state = "challenge"
                 # The API may answer with a `clearance` command; never read the challenge.
                 return {"challenge": True}
         elif cmd.operation == "scroll":

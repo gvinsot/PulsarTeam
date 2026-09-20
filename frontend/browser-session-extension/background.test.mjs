@@ -75,7 +75,7 @@ async function background(t, options = {}) {
     },
     scripting: {
       executeScript: async execution => {
-        if (execution.args?.length === 2) {
+        if (execution.args?.length === 3) {
           state.imports.push(structuredClone(execution.args));
           if (options.importError) throw options.importError;
           return [{ result: options.importResult || 'success' }];
@@ -121,7 +121,9 @@ test('same-value cookies on the parent and selected host transfer once, then rel
   });
   assert.deepEqual(await transfer(), { result: { ok: true } });
   assert.equal(state.imports.length, 1);
-  const [destination, storage] = state.imports[0];
+  const [destination, storage, startUrl] = state.imports[0];
+  assert.equal(startUrl, 'https://www.linkedin.com/feed/');
+  assert.equal('url' in destination, false, 'the page URL is not persisted in pairing metadata');
   assert.equal(destination.appDocumentId, 'original-app-document');
   assert.equal(storage.cookies.length, 1);
   assert.equal(storage.cookies[0].value, cookie.value);

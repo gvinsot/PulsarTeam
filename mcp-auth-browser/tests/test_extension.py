@@ -45,6 +45,8 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                             headers = await route.request.all_headers()
                             if 'sid=synthetic-httponly' not in headers.get('cookie', ''):
                                 return await route.fulfill(body='<h1>Login required</h1>')
+                            if route.request.url == 'https://www.site.test/':
+                                return await route.fulfill(content_type='text/html', body='<input type="password">Sign in with Google')
                             await route.fulfill(content_type='text/html', body='<h1>Private feed</h1>')
                         await context.route('**/*', remote_site)
                         return context
@@ -63,7 +65,7 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                       const response = await fetch('/api/auth-browser/control', {method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({operation:'import', boardId:'extension',
-                          sessionId:event.detail.requestId, storage:event.detail.storage})});
+                          sessionId:event.detail.requestId, storage:event.detail.storage, url:event.detail.url})});
                       node.dataset.result = response.ok ? 'success' : 'error';
                     });</script>'''.replace('REQUEST', json.dumps(request))
                     async def app_route(route):
@@ -73,7 +75,7 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(len(data['storage']['cookies']), 1)
                             result = await server.execute(server.Command(scope='board:extension',
                                 controller='alice', operation=data['operation'],
-                                session_id=data['sessionId'], storage=data['storage']))
+                                session_id=data['sessionId'], storage=data['storage'], url=data['url']))
                             await route.fulfill(json=result)
                         else:
                             await route.fulfill(content_type='text/html', body=html)
@@ -122,6 +124,8 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                     transferred = await send(dict(type='transfer', tabId=stored['sourceTabId'], includeLocalStorage=True))
                     self.assertEqual(transferred, {'result': {'ok': True}})
                     remote = server.sessions['board:extension']
+                    self.assertEqual(remote.page.url, 'https://www.site.test/signed-in')
+                    self.assertEqual(source.url, 'https://www.site.test/signed-in')
                     read = await server.execute(server.Command(scope='board:extension', operation='read'))
                     self.assertIn('Private feed', read['text'])
                     self.assertNotIn('synthetic-', str(read))
@@ -129,6 +133,19 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await remote.context.cookies('https://sibling.site.test'), [])
                     self.assertEqual(await worker.evaluate('() => chrome.storage.session.get(null)'), {})
                     self.assertIn('error', await send(dict(type='transfer', tabId=stored['sourceTabId'])))
+                    # The extension and both local tabs are now gone. Reading and
+                    # navigation must keep working in the same remote session.
+                    await context.close()
+                    status = await server.execute(server.Command(scope='board:extension', operation='status'))
+                    self.assertFalse(status['canControl'])
+                    self.assertTrue(status['canRead'])
+                    self.assertEqual(status['browserLocation'], 'server')
+                    sid = status['sessionId']
+                    for path in ['next', 'another']:
+                        read = await server.execute(server.Command(scope='board:extension', operation='navigate',
+                            url=f'https://www.site.test/{path}'))
+                        self.assertIn('Private feed', read['text'])
+                        self.assertEqual(server.sessions['board:extension'].id, sid)
                     await server.execute(server.Command(scope='board:extension', controller='alice',
                         session_id=remote.id, operation='takeover'))
                     with self.assertRaises(server.HTTPException):

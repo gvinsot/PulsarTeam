@@ -8,7 +8,10 @@ export interface BrowserStatus {
   exists: boolean;
   connected: boolean;
   canControl?: boolean;
-  phase?: 'pending' | 'login' | 'ready';
+  canRead?: boolean;
+  browserLocation?: 'server';
+  pageState?: 'loading' | 'ready' | 'empty' | 'login_required' | 'challenge' | 'navigation_failed';
+  phase?: 'pending' | 'login' | 'ready' | 'reauth_required';
   sessionId?: string;
   site?: string;
   expiresAt?: number;
@@ -67,6 +70,8 @@ export async function browserCommand<T = BrowserStatus>(
       401: 'The website rejected the transferred session and requires a new login. Sign in again, then transfer the session.',
       403: 'Browser access denied: check the session owner and website domain.',
       409: 'Session missing, expired, busy or not shared. Check the connection in the plugin.',
+      412: 'The website presented a challenge in the server browser. The session was not shared. Check the website before transferring again.',
+      424: 'The server browser did not render readable page content. This is a server-side page failure, not a local-tab focus problem. Do not repeat the login automatically.',
       429: 'Browser capacity reached. Close a session before trying again.',
     };
     throw new BrowserCommandError(

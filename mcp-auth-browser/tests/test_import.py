@@ -28,7 +28,7 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
     async def test_nonce_binds_user_scope_and_site_and_is_single_use(self):
         prepared = await self.prepare()
         base = dict(scope='board:chosen', controller='alice', operation='import',
-                    session_id=prepared['sessionId'], storage=STATE)
+                    session_id=prepared['sessionId'], storage=STATE, url='https://www.site.test/feed')
         for override in [{'scope': 'agent:other'}, {'controller': 'bob'}, {'controller': None},
                          {'session_id': 'stale'}]:
             with self.assertRaises(HTTPException):
@@ -38,12 +38,12 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         opened = []
         async def open_session(s, playwright, url, storage):
             opened.append((url, storage))
-            s.active_page = lambda: SimpleNamespace(url=url)
+            s.active_page = lambda: SimpleNamespace(url=url, evaluate=AsyncMock(return_value={'text': 'Private feed'}))
         server.app.state.playwright = object()
         with patch.object(server.Session, 'open', open_session):
             result = await server.execute(server.Command(**base))
         self.assertTrue(result['connected'])
-        self.assertEqual(opened[0][0], 'https://www.site.test')
+        self.assertEqual(opened[0][0], 'https://www.site.test/feed')
         self.assertEqual(opened[0][1]['cookies'][0]['domain'], 'www.site.test')
         self.assertNotIn('synthetic-secret', str(result))
         with self.assertRaises(HTTPException):
@@ -65,7 +65,7 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(server.Session, 'close', AsyncMock()) as close:
             with self.assertRaises(RuntimeError):
                 await server.execute(server.Command(scope='board:chosen', controller='alice',
-                    operation='import', session_id=prepared['sessionId'], storage=STATE))
+                    operation='import', session_id=prepared['sessionId'], storage=STATE, url='https://www.site.test/feed'))
             close.assert_awaited_once()
         self.assertFalse(server.pending_imports)
         self.assertFalse(server.sessions)
@@ -76,12 +76,12 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         async def open_session(s, *_args):
             entered.set()
             await finish.wait()
-            s.active_page = lambda: SimpleNamespace(url=s.origin)
+            s.active_page = lambda: SimpleNamespace(url=s.origin, evaluate=AsyncMock(return_value={'text': 'Private feed'}))
         server.app.state.playwright = object()
         with patch.object(server.Session, 'open', open_session), \
                 patch.object(server.Session, 'close', AsyncMock()) as close:
             task = asyncio.create_task(server.execute(server.Command(scope='board:chosen',
-                controller='alice', operation='import', session_id=prepared['sessionId'], storage=STATE)))
+                controller='alice', operation='import', session_id=prepared['sessionId'], storage=STATE, url='https://www.site.test/feed')))
             await entered.wait()
             status = await server.execute(server.Command(scope='board:chosen', operation='status'))
             self.assertTrue(status['exists'])

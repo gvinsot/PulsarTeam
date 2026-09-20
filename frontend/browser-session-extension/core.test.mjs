@@ -1,9 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { httpsOrigin, validateRequest, sessionCookies, permissionOrigins } from './core.mjs';
+import {
+  httpsOrigin,
+  validateRequest,
+  sessionCookies,
+  permissionOrigins,
+  transferUrl,
+} from './core.mjs';
 import { ExtensionError } from './errors.mjs';
 
 const errorCode = code => error => error instanceof ExtensionError && error.code === code;
+
+test('transfer preserves the signed-in page and rejects login and identity-provider pages', () => {
+  assert.equal(
+    transferUrl('https://www.site.test/feed?view=recent', 'https://www.site.test'),
+    'https://www.site.test/feed?view=recent'
+  );
+  for (const url of [
+    'https://accounts.google.com/',
+    'https://www.site.test/login',
+    'https://www.site.test/authwall',
+    'https://www.site.test/callback?code=secret',
+    'https://www.site.test/#access_token=secret',
+  ]) {
+    assert.throws(() => transferUrl(url, 'https://www.site.test'));
+  }
+});
 
 test('cookie permissions include exact parents but stop at public and private suffixes', () => {
   assert.deepEqual(permissionOrigins('https://login.example.co.uk', 'https://pulsar.test'), [
