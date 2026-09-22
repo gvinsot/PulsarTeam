@@ -943,8 +943,20 @@ export class MCPManager {
       // so the internal token must outlive long coding sessions — with the 1h
       // default, every internal MCP call
       // starts failing with 401 after an hour.
+      //
+      // The TTL must cover the longest INTERACTIVE session, not the longest
+      // headless run: a tmux-backed terminal session lives for days, and the
+      // CLIs (codex, claude-code, …) read their MCP config exactly once, at
+      // launch. Rewriting the config file on a later spawn does NOT reach a
+      // running CLI, so an expired token means every gateway call answers
+      // `401 Invalid token` until the session is restarted — which is what the
+      // 24h value produced after a day of uptime. 30d is the deliberate
+      // trade-off: the token is bound to one agent+board (enforced by
+      // internalMcpContextMatches in services/mcpHttpHandler.ts) and only ever
+      // lives in that agent's own config file inside the runner container, so
+      // a short expiry buys little and costs a silent daily outage.
       const internal = resolveInternalMcpConfig(server.url, {
-        expiresIn: '24h',
+        expiresIn: '30d',
         agentId: agent.id,
         boardId: agent.boardId,
       });
