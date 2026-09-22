@@ -8,7 +8,7 @@
     "typecheck": ["npm", "--prefix", "api", "run", "typecheck"]
   },
   "sandbox": {
-    "image": "pulsarteam-swiftproof:local",
+    "image": "registry.methodinfo.fr/pulsarteam-test:latest",
     "network": false,
     "timeout_seconds": 900,
     "max_runtime_seconds": 2400,

@@ -31,9 +31,47 @@ COPY api/src ./src
 RUN npx tsc
 
 # ── Test stage: keeps dev dependencies and sources (never shipped) ───────────
+#
+# This stage is also the SwiftProof sandbox image (`sandbox.image` in
+# .swiftproof.json): the review runs its checks in the very image the pipeline
+# tests in, rather than in a separate container built on the side. Two things
+# are needed for that, both below — the binary, and dependencies reachable from
+# the sandbox workspace.
 FROM build AS test
 # Integration fixtures create real repositories and exercise commits/pushes.
 RUN apk add --no-cache git
+
+# SwiftProof, pinned by version and checksum. The release ships a statically
+# linked Go binary, so it runs on musl as-is. The sandbox has no network and
+# never installs anything at review time (`docker run --pull=never`, `--network
+# none`), which is exactly why this is baked in here.
+ARG TARGETARCH
+ARG SWIFTPROOF_VERSION=v0.2.0
+RUN set -eu; \
+    arch="${TARGETARCH:-amd64}"; \
+    case "$arch" in \
+      amd64) sha=fce4fdf345bf36ead40b8b6c232b4dcd3c40106a186ed350434755d20a0ef6d1 ;; \
+      arm64) sha=ba2302e778ce157dfb5497b2e73f722a5cde91b14ff68237337a90fbe388e3d1 ;; \
+      *) echo "SwiftProof publishes linux amd64/arm64 only, not $arch" >&2; exit 1 ;; \
+    esac; \
+    dir="swiftproof-${SWIFTPROOF_VERSION}-linux-${arch}"; \
+    wget -qO /tmp/swiftproof.tar.gz \
+      "https://github.com/gvinsot/SwiftProof/releases/download/${SWIFTPROOF_VERSION}/${dir}.tar.gz"; \
+    echo "$sha  /tmp/swiftproof.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/swiftproof.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/${dir}/swiftproof" /usr/local/bin/swiftproof; \
+    rm -rf /tmp/swiftproof.tar.gz "/tmp/${dir}"; \
+    swiftproof version
+
+# The sandbox copies a snapshot of the TRACKED files into a tmpfs /workspace and
+# runs the checks from there as uid 65534 with a read-only rootfs — so
+# `api/node_modules` is never in that snapshot (it is git-ignored) and no
+# install can rescue it without a network. Node, tsc and `npm run` all walk the
+# ancestors of /workspace/api looking for node_modules and a .bin, and / is the
+# last ancestor: this symlink is what makes the image's own dependencies the
+# ones the checks resolve. Without it every check dies on `tsc: not found`.
+RUN ln -s /app/node_modules /node_modules
+
 CMD ["npm", "test"]
 
 # ── Prune stage: strip dev dependencies from node_modules ───────────────────
