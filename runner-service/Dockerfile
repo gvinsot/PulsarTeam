@@ -44,8 +44,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
 # ─── Agent CLIs ────────────────────────────────────────────────────────────
 # Each runner backend invokes its own CLI binary. We install all of them
 # unconditionally so the same image can act as any backend at runtime.
-# A failed install does NOT abort the image build — the backend will
-# return a clear error from /health if its CLI is missing at runtime.
+# Some optional CLI installs tolerate failures. Codex must install successfully
+# so a build cannot silently ship a stub instead of the latest release.
 
 # All CLIs below use upstream latest releases. Bump this shared key to refresh
 # every installer, including Claude/OpenClaw/Hermes, on cached image builds.
@@ -71,37 +71,6 @@ RUN (echo "OpenCode CLI refresh key: ${OPENCODE_CLI_CACHE_BUST}" \
           npm install -g "opencode-ai@${OPENCODE_CLI_VERSION}"; \
         fi) \
     || echo "WARN: opencode-ai install failed — backend will be unavailable"
-
-# OpenAI Codex CLI (https://github.com/openai/codex)
-# Lets the runner act as a "codex" backend that taps into the operator's
-# ChatGPT plan via `codex login` (OAuth) — exactly like claude-code does
-# with a Claude Pro/Max plan.
-#
-# The npm package ships a platform-specific native binary under
-# node_modules/@openai/codex-<platform>/vendor/.../codex/codex. Some npm
-# tarball extractions strip the exec bit, and even when they don't, the
-# per-agent UIDs (20000+) the runner drops to before spawning need every
-# parent dir to be world-traversable. Chmod the install tree the same
-# way the hermes line does, then force +x on the vendored binaries.
-# By default, resolve npm's latest tag during the image build. Set
-# CODEX_CLI_VERSION to a concrete version to pin a deployment, and bump
-# CODEX_CLI_CACHE_BUST (or build with --no-cache) when rebuilding an unchanged
-# Dockerfile so Docker re-runs this layer and re-checks npm.
-ARG CODEX_CLI_VERSION=latest
-ARG CODEX_CLI_CACHE_BUST=1
-RUN (echo "Codex CLI refresh key: ${CODEX_CLI_CACHE_BUST}" \
-     && if [ "${CODEX_CLI_VERSION}" = "latest" ]; then \
-          CODEX_RESOLVED_VERSION="$(npm view @openai/codex@latest version)" \
-          && echo "Resolved @openai/codex@latest to ${CODEX_RESOLVED_VERSION}" \
-          && npm install -g "@openai/codex@${CODEX_RESOLVED_VERSION}"; \
-        else \
-          npm install -g "@openai/codex@${CODEX_CLI_VERSION}"; \
-        fi \
-     && chmod -R a+rX /usr/lib/node_modules/@openai \
-     && find /usr/lib/node_modules/@openai -type f -path "*/vendor/*" -exec chmod +x {} \; \
-    ) || (echo "WARN: @openai/codex install failed — installing stub" \
-        && printf '#!/bin/sh\necho "codex-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/codex \
-        && chmod +x /usr/local/bin/codex)
 
 # OpenClaw CLI (https://openclaw.ai)
 RUN npm install -g openclaw@latest \
@@ -190,7 +159,6 @@ RUN echo "=== Python ===" && python --version && \
     echo "=== Node.js ===" && node --version && \
     echo "=== Claude Code ===" && claude --version && \
     echo "=== OpenCode ===" && (opencode --version 2>&1 || echo "not installed") && \
-    echo "=== Codex ===" && (codex --version 2>&1 || echo "not installed") && \
     echo "=== OpenClaw ===" && openclaw --version && \
     echo "=== Hermes ===" && hermes --version && \
     echo "=== Aider ===" && (aider --version 2>&1 || echo "not installed") && \
@@ -208,6 +176,23 @@ RUN RTK_ARCH=$(uname -m | sed 's/x86_64/x86_64/' | sed 's/aarch64/aarch64/') && 
 
 # gosu for runtime user switching
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+
+# OpenAI Codex CLI (https://github.com/openai/codex)
+# Remote ADD revalidates npm's latest metadata on every build. A new release
+# invalidates the install layer without a manual cache-bust argument, including
+# when this Dockerfile is built directly. Keep it last to preserve the other
+# CLIs' build cache. Install the exact version from the downloaded metadata.
+ADD https://registry.npmjs.org/@openai/codex/latest /tmp/codex-latest.json
+RUN CODEX_RESOLVED_VERSION="$(jq -er '.version | select(type == "string" and length > 0)' /tmp/codex-latest.json)" \
+    && echo "Resolved @openai/codex@latest to ${CODEX_RESOLVED_VERSION}" \
+    && npm install -g --prefer-online "@openai/codex@${CODEX_RESOLVED_VERSION}" \
+    && CODEX_NPM_ROOT="$(npm root -g)" \
+    && chmod -R a+rX "${CODEX_NPM_ROOT}/@openai" \
+    && find "${CODEX_NPM_ROOT}/@openai" -type f -path "*/vendor/*" -exec chmod +x {} \; \
+    && codex --version \
+    && rm /tmp/codex-latest.json
+# The chmods above let per-agent UIDs (20000+) traverse the install tree and
+# execute the platform-specific native binary, including stripped exec bits.
 
 # ─── No USER directive: this is deliberate ────────────────────────────────
 # Every other image in this repo drops to an unprivileged UID. This one cannot,

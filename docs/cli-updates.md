@@ -1,10 +1,27 @@
-# Runner CLI refresh — 2026-09-10
+# Runner CLI refresh
+
+## Codex: automatic latest release — 2026-09-23
+
+Every runner image build now checks the npm `latest` metadata for `@openai/codex`
+using a remote Dockerfile `ADD`. When that metadata changes, Docker invalidates
+the Codex install layer and installs the version advertised by npm. An unchanged
+release can reuse the existing installation. This applies to local Compose,
+Swarm builds and direct `docker build` commands, without a manual cache-bust key.
+See the [Docker ADD reference](https://docs.docker.com/reference/dockerfile/#adding-files-from-a-url).
+
+The Codex installation runs after the other tools to preserve their build cache.
+It verifies `codex --version` and fails the build if installation fails instead
+of shipping a stub. `CODEX_CLI_VERSION` and `CODEX_CLI_CACHE_BUST` are no longer
+used: Codex always follows the latest stable release. Rebuild and redeploy the
+image to update running containers.
+
+## Other runner CLIs — 2026-09-10
 
 All runner images install the upstream latest CLIs at build time. Docker can
 reuse those installation layers even when a newer package has been published.
 `RUNNER_CLI_CACHE_BUST` now invalidates the first CLI installation layer and all
 subsequent CLI layers, including Claude Code, OpenClaw and Hermes. It is forwarded
-by both Compose configurations. Existing per-CLI version overrides remain valid.
+by both Compose configurations. Other CLIs retain their per-CLI version overrides.
 
 Stable releases observed during this update:
 
@@ -36,6 +53,6 @@ Current model references:
 - [Claude Code model configuration](https://code.claude.com/docs/en/model-config)
 - [Claude model catalog](https://platform.claude.com/docs/en/models/overview)
 
-To refresh again, change `RUNNER_CLI_CACHE_BUST` when rebuilding the images.
+To refresh the other CLIs again, change `RUNNER_CLI_CACHE_BUST` when rebuilding the images.
 Deploying rebuilt images is required to update running services; changing these
 files alone does not upgrade existing containers.

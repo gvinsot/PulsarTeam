@@ -612,8 +612,6 @@ services:
       dockerfile: runner-service/Dockerfile
       args:
         RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
-        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-latest}
-        CODEX_CLI_CACHE_BUST: ${CODEX_CLI_CACHE_BUST:-1}
     networks:
       backend:
         aliases:
