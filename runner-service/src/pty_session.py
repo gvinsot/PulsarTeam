@@ -83,6 +83,11 @@ CLIENT_SEND_TIMEOUT_SEC = float(os.getenv("TERMINAL_CLIENT_SEND_TIMEOUT_SEC", "5
 INPUT_WRITE_TIMEOUT_SEC = float(os.getenv("TERMINAL_INPUT_WRITE_TIMEOUT_SEC", "5"))
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 40
+# Lines tmux keeps per pane, and how many of them a browser receives as
+# scrollback when it attaches (so the whole session is scrollable from the
+# first paint, not only what scrolled while that tab happened to be open).
+TMUX_HISTORY_LIMIT = int(os.getenv("TERMINAL_TMUX_HISTORY_LIMIT", "20000"))
+HISTORY_REPLAY_LINES = int(os.getenv("TERMINAL_HISTORY_REPLAY_LINES", "5000"))
 READ_CHUNK = 4096
 
 # ── Execution-scoped history capture ────────────────────────────────────────
@@ -355,6 +360,9 @@ def _codex_matches_paste(draft: Optional[str], text: str) -> bool:
 # bytes (raw PTY output) to one connected WebSocket. Each WS handler
 # registers one such callback at attach time.
 ClientCallback = Callable[[bytes], Awaitable[None]]
+# Control-plane counterpart: pushes a JSON-able dict (e.g. the authoritative
+# PTY geometry) to one client, on the text channel.
+ControlCallback = Callable[[dict], Awaitable[None]]
 
 
 class _FileWatcher:
@@ -532,6 +540,9 @@ class _Client:
     # the initial full-screen TUI paint can never be lost or reordered.
     replaying: bool = True
     pending: deque = field(default_factory=deque)
+    # Receives {"type": "size", ...} whenever the shared PTY geometry changes,
+    # so every viewer renders at exactly the grid the CLI draws for.
+    on_control: Optional[ControlCallback] = None
 
 
 @dataclass
@@ -774,6 +785,7 @@ class PtySession:
             session_cwd = path.stdout.decode("utf-8", "replace").strip()
             if path.returncode == 0 and session_cwd == self.cwd:
                 logger.info(f"[Terminal] Reattaching existing tmux session {name} for agent {self.agent_id}")
+                self._keep_outer_scrollback()
                 return
             killed = self._tmux_run(["kill-session", "-t", name])
             if killed.returncode != 0:
@@ -788,9 +800,14 @@ class PtySession:
         # the normal exit/relaunch flow (see _maybe_handle_tmux_exit).
         # `-g` sets it as a global window option so the session's window
         # inherits it even if the CLI exits in the same instant it is created.
-        self._tmux_run(["set-option", "-g", "remain-on-exit", "on"])
+        #
+        # history-limit only applies to windows created AFTER it is set, and a
+        # lone `set-option` cannot start the server, so both globals ride in
+        # the same command list as new-session (which does start it).
         create = self._tmux_run(
-            ["new-session", "-d", "-s", name, "-c", self.cwd,
+            ["set-option", "-g", "remain-on-exit", "on", ";",
+             "set-option", "-g", "history-limit", str(TMUX_HISTORY_LIMIT), ";",
+             "new-session", "-d", "-s", name, "-c", self.cwd,
              "-x", str(self.cols), "-y", str(self.rows), "--", *self.cmd],
             timeout=15.0,
         )
@@ -806,7 +823,21 @@ class PtySession:
         self._tmux_run(["set-option", "-t", name, "status", "off"])
         self._tmux_run(["set-option", "-t", name, "window-size", "latest"])
         self._tmux_run(["set-option", "-t", name, "remain-on-exit", "on"])
+        self._keep_outer_scrollback()
         logger.info(f"[Terminal] Created tmux session {name} for agent {self.agent_id} (cmd={self.cmd!r})")
+
+    def _keep_outer_scrollback(self) -> None:
+        """Stop tmux from switching the browser's xterm to the alternate screen.
+
+        `tmux attach` emits smcup, and xterm.js's alternate buffer has NO
+        scrollback: every line the CLI scrolled off was simply gone for the
+        viewer. Disabling smcup/rmcup for the outer terminal keeps xterm on its
+        normal buffer, where tmux's full-screen scrolls land in real scrollback
+        (the classic iTerm+tmux recipe). Inner TUIs that use their own
+        alternate screen are unaffected: tmux handles that per pane. Must be
+        set before the broker attaches (read at client attach). A fixed array
+        index keeps it idempotent across respawns."""
+        self._tmux_run(["set-option", "-s", "terminal-overrides[90]", "*:smcup@:rmcup@"])
 
     async def request_repaint(self) -> None:
         """Ask tmux to redraw the authoritative current screen to the broker's
@@ -1393,7 +1424,12 @@ class PtySession:
                 pass
         asyncio.create_task(_close())
 
-    async def attach(self, on_output: ClientCallback, label: str = "?") -> int:
+    async def attach(
+        self,
+        on_output: ClientCallback,
+        label: str = "?",
+        on_control: Optional[ControlCallback] = None,
+    ) -> int:
         """Register a new client. Replays the current scrollback synchronously
         so the client renders the existing screen state before live bytes
         start arriving. Returns the opaque client id used for detach()."""
@@ -1410,7 +1446,7 @@ class PtySession:
             # and a blank screen.
             client_id = self._next_client_id
             self._next_client_id += 1
-            client = _Client(on_output=on_output, label=label)
+            client = _Client(on_output=on_output, label=label, on_control=on_control)
             self._clients[client_id] = client
             logger.info(
                 f"[Terminal] Client {client_id} ({label}) attached to agent "
@@ -1651,23 +1687,74 @@ class PtySession:
         }
 
     async def resize(self, cols: int, rows: int) -> None:
-        """Apply a new geometry. When multiple clients have different
-        viewport sizes we take the smaller of each axis to avoid overflow
-        on the narrower client; passing the new size through TIOCSWINSZ
-        also delivers SIGWINCH to the subprocess which TUIs use to re-layout."""
+        """Apply a new geometry. A PTY has one size, so the latest viewer to
+        claim one wins (like tmux `window-size latest`); every other viewer is
+        told the new grid and scales to it (see broadcast_size). TIOCSWINSZ
+        also delivers SIGWINCH, which TUIs use to re-layout."""
         cols = max(20, min(500, int(cols)))
         rows = max(5, min(200, int(rows)))
         self.cols = cols
         self.rows = rows
-        if self.master_fd < 0:
-            return
+        if self.master_fd >= 0:
+            try:
+                fcntl.ioctl(
+                    self.master_fd, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", rows, cols, 0, 0),
+                )
+            except OSError as e:
+                logger.debug(f"[Terminal] TIOCSWINSZ on resize failed: {e}")
+        # Always announce, even when unchanged: the requester may have asked
+        # for a size we clamped, and must learn the grid actually in force.
+        await self.broadcast_size()
+
+    def size_frame(self) -> dict:
+        return {"type": "size", "cols": self.cols, "rows": self.rows}
+
+    async def broadcast_size(self) -> None:
+        """Tell every viewer the authoritative PTY geometry.
+
+        There is ONE PTY, so there is one grid: a viewer whose xterm keeps its
+        own cols/rows re-wraps bytes drawn for another width into garbage
+        (e.g. a phone attached next to a desktop). Viewers adopt this size and
+        scale their font to fit it instead."""
+        async with self._lock:
+            targets = [c for c in self._clients.values() if c.on_control is not None]
+        frame = self.size_frame()
+        for client in targets:
+            try:
+                await asyncio.wait_for(client.on_control(frame), timeout=CLIENT_SEND_TIMEOUT_SEC)
+            except Exception as e:
+                # The output path owns eviction; a dead socket fails there too.
+                logger.debug(f"[Terminal] size broadcast failed for {client.label}: {e}")
+
+    def history_snapshot(self, max_lines: int = HISTORY_REPLAY_LINES) -> bytes:
+        """The pane's scrollback (lines ABOVE the visible screen), with colours,
+        ready to seed a freshly attached viewer's xterm scrollback.
+
+        The trailing CRLFs push those lines off the viewer's screen into its
+        scrollback; tmux's repaint then draws the live screen below them.
+        Lines are captured at the pane width (no -J), which is the grid every
+        viewer renders at. Empty on any failure: history is best-effort."""
+        if not self._tmux_session or max_lines <= 0:
+            return b""
         try:
-            fcntl.ioctl(
-                self.master_fd, termios.TIOCSWINSZ,
-                struct.pack("HHHH", rows, cols, 0, 0),
-            )
-        except OSError as e:
-            logger.debug(f"[Terminal] TIOCSWINSZ on resize failed: {e}")
+            res = self._tmux_run([
+                "capture-pane", "-p", "-e", "-t", self._tmux_session,
+                "-S", f"-{max_lines}", "-E", "-1",
+            ])
+        except Exception:
+            return b""
+        if res.returncode != 0:
+            return b""
+        lines = res.stdout.replace(b"\r\n", b"\n").split(b"\n")
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if not lines:
+            return b""
+        # Reset SGR at each line end so a colour left open on one line never
+        # bleeds into the next (capture-pane -e does not close them).
+        body = b"\x1b[0m\r\n".join(lines) + b"\x1b[0m\r\n"
+        return body + b"\r\n" * self.rows
 
     def is_alive(self) -> bool:
         return (

@@ -19,8 +19,12 @@ Routes:
 
 The WS protocol is bidirectional binary + small JSON control frames:
     server → client : binary frames (raw PTY output bytes)
+                      OR text frames: {type: "reset"} | {type: "size", cols,
+                      rows} (the authoritative shared grid, sent on attach and
+                      after every resize) | {type: "exit"|"error", ...}
     client → server : binary frames (raw keystrokes to write into the PTY)
                       OR text frames carrying JSON {type: "resize", cols, rows}
+                      (a claim: latest wins) | {type: "refresh"}
 
 Authentication mirrors the rest of the service: the caller (team-api proxy)
 supplies the shared `CODER_API_KEY` via the `Authorization: Bearer …` header
@@ -336,10 +340,23 @@ async def ws_terminal(
             return
         await websocket.send_bytes(data)
 
+    async def push_control_to_client(frame: dict) -> None:
+        await websocket.send_text(json.dumps(frame))
+
     label = f"ws@{websocket.client.host}:{websocket.client.port}" if websocket.client else "ws"
     await websocket.send_text(json.dumps({"type": "reset"}))
+    # The grid in force BEFORE any byte: the viewer sizes its xterm to it, so
+    # history and the repaint below wrap exactly as the CLI drew them.
+    await push_control_to_client(session.size_frame())
     await pty_session.replay_terminal_transcript(agent_id, push_bytes_to_client)
-    client_id = await session.attach(push_bytes_to_client, label=label)
+    # Seed this viewer's scrollback with the session's tmux history (only this
+    # viewer: the others already hold it). attach() then repaints the screen.
+    history = await asyncio.to_thread(session.history_snapshot)
+    if history:
+        await push_bytes_to_client(history)
+    client_id = await session.attach(
+        push_bytes_to_client, label=label, on_control=push_control_to_client,
+    )
 
     try:
         while True:

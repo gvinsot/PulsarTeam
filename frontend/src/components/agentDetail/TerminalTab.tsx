@@ -7,14 +7,27 @@
  * shared-PTY session. Every client attached to the same agent sees the same
  * screen and can type (multi-admin friendly).
  *
- * Behaviour:
- *   • Reconnects automatically with exponential backoff after a network
- *     drop. Each reconnect re-attaches to the existing PTY; the runner asks
- *     xterm to clear before replaying its authoritative scrollback.
- *   • Resizes the PTY whenever the visible area changes, so the TUI
- *     re-lays out to fill the viewport without scrollbars.
- *   • Scrollback is server-authoritative on reconnect, avoiding duplicated
- *     local replay after transient WebSocket drops.
+ * Geometry model — the reason this renders correctly everywhere:
+ *   • There is ONE PTY, hence ONE grid. The runner announces it with
+ *     {type:"size"} frames (on attach and after every resize) and this xterm
+ *     ALWAYS adopts exactly that cols×rows. A viewer that kept its own grid
+ *     re-wrapped bytes drawn for another width into garbage (a phone next to
+ *     a desktop).
+ *   • The grid is then fitted to the visible area by FONT SIZE (largest size
+ *     ≤ the user's preferred one that fits). Only when even the minimum font
+ *     overflows does the panel scroll.
+ *   • Which viewer decides the grid: the latest one the user interacts with
+ *     (attach, focus, keystroke, own viewport change) sends a `resize` claim
+ *     computed from ITS viewport at ITS preferred font — like tmux
+ *     `window-size latest`. Passive viewers never claim on a size frame, so
+ *     two open viewers cannot ping-pong.
+ *
+ * History: the runner keeps xterm off the alternate screen (which has no
+ * scrollback) and seeds a fresh viewer's scrollback with the tmux pane
+ * history, so the whole session is scrollable from the first paint.
+ *
+ * Reconnects automatically with exponential backoff; each reconnect gets a
+ * `reset` then the authoritative size, history and screen from the runner.
  *
  * Auth: none is passed here. The session is an HttpOnly cookie the browser
  * attaches to the same-origin upgrade itself — the JWT used to be appended as
@@ -22,6 +35,7 @@
  * credential in URLs and proxy logs.
  */
 import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -30,8 +44,14 @@ import {
   Terminal as TerminalIcon,
   ArrowUp,
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   CornerDownLeft,
   RotateCcw,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  ChevronsDown,
 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
@@ -46,10 +66,14 @@ import type { Agent } from '../../types';
  * A JSON control frame sent on the terminal WebSocket's TEXT channel (binary
  * frames are raw PTY output). Every field is optional: the frame is parsed
  * before its `type` is known, and each variant only fills its own keys —
- * 'reset' carries none, 'exit' carries code/tail, 'error' carries message.
+ * 'reset' carries none, 'size' carries cols/rows, 'exit' carries code/tail,
+ * 'error' carries message.
  */
 interface TerminalControlFrame {
   type?: string;
+  /** 'size' only: the authoritative shared PTY grid. */
+  cols?: number;
+  rows?: number;
   /** 'exit' only. Explicitly null when the session was killed by a signal. */
   code?: number | null;
   /** 'exit' only: the last lines the runner printed before dying. */
@@ -62,15 +86,69 @@ interface TerminalTabProps {
   agent: Agent;
 }
 
+interface Grid {
+  cols: number;
+  rows: number;
+}
+
 // Backoff schedule for reconnects: 0.5s → 1s → 2s → … capped at 15s.
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15_000;
-// Minimum readable grid. When the visible area is smaller than this, we keep
-// the terminal at the minimum and let the container scroll (overflow-auto)
-// instead of shrinking the TUI into an unreadable sliver. Tuned so a TUI like
-// Claude Code's stays legible in a narrow agent-detail panel or on mobile.
-const MIN_COLS = 80;
+// Floors for the grid a viewer CLAIMS. Below ~80 cols the Claude Code TUI
+// renders broken and wraps long output (e.g. the /login URL) into lossy
+// pieces, so a narrow desktop panel still claims 80 and shrinks its font to
+// fit. A phone cannot show 80 legible columns, so there (coarse pointer) the
+// floor is lower and the user trades size for columns with the zoom buttons.
+const DESKTOP_MIN_COLS = 80;
+const TOUCH_MIN_COLS = 40;
 const MIN_ROWS = 10;
+// Runner-side clamps (pty_session.resize) — mirror them so a claim is never
+// silently altered.
+const MAX_COLS = 500;
+const MAX_ROWS = 200;
+// Font range. The preferred size (zoom) is the ceiling used both to compute
+// this viewer's claim and to render; fitting another viewer's grid only ever
+// shrinks down to FONT_MIN, after which the panel scrolls.
+const FONT_MIN = 7;
+const FONT_MAX = 22;
+const FONT_STEP = 0.5;
+const DEFAULT_FONT_DESKTOP = 13;
+const DEFAULT_FONT_TOUCH = 11;
+const FONT_STORAGE_KEY = 'pulsar.terminal.fontSize';
+const CLAIM_DEBOUNCE_MS = 150;
+const SCROLLBACK_LINES = 10_000;
+
+const isCoarsePointer = () =>
+  typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+
+const readStoredFont = (): number | null => {
+  try {
+    const raw = window.localStorage.getItem(FONT_STORAGE_KEY);
+    const n = raw === null ? NaN : Number(raw);
+    return Number.isFinite(n) && n >= FONT_MIN && n <= FONT_MAX ? n : null;
+  } catch {
+    return null;
+  }
+};
+
+const storeFont = (size: number) => {
+  try {
+    window.localStorage.setItem(FONT_STORAGE_KEY, String(size));
+  } catch {
+    /* private mode / blocked storage: the zoom just isn't remembered */
+  }
+};
+
+const sameGrid = (a: Grid | null, b: Grid | null) =>
+  !!a && !!b && a.cols === b.cols && a.rows === b.rows;
+
+// Keys for the touch key bar: what a phone keyboard cannot send to a TUI.
+const TOUCH_KEYS: { label: string; seq: string; title: string }[] = [
+  { label: 'Esc', seq: '\x1b', title: 'Escape' },
+  { label: 'Tab', seq: '\t', title: 'Tab' },
+  { label: '⇧Tab', seq: '\x1b[Z', title: 'Shift+Tab' },
+  { label: '^C', seq: '\x03', title: 'Ctrl+C' },
+];
 
 const getTerminalTheme = (theme: string) =>
   theme === 'light'
@@ -123,9 +201,17 @@ const getTerminalTheme = (theme: string) =>
 
 export default function TerminalTab({ agent }: TerminalTabProps) {
   const { theme } = useTheme();
+  const [coarse, setCoarse] = useState(isCoarsePointer);
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
   const [terminalActive, setTerminalActive] = useState(false);
+  // True when the shared grid was claimed by another viewer and differs from
+  // what this one would pick — surfaces the "fit to this screen" button.
+  const [foreignGrid, setForeignGrid] = useState(false);
+  const [scrolledUp, setScrolledUp] = useState(false);
+  const [fontPref, setFontPref] = useState<number>(
+    () => readStoredFont() ?? (isCoarsePointer() ? DEFAULT_FONT_TOUCH : DEFAULT_FONT_DESKTOP)
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -133,11 +219,20 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
   const reconnectTimerRef = useRef<number | null>(null);
   const activityTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
-  const fitFrameRef = useRef<number | null>(null);
-  const resizeSendTimerRef = useRef<number | null>(null);
-  const pendingResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const claimTimerRef = useRef<number | null>(null);
   const encoderRef = useRef(new TextEncoder());
   const suppressReconnectRef = useRef(false);
+  // The authoritative PTY grid from the runner's last {type:"size"}; null
+  // until the first one arrives (the xterm then shows this viewer's own
+  // preferred grid, which is also what the handshake claims).
+  const ptySizeRef = useRef<Grid | null>(null);
+  // Last grid this viewer claimed, so an unchanged viewport sends nothing.
+  const lastClaimRef = useRef<Grid | null>(null);
+  // Last computed preferred grid, so a keystroke can compare without
+  // re-measuring fonts (each probe forces an xterm re-render).
+  const preferredRef = useRef<Grid | null>(null);
+  const fontPrefRef = useRef(fontPref);
+  const coarseRef = useRef(coarse);
   // Tracks whether the component is still mounted. Used to suppress retries
   // that would otherwise fire after unmount (e.g. quick tab switches).
   const aliveRef = useRef(true);
@@ -153,16 +248,157 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
     setExited(v);
   };
 
-  const sendToRunner = (data: string) => {
+  const wsOpen = () => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    return ws && ws.readyState === WebSocket.OPEN ? ws : null;
+  };
+
+  const sendToRunner = (data: string) => {
+    const ws = wsOpen();
+    if (!ws) return false;
     ws.send(encoderRef.current.encode(data));
     return true;
   };
 
+  // ── Geometry ──────────────────────────────────────────────────────────
+  // What fits the container at `fontSize`, measured by xterm itself (the
+  // option change re-measures synchronously and nothing paints before the
+  // next frame, so probing several sizes in one tick is invisible).
+  const fitsAt = (fontSize: number): Grid | null => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return null;
+    if (term.options.fontSize !== fontSize) term.options.fontSize = fontSize;
+    let dims: Grid | undefined;
+    try {
+      dims = fit.proposeDimensions();
+    } catch {
+      return null; /* xterm not mounted yet */
+    }
+    if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return null;
+    return dims;
+  };
+
+  const containerUsable = () => {
+    const el = containerRef.current;
+    // Collapsed mid-animation (mobile keyboard) or hidden: any measure would
+    // be pathological — pushing it to the runner made the TUI vanish.
+    return !!el && el.clientWidth >= 8 && el.clientHeight >= 8;
+  };
+
+  // The grid this viewer would claim: what fits its visible area at its
+  // preferred font, floored to stay legible.
+  const preferredGrid = (): Grid | null => {
+    if (!containerUsable()) return null;
+    const dims = fitsAt(fontPrefRef.current);
+    if (!dims) return null;
+    const minCols = coarseRef.current ? TOUCH_MIN_COLS : DESKTOP_MIN_COLS;
+    const grid = {
+      cols: Math.min(MAX_COLS, Math.max(minCols, dims.cols)),
+      rows: Math.min(MAX_ROWS, Math.max(MIN_ROWS, dims.rows)),
+    };
+    preferredRef.current = grid;
+    return grid;
+  };
+
+  // Render the grid in force (the runner's, else our own preferred one) at
+  // the largest font ≤ the preferred size that fits the container.
+  const layoutNow = () => {
+    const term = termRef.current;
+    if (!term || !containerUsable()) return;
+    const preferred = preferredGrid();
+    const grid = ptySizeRef.current ?? preferred;
+    if (!grid) return;
+    setForeignGrid(!!ptySizeRef.current && !!preferred && !sameGrid(ptySizeRef.current, preferred));
+
+    const fits = (size: number) => {
+      const d = fitsAt(size);
+      return !!d && d.cols >= grid.cols && d.rows >= grid.rows;
+    };
+    // Fitting is monotonic in font size: binary search over FONT_STEP steps.
+    const top = fontPrefRef.current;
+    let chosen = FONT_MIN;
+    if (fits(top)) {
+      chosen = top;
+    } else {
+      let lo = 0; // index of FONT_MIN
+      let hi = Math.round((top - FONT_MIN) / FONT_STEP) - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const size = FONT_MIN + mid * FONT_STEP;
+        if (fits(size)) {
+          chosen = size;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+    }
+    if (term.options.fontSize !== chosen) term.options.fontSize = chosen;
+    if (term.cols !== grid.cols || term.rows !== grid.rows) {
+      try {
+        term.resize(grid.cols, grid.rows);
+      } catch {
+        /* xterm not mounted yet */
+      }
+    }
+  };
+
+  // Make this viewer the one driving the shared grid. `force` re-sends even
+  // an unchanged claim (another viewer may have taken the grid since).
+  const claimNow = (force = false) => {
+    const ws = wsOpen();
+    const grid = preferredGrid();
+    if (!ws || !grid) {
+      layoutNow();
+      return;
+    }
+    const alreadyInForce = sameGrid(ptySizeRef.current, grid);
+    if (!alreadyInForce && (force || !sameGrid(lastClaimRef.current, grid))) {
+      lastClaimRef.current = grid;
+      ws.send(JSON.stringify({ type: 'resize', cols: grid.cols, rows: grid.rows }));
+    } else if (alreadyInForce) {
+      lastClaimRef.current = grid;
+    }
+    // Render now at the current grid; the runner's size frame re-lays out.
+    layoutNow();
+  };
+
+  // Debounced: a burst (mobile keyboard animating, window drag) collapses
+  // into one PTY resize at the final geometry instead of several SIGWINCH
+  // redraws racing each other.
+  // Latest geometry helpers for the WebSocket effect, which only re-runs on
+  // agent change (same pattern as connectRef).
+  const geometryRef = useRef({ preferredGrid, layoutNow });
+  geometryRef.current = { preferredGrid, layoutNow };
+
+  const scheduleClaim = (force = false) => {
+    if (claimTimerRef.current !== null) window.clearTimeout(claimTimerRef.current);
+    claimTimerRef.current = window.setTimeout(() => {
+      claimTimerRef.current = null;
+      claimNow(force);
+    }, CLAIM_DEBOUNCE_MS);
+  };
+
+  // Constrain the container to the visible viewport so fitting sees the
+  // actual user-visible area instead of the full CSS box (which on iOS
+  // doesn't shrink when the soft keyboard opens). Without this the claimed
+  // rows would sit partly behind the keyboard.
+  const adjustForViewport = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const vv = window.visualViewport ?? undefined;
+    if (!vv || vv.height >= window.innerHeight - 1) {
+      el.style.maxHeight = '';
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    const topOffset = rect.top - vv.offsetTop;
+    el.style.maxHeight = `${Math.max(0, Math.floor(vv.height - topOffset))}px`;
+  };
+
   // The runner reports the tmux session ended (CLI quit/killed). Reconnecting
-  // makes the runner spawn a fresh session, so offer an explicit relaunch
-  // rather than the old dead-end "close and reopen the tab".
+  // makes the runner spawn a fresh session, so offer an explicit relaunch.
   const relaunch = () => {
     setExitedState(false);
     suppressReconnectRef.current = false;
@@ -193,118 +429,46 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
     }, 1800);
   };
 
-  // Send a literal control sequence to the PTY and refocus xterm so the next
-  // keystroke from a physical keyboard still lands in the terminal. Used by
-  // the on-screen arrow / enter buttons in the header — they're the only way
-  // to drive a TUI from a touch device, and they're handy on desktop too when
-  // the focus has wandered to a button.
-  const sendKey = (seq: string) => {
-    if (!sendToRunner(seq)) return;
-    termRef.current?.focus();
+  // Send a key sequence from an on-screen button. The user is interacting
+  // with THIS viewer, so it takes the grid first. `refocus` puts the caret
+  // back in xterm (desktop header buttons); the touch bar leaves focus alone
+  // so pressing an arrow doesn't pop the soft keyboard open.
+  const sendKey = (seq: string, refocus: boolean) => {
+    if (!wsOpen()) return;
+    claimNow();
+    sendToRunner(seq);
+    if (refocus) termRef.current?.focus();
   };
 
-  const fitTerminalNow = () => {
-    // Skip fit when the container is collapsed (typically mid-animation while
-    // the mobile virtual keyboard opens/closes). FitAddon would otherwise
-    // compute a pathological geometry, push it to the runner, and the snapshot
-    // renderer would repaint a near-empty screen — making the whole TUI vanish
-    // after a couple of keyboard cycles.
-    const el = containerRef.current;
-    const term = termRef.current;
-    const fit = fitRef.current;
-    if (!el || !term || !fit) return;
-    if (el.clientWidth < 8 || el.clientHeight < 8) return;
-
-    // Use proposeDimensions() (what fit() would apply) and clamp UP to a
-    // readable minimum. Plain fit() always shrinks the grid to the container,
-    // so the terminal could never overflow and the container's overflow-auto
-    // never produced scrollbars. By clamping to MIN_COLS/MIN_ROWS, a small
-    // viewport keeps a legible grid and the container scrolls instead.
-    let dims: { cols: number; rows: number } | undefined;
-    try {
-      dims = fit.proposeDimensions();
-    } catch {
-      return; /* xterm not mounted yet */
-    }
-    if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
-
-    // The MIN_COLS floor keeps a narrow *desktop* panel legible by letting the
-    // container scroll horizontally (overflow-auto) instead of squeezing the
-    // grid below 80 cols — a sub-80 Claude Code TUI renders broken AND wraps
-    // long output (e.g. the /login URL) into more lossy pieces. Distinguish a
-    // narrow desktop panel from a real phone by POINTER TYPE, not container
-    // width: forcing 80 cols on a ~360px touch screen overflows into an
-    // unreadable sliver, so there (coarse pointer) we fit to the actual width.
-    // Keying on width instead made a narrow desktop detail panel drop the floor
-    // and hand the CLI a cramped ~50-col grid.
-    const coarsePointer =
-      typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
-    const cols = coarsePointer ? dims.cols : Math.max(MIN_COLS, dims.cols);
-    const rows = Math.max(MIN_ROWS, dims.rows);
-    if (cols !== term.cols || rows !== term.rows) {
-      try {
-        term.resize(cols, rows);
-      } catch {
-        /* xterm not mounted yet */
-      }
-    }
+  const changeFont = (delta: number) => {
+    const next = Math.min(FONT_MAX, Math.max(FONT_MIN, fontPrefRef.current + delta));
+    if (next === fontPrefRef.current) return;
+    fontPrefRef.current = next;
+    setFontPref(next);
+    storeFont(next);
+    claimNow(true);
   };
 
-  const fitTerminal = () => {
-    if (fitFrameRef.current !== null) return;
-    fitFrameRef.current = window.requestAnimationFrame(() => {
-      fitFrameRef.current = null;
-      fitTerminalNow();
-    });
-  };
-
-  // Constrain the container to the visible viewport so the FitAddon sees the
-  // actual user-visible area instead of the full CSS box (which on mobile
-  // doesn't shrink when the soft keyboard opens). Without this, fit() would
-  // resize the PTY to a size that's partly hidden behind the keyboard.
-  const adjustForViewport = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    // lib.dom types this `VisualViewport | null`; `?? undefined` keeps the
-    // local's existing `| undefined` shape without asserting anything away.
-    const vv = window.visualViewport ?? undefined;
-    if (!vv || vv.height >= window.innerHeight - 1) {
-      el.style.maxHeight = '';
-      el.style.maxWidth = '';
-      return;
-    }
-    const rect = el.getBoundingClientRect();
-    const topOffset = rect.top - vv.offsetTop;
-    const leftOffset = rect.left - vv.offsetLeft;
-    const availableH = Math.max(0, Math.floor(vv.height - topOffset));
-    const availableW = Math.max(0, Math.floor(vv.width - leftOffset));
-    el.style.maxHeight = `${availableH}px`;
-    el.style.maxWidth = `${availableW}px`;
+  const scrollToBottom = () => {
+    termRef.current?.scrollToBottom();
+    setScrolledUp(false);
   };
 
   // ── xterm.js setup ────────────────────────────────────────────────────
   useEffect(() => {
     aliveRef.current = true;
-    if (!containerRef.current) return undefined;
+    const container = containerRef.current;
+    if (!container) return undefined;
 
-    // Smaller font on phones so more columns fit the narrow width (a 14px grid
-    // only fits ~40 cols at 360px; 12px fits ~50), reducing how much a wide TUI
-    // overflows. Paired with the responsive cols floor in fitTerminalNow.
-    const isMobileViewport =
-      typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches;
     const term = new XTerminal({
       cursorBlink: true,
       fontFamily: '"Cascadia Code", "SFMono-Regular", "Segoe UI Mono", Menlo, Consolas, monospace',
-      // Slightly smaller than before (was 14) so the ≥80-col grid fits more
-      // window widths before the horizontal scrollbar is needed.
-      fontSize: isMobileViewport ? 12 : 13,
-      lineHeight: 1.35,
+      fontSize: fontPrefRef.current,
+      // 1.2 keeps box-drawing TUIs (Claude Code's frames) joined vertically;
+      // taller line heights leave gaps between the │ glyphs.
+      lineHeight: 1.2,
       letterSpacing: 0,
-      // Raw PTY passthrough for all CLI runners now (claudecode included) —
-      // xterm keeps a real scrollback buffer so the user can scroll back
-      // through history. (claudecode used to be 0 for the server-side snapshot
-      // renderer, which has been removed in favour of raw streaming.)
-      scrollback: 5000,
+      scrollback: SCROLLBACK_LINES,
       altClickMovesCursor: true,
       macOptionIsMeta: true,
       rightClickSelectsWord: true,
@@ -324,89 +488,96 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
         openExternalLink(uri);
       })
     );
-    term.open(containerRef.current);
-    // Let the container scroll horizontally instead of clipping when the grid
-    // is wider than the panel (we hold a MIN_COLS floor so the Claude Code TUI
-    // stays legible). xterm gives `.xterm` no explicit width, so it defaults to
-    // the container width and clips the wider `.xterm-screen` — cutting off the
-    // right columns with no scrollbar. `min-width: max-content` makes `.xterm`
-    // grow to the grid's pixel width (overflowing the overflow-auto container →
-    // real horizontal scrollbar) while still filling the container when it's
-    // wide enough (width stays auto).
-    if (term.element) term.element.style.minWidth = 'max-content';
-    fitTerminal();
-
+    term.open(container);
+    if (term.element) {
+      // When even FONT_MIN cannot fit the grid, `.xterm` grows to the grid's
+      // pixel width so the container scrolls instead of clipping the right
+      // columns (xterm gives `.xterm` no width of its own).
+      term.element.style.minWidth = 'max-content';
+      // Breathing room; FitAddon subtracts the element's own padding.
+      term.element.style.padding = '4px 6px';
+    }
     termRef.current = term;
     fitRef.current = fit;
+    layoutNow();
 
     window.requestAnimationFrame(() => {
-      fitTerminal();
-      term.focus();
+      layoutNow();
+      if (!coarseRef.current) term.focus();
     });
 
-    // Resize handling. Triggers:
-    //   • the container resizes (window/sidebar/devtools)
-    //   • the user changes tabs and comes back (the parent unmounts/remounts
-    //     but the xterm instance is kept alive within THIS effect).
-    //   • on mobile, the soft keyboard opens/closes — visualViewport reports
-    //     this even when the container's CSS box doesn't change, which is the
-    //     case here (the keyboard overlays the page without reflowing it).
-    //     Without this, the PTY stays sized to the pre-keyboard viewport and
-    //     output overlaps with the keyboard area.
+    // Web/local fonts can finish loading after the first measure, changing
+    // the cell size: re-fit once they are ready.
+    document.fonts?.ready
+      .then(() => {
+        if (aliveRef.current) claimNow();
+      })
+      .catch(() => {});
+
+    // This viewer's own visible area changed (window, sidebar, devtools,
+    // browser zoom, soft keyboard via adjustForViewport) → the user is here,
+    // so it claims the grid for its new size.
+    // Border-box size only: a scrollbar appearing inside the container (grid
+    // overflowing at FONT_MIN) is not the user resizing anything and must not
+    // make a passive viewer steal the grid.
+    let boxW = -1;
+    let boxH = -1;
     const resizeObserver = new ResizeObserver(() => {
-      fitTerminal();
+      if (container.offsetWidth === boxW && container.offsetHeight === boxH) return;
+      boxW = container.offsetWidth;
+      boxH = container.offsetHeight;
+      scheduleClaim();
     });
-    resizeObserver.observe(containerRef.current);
+    resizeObserver.observe(container);
 
-    // Mobile soft keyboard / page zoom / browser UI changes don't shrink the
-    // container's CSS box, so they wouldn't trigger ResizeObserver on their
-    // own. We listen to visualViewport, constrain the container to the
-    // user-visible area, then re-fit so the PTY's cols/rows match what the
-    // user actually sees (and the runner redraws to fit, instead of the
-    // bottom of its output disappearing behind the keyboard).
     const onViewportChange = () => {
       adjustForViewport();
-      fitTerminal();
+      scheduleClaim();
     };
-    const onOrientationChange = onViewportChange;
-    // lib.dom types this `VisualViewport | null`; `?? undefined` keeps the
-    // local's existing `| undefined` shape without asserting anything away.
     const vv = window.visualViewport ?? undefined;
     if (vv) {
       vv.addEventListener('resize', onViewportChange);
       vv.addEventListener('scroll', onViewportChange);
     }
-    window.addEventListener('orientationchange', onOrientationChange);
+    window.addEventListener('orientationchange', onViewportChange);
 
-    // Push resize events to the server so the PTY re-flows to match.
-    // Debounced so a burst of resizes (typical when the mobile virtual
-    // keyboard animates open/close) collapses into a single resize at the
-    // final geometry, instead of triggering several PTY resizes + snapshot
-    // repaints that race the subprocess's SIGWINCH redraw.
-    term.onResize(({ cols, rows }) => {
-      pendingResizeRef.current = { cols, rows };
-      if (resizeSendTimerRef.current !== null) {
-        window.clearTimeout(resizeSendTimerRef.current);
-      }
-      resizeSendTimerRef.current = window.setTimeout(() => {
-        resizeSendTimerRef.current = null;
-        const pending = pendingResizeRef.current;
-        pendingResizeRef.current = null;
-        if (!pending) return;
-        const ws = wsRef.current;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: pending.cols, rows: pending.rows }));
-        }
-      }, 150);
-    });
+    // Coming back to this window/tab = interacting with this viewer.
+    const onFocus = () => scheduleClaim(true);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') scheduleClaim(true);
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
 
-    // Keystrokes from the user → bytes to the server. When the session has
-    // ended, any keypress relaunches it (e.g. Enter) instead of being dropped.
-    term.onData(data => {
+    const pointerMq = window.matchMedia?.('(pointer: coarse)');
+    const onPointerMq = () => {
+      coarseRef.current = isCoarsePointer();
+      setCoarse(coarseRef.current);
+      scheduleClaim();
+    };
+    pointerMq?.addEventListener?.('change', onPointerMq);
+
+    // Track whether the user scrolled up into the history, for the "jump to
+    // bottom" button.
+    const updateScrolled = () => {
+      const buf = term.buffer.active;
+      setScrolledUp(buf.viewportY < buf.baseY);
+    };
+    const scrollSub = term.onScroll(updateScrolled);
+    const viewportEl = term.element?.querySelector('.xterm-viewport') ?? null;
+    viewportEl?.addEventListener('scroll', updateScrolled, { passive: true });
+
+    // Keystrokes → bytes to the runner. Typing means this viewer is the
+    // active one: take the grid first (immediately, not debounced) so the
+    // TUI answers at a size this screen can show. When the session has
+    // ended, any keypress relaunches it instead of being dropped.
+    const dataSub = term.onData(data => {
       if (exitedRef.current) {
         relaunch();
         return;
       }
+      const preferred = preferredRef.current;
+      if (preferred && !sameGrid(ptySizeRef.current, preferred)) claimNow(true);
       sendToRunner(data);
     });
 
@@ -417,7 +588,13 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
         vv.removeEventListener('resize', onViewportChange);
         vv.removeEventListener('scroll', onViewportChange);
       }
-      window.removeEventListener('orientationchange', onOrientationChange);
+      window.removeEventListener('orientationchange', onViewportChange);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      pointerMq?.removeEventListener?.('change', onPointerMq);
+      viewportEl?.removeEventListener('scroll', updateScrolled);
+      scrollSub.dispose();
+      dataSub.dispose();
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -426,15 +603,10 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
         window.clearTimeout(activityTimerRef.current);
         activityTimerRef.current = null;
       }
-      if (fitFrameRef.current !== null) {
-        window.cancelAnimationFrame(fitFrameRef.current);
-        fitFrameRef.current = null;
+      if (claimTimerRef.current !== null) {
+        window.clearTimeout(claimTimerRef.current);
+        claimTimerRef.current = null;
       }
-      if (resizeSendTimerRef.current !== null) {
-        window.clearTimeout(resizeSendTimerRef.current);
-        resizeSendTimerRef.current = null;
-      }
-      pendingResizeRef.current = null;
       try {
         wsRef.current?.close();
       } catch {
@@ -468,14 +640,18 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       if (!aliveRef.current) return;
       const term = termRef.current;
       if (!term) return;
-      fitTerminalNow();
+      // A new attach claims the grid: the handshake carries this viewer's
+      // preferred size, which the runner applies before anything is drawn.
+      const grid = geometryRef.current.preferredGrid() ?? { cols: term.cols, rows: term.rows };
+      ptySizeRef.current = null;
+      lastClaimRef.current = grid;
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const url = new URL(
         `${proto}//${window.location.host}/ws/agents/${encodeURIComponent(agent.id)}/terminal`
       );
-      url.searchParams.set('cols', String(term.cols));
-      url.searchParams.set('rows', String(term.rows));
+      url.searchParams.set('cols', String(grid.cols));
+      url.searchParams.set('rows', String(grid.rows));
 
       const ws = new WebSocket(url.toString());
       ws.binaryType = 'arraybuffer';
@@ -487,19 +663,9 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
         if (wsRef.current !== ws) return;
         reconnectAttemptRef.current = 0;
         setConnected(true);
-        fitTerminalNow();
-        term.focus();
-        // Send the current geometry once explicitly so the runner-side PTY
-        // is sized correctly before the first rendering happens. The
-        // server already received cols/rows on the handshake URL, but
-        // resending here covers the reconnect case where the user's
-        // window changed between attempts.
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-        // Ask the runner to repaint the current screen right now. Messages are
-        // processed in order, so this paints at the geometry we just sent —
-        // the terminal shows its live state the instant the tab opens, instead
-        // of staying blank/stale until the next subprocess output (snapshot
-        // mode only re-emits on output or the delayed post-resize tick).
+        if (!coarseRef.current) term.focus();
+        // Ask the runner to repaint the current screen right now (the attach
+        // already does, this covers a geometry that settled meanwhile).
         ws.send(JSON.stringify({ type: 'refresh' }));
       };
 
@@ -508,49 +674,57 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
         const t = termRef.current;
         if (!t) return;
         if (typeof ev.data === 'string') {
-          // Control frames from the server (currently just {"type":"exit"})
-          // — render a discrete notice in the terminal and let the close
-          // handler trigger the reconnect.
+          let ctrl: TerminalControlFrame;
           try {
-            const ctrl: TerminalControlFrame = JSON.parse(ev.data);
-            if (ctrl?.type === 'reset') {
-              t.reset();
-              t.clear();
-              setTerminalActive(false);
-            } else if (ctrl?.type === 'exit') {
-              // The CLI/tmux session genuinely ended. Don't auto-loop (a crash
-              // on startup would spin) — latch exited and offer an explicit
-              // relaunch (Relaunch button or any keypress).
-              suppressReconnectRef.current = true;
-              setExitedState(true);
-              setConnected(false);
-              const code =
-                ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
-              const tail = typeof ctrl.tail === 'string' ? ctrl.tail.trim() : '';
-              t.writeln(`\r\n\x1b[2m[runner session ended, code=${code}]\x1b[0m`);
-              if (tail) {
-                const lines = tail
-                  .split(/\r?\n/)
-                  .map(line => line.trim())
-                  .filter(Boolean)
-                  .slice(-6);
-                for (const line of lines) {
-                  t.writeln(`\x1b[2m${line}\x1b[0m`);
-                }
-              }
-              t.writeln('\x1b[2m[press Enter or click Relaunch to start a new session]\x1b[0m');
-            } else if (ctrl?.type === 'error') {
-              t.writeln(`\r\n\x1b[31m[error: ${ctrl.message || 'unknown'}]\x1b[0m`);
-            }
+            ctrl = JSON.parse(ev.data);
           } catch {
             markTerminalActivity();
             t.write(ev.data);
+            return;
+          }
+          if (ctrl?.type === 'reset') {
+            t.reset();
+            t.clear();
+            setTerminalActive(false);
+            setScrolledUp(false);
+          } else if (ctrl?.type === 'size') {
+            const cols = Number(ctrl.cols);
+            const rows = Number(ctrl.rows);
+            if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+              // Applied synchronously: the bytes that follow on this socket
+              // were drawn for this grid.
+              ptySizeRef.current = { cols, rows };
+              geometryRef.current.layoutNow();
+            }
+          } else if (ctrl?.type === 'exit') {
+            // The CLI/tmux session genuinely ended. Don't auto-loop (a crash
+            // on startup would spin) — latch exited and offer an explicit
+            // relaunch (Relaunch button or any keypress).
+            suppressReconnectRef.current = true;
+            setExitedState(true);
+            setConnected(false);
+            const code =
+              ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
+            const tail = typeof ctrl.tail === 'string' ? ctrl.tail.trim() : '';
+            t.writeln(`\r\n\x1b[2m[runner session ended, code=${code}]\x1b[0m`);
+            if (tail) {
+              const lines = tail
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(Boolean)
+                .slice(-6);
+              for (const line of lines) {
+                t.writeln(`\x1b[2m${line}\x1b[0m`);
+              }
+            }
+            t.writeln('\x1b[2m[press Enter or click Relaunch to start a new session]\x1b[0m');
+          } else if (ctrl?.type === 'error') {
+            t.writeln(`\r\n\x1b[31m[error: ${ctrl.message || 'unknown'}]\x1b[0m`);
           }
           return;
         }
         // Binary frame = raw PTY bytes.
-        const buf =
-          ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : new Uint8Array(ev.data);
+        const buf = new Uint8Array(ev.data as ArrayBuffer);
         if (buf.byteLength > 0) markTerminalActivity();
         t.write(buf);
       };
@@ -565,8 +739,7 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       };
       ws.onerror = () => {
         // Don't write the error directly — the close handler will reconnect.
-        // We could surface the diagnostic in the terminal but that flashes
-        // false alerts during transient network blips.
+        // Surfacing it would flash false alerts during transient blips.
       };
     };
 
@@ -607,44 +780,98 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       ? 'border-gray-200 text-gray-500 bg-gray-50'
       : 'border-dark-700/50 text-dark-400 bg-dark-900';
   const bodyClass = theme === 'light' ? 'bg-white' : 'bg-dark-900';
+  const btnClass =
+    theme === 'light'
+      ? 'border-gray-300 bg-white hover:bg-gray-100 text-gray-600'
+      : 'border-dark-700/60 bg-dark-800/60 hover:bg-dark-700/60 hover:text-dark-100';
+  const iconBtn = `flex items-center justify-center w-7 h-7 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${btnClass}`;
+  const statusLabel = connected
+    ? terminalActive
+      ? 'active'
+      : 'connected'
+    : exited
+      ? 'ended'
+      : 'reconnecting';
+  // Buttons must not steal focus from xterm's hidden textarea: on a phone
+  // that would close the soft keyboard at every tap.
+  const keepFocus = (e: ReactMouseEvent) => e.preventDefault();
 
   return (
-    <div className={`flex flex-col h-full ${shellClass}`}>
-      <div className={`flex items-center gap-2 px-3 py-2 border-b text-xs ${headerClass}`}>
-        <TerminalIcon className="w-3.5 h-3.5 text-indigo-400" />
-        <span>Terminal</span>
-        <span className="opacity-60">— {agent.runner || 'cli'}</span>
+    <div className={`flex flex-col h-full min-h-0 ${shellClass}`}>
+      <div className={`flex items-center gap-2 px-3 py-1.5 border-b text-xs ${headerClass}`}>
+        <TerminalIcon className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+        <span className="hidden sm:inline">Terminal</span>
+        <span className="opacity-60 truncate">{agent.runner || 'cli'}</span>
         <div className="ml-auto flex items-center gap-1.5">
+          {foreignGrid && connected && (
+            <button
+              type="button"
+              onMouseDown={keepFocus}
+              onClick={() => claimNow(true)}
+              title="Another screen set the terminal size — fit it to this screen"
+              aria-label="Fit terminal to this screen"
+              className={`flex items-center gap-1 px-2 h-7 rounded border text-[11px] ${btnClass}`}
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Fit here</span>
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => sendKey('\x1b[A')}
-            disabled={!connected}
-            title="Up arrow — select previous option"
-            aria-label="Send up arrow"
-            className="flex items-center justify-center w-7 h-7 rounded border border-dark-700/60 bg-dark-800/60 hover:bg-dark-700/60 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            onMouseDown={keepFocus}
+            onClick={() => changeFont(-FONT_STEP * 2)}
+            disabled={fontPref <= FONT_MIN}
+            title="Smaller text (more columns)"
+            aria-label="Smaller text"
+            className={iconBtn}
           >
-            <ArrowUp className="w-3.5 h-3.5" />
+            <ZoomOut className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
-            onClick={() => sendKey('\x1b[B')}
-            disabled={!connected}
-            title="Down arrow — select next option"
-            aria-label="Send down arrow"
-            className="flex items-center justify-center w-7 h-7 rounded border border-dark-700/60 bg-dark-800/60 hover:bg-dark-700/60 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            onMouseDown={keepFocus}
+            onClick={() => changeFont(FONT_STEP * 2)}
+            disabled={fontPref >= FONT_MAX}
+            title="Larger text (fewer columns)"
+            aria-label="Larger text"
+            className={iconBtn}
           >
-            <ArrowDown className="w-3.5 h-3.5" />
+            <ZoomIn className="w-3.5 h-3.5" />
           </button>
-          <button
-            type="button"
-            onClick={() => sendKey('\r')}
-            disabled={!connected}
-            title="Enter — confirm selection"
-            aria-label="Send enter"
-            className="flex items-center justify-center w-7 h-7 rounded border border-dark-700/60 bg-dark-800/60 hover:bg-dark-700/60 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <CornerDownLeft className="w-3.5 h-3.5" />
-          </button>
+          {!coarse && (
+            <>
+              <button
+                type="button"
+                onClick={() => sendKey('\x1b[A', true)}
+                disabled={!connected}
+                title="Up arrow — select previous option"
+                aria-label="Send up arrow"
+                className={iconBtn}
+              >
+                <ArrowUp className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => sendKey('\x1b[B', true)}
+                disabled={!connected}
+                title="Down arrow — select next option"
+                aria-label="Send down arrow"
+                className={iconBtn}
+              >
+                <ArrowDown className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => sendKey('\r', true)}
+                disabled={!connected}
+                title="Enter — confirm selection"
+                aria-label="Send enter"
+                className={iconBtn}
+              >
+                <CornerDownLeft className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
           {exited && (
             <button
               type="button"
@@ -656,28 +883,88 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
               <RotateCcw className="w-3.5 h-3.5" /> Relaunch
             </button>
           )}
-          <span className="opacity-60 ml-1">
-            {connected
-              ? terminalActive
-                ? 'active'
-                : 'connected'
-              : exited
-                ? 'ended'
-                : 'reconnecting'}{' '}
-            · multi-client
-          </span>
+          <span
+            className={`ml-1 w-2 h-2 rounded-full shrink-0 ${
+              connected
+                ? terminalActive
+                  ? 'bg-emerald-400'
+                  : 'bg-emerald-600'
+                : exited
+                  ? 'bg-gray-500'
+                  : 'bg-amber-500 animate-pulse'
+            }`}
+            title={`${statusLabel} · multi-client`}
+          />
+          <span className="opacity-60 hidden md:inline">{statusLabel} · multi-client</span>
         </div>
       </div>
-      <div
-        ref={containerRef}
-        // overflow-auto lets the container show scrollbars whenever the
-        // rendered terminal grid is larger than the visible viewport — which
-        // happens on mobile when the soft keyboard reduces visualViewport but
-        // we deliberately keep the PTY at its full cols×rows.
-        className={`min-h-0 flex-1 overflow-auto ${bodyClass}`}
-        style={{ touchAction: 'manipulation' }}
-        onClick={() => termRef.current?.focus()}
-      />
+      <div className={`relative min-h-0 flex-1 ${bodyClass}`}>
+        <div
+          ref={containerRef}
+          // Absolutely inset so its box is exactly the free area (what
+          // FitAddon measures), never grown by the terminal inside it.
+          // overflow-auto only matters when FONT_MIN still can't fit the grid.
+          className="absolute inset-0 overflow-auto"
+          style={{ touchAction: 'manipulation', overscrollBehavior: 'contain' }}
+          onClick={() => termRef.current?.focus()}
+        />
+        {scrolledUp && (
+          <button
+            type="button"
+            onMouseDown={keepFocus}
+            onClick={scrollToBottom}
+            title="Back to the live screen"
+            aria-label="Scroll to bottom"
+            className="absolute bottom-3 right-5 z-10 flex items-center gap-1 px-2.5 h-8 rounded-full border border-indigo-500/50 bg-indigo-600/90 text-white shadow-lg text-[11px] font-medium"
+          >
+            <ChevronsDown className="w-3.5 h-3.5" /> Live
+          </button>
+        )}
+      </div>
+      {coarse && (
+        // Touch key bar: the keys a phone keyboard cannot send to a TUI.
+        <div
+          className={`flex items-center gap-1 px-2 py-1.5 border-t overflow-x-auto ${headerClass}`}
+          style={{ paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))' }}
+        >
+          {TOUCH_KEYS.map(k => (
+            <button
+              key={k.label}
+              type="button"
+              onMouseDown={keepFocus}
+              onClick={() => sendKey(k.seq, false)}
+              disabled={!connected}
+              title={k.title}
+              aria-label={`Send ${k.title}`}
+              className={`shrink-0 h-9 min-w-[2.75rem] px-2 rounded border text-xs font-mono ${btnClass} disabled:opacity-40`}
+            >
+              {k.label}
+            </button>
+          ))}
+          {(
+            [
+              ['\x1b[D', ArrowLeft, 'Left arrow'],
+              ['\x1b[A', ArrowUp, 'Up arrow'],
+              ['\x1b[B', ArrowDown, 'Down arrow'],
+              ['\x1b[C', ArrowRight, 'Right arrow'],
+              ['\r', CornerDownLeft, 'Enter'],
+            ] as const
+          ).map(([seq, Icon, title]) => (
+            <button
+              key={title}
+              type="button"
+              onMouseDown={keepFocus}
+              onClick={() => sendKey(seq, false)}
+              disabled={!connected}
+              title={title}
+              aria-label={`Send ${title}`}
+              className={`shrink-0 flex items-center justify-center h-9 w-11 rounded border ${btnClass} disabled:opacity-40`}
+            >
+              <Icon className="w-4 h-4" />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

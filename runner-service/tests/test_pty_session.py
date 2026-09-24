@@ -29,10 +29,59 @@ def test_tmux_reattach_checks_project_after_runner_restart(monkeypatch, old_cwd,
     monkeypatch.setattr(session, "_tmux_run", tmux)
     session._ensure_tmux_session()
     assert any(c[0] == "kill-session" for c in calls) == replace
-    assert any(c[0] == "new-session" for c in calls) == replace
+    assert any("new-session" in c for c in calls) == replace
     if replace:
-        create = next(c for c in calls if c[0] == "new-session")
+        create = next(c for c in calls if "new-session" in c)
         assert create[create.index("-c") + 1] == "/repo/a"
+        # history-limit must be set in the SAME command list, before the
+        # window exists, or the new pane keeps tmux's 2000-line default.
+        assert create.index("history-limit") < create.index("new-session")
+    # Either way the browser's xterm must stay off the alternate screen.
+    assert any("terminal-overrides[90]" in c for c in calls)
+
+
+def test_history_snapshot_pushes_pane_history_into_scrollback(monkeypatch):
+    from subprocess import CompletedProcess
+    session = PtySession(agent_id="hist", cmd=["codex"], cwd="/tmp", env={}, cols=80, rows=3)
+    session._tmux_session = "pulsar-hist"
+    seen = []
+
+    def tmux(args, **kwargs):
+        seen.append(args)
+        return CompletedProcess(args, 0, stdout=b"\x1b[31mone\nTwo\n\n\n", stderr=b"")
+
+    monkeypatch.setattr(session, "_tmux_run", tmux)
+    out = session.history_snapshot(100)
+    assert seen[0][seen[0].index("-S") + 1] == "-100"
+    assert seen[0][seen[0].index("-E") + 1] == "-1"
+    # Trailing blank lines dropped, SGR closed per line, then `rows` CRLFs.
+    assert out == b"\x1b[31mone\x1b[0m\r\nTwo\x1b[0m\r\n" + b"\r\n" * 3
+
+
+def test_history_snapshot_is_empty_on_failure(monkeypatch):
+    from subprocess import CompletedProcess
+    session = PtySession(agent_id="hist2", cmd=["codex"], cwd="/tmp", env={})
+    session._tmux_session = "pulsar-hist2"
+    monkeypatch.setattr(session, "_tmux_run", lambda args: CompletedProcess(args, 1, b"", b"x"))
+    assert session.history_snapshot() == b""
+
+
+@pytest.mark.asyncio
+async def test_resize_broadcasts_authoritative_size_to_viewers():
+    session = PtySession(agent_id="size", cmd=["codex"], cwd="/tmp", env={})
+    frames = []
+
+    async def ctrl(frame):
+        frames.append(frame)
+
+    async def out(_data):
+        pass
+
+    session._clients[1] = pty_session_module._Client(on_output=out, on_control=ctrl)
+    session._clients[2] = pty_session_module._Client(on_output=out)  # no control channel
+    await session.resize(9999, 3)
+    # Clamped values are what viewers must render at.
+    assert frames == [{"type": "size", "cols": 500, "rows": 5}]
 
 
 @pytest.mark.asyncio
