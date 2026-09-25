@@ -84,6 +84,106 @@ async def test_resize_broadcasts_authoritative_size_to_viewers():
     assert frames == [{"type": "size", "cols": 500, "rows": 5}]
 
 
+def test_attach_client_hears_resizes(tmp_path):
+    """A resize of the master must SIGWINCH the attach client, or tmux keeps
+    its spawn size while viewers render at the claimed one (cropped columns)."""
+    import fcntl
+    import pty
+    import select
+    import struct
+    import subprocess
+    import termios
+
+    marker = tmp_path / "agent-preexec-ran"
+    master, slave = pty.openpty()
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import signal, sys, time\n"
+         "signal.signal(signal.SIGWINCH, lambda *_: sys.exit(0))\n"
+         "print('READY', flush=True)\n"
+         "time.sleep(10)\n"
+         "sys.exit(1)\n"],
+        stdin=slave, stdout=slave, stderr=slave, close_fds=True,
+        preexec_fn=pty_session_module._attach_client_preexec(lambda: marker.touch()),
+    )
+    os.close(slave)
+    try:
+        seen = b""
+        deadline = time.monotonic() + 10
+        while b"READY" not in seen and time.monotonic() < deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                seen += os.read(master, 1024)
+        assert b"READY" in seen
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 118, 0, 0))
+        assert child.wait(timeout=5) == 0
+        assert marker.exists()  # the agent's own preexec (UID drop) still runs
+    finally:
+        if child.poll() is None:
+            child.kill()
+        os.close(master)
+
+
+@pytest.mark.asyncio
+async def test_broker_attach_detaches_leftover_clients(monkeypatch):
+    session = PtySession(agent_id="solo", cmd=["claude"], cwd="/tmp", env={})
+    monkeypatch.setattr(pty_session_module, "_tmux_available", lambda: True)
+    monkeypatch.setattr(session, "_ensure_tmux_session",
+                        lambda: setattr(session, "_tmux_session", "pt-solo"))
+    spawned = []
+
+    def popen(cmd, **kwargs):
+        spawned.append(cmd)
+        raise OSError("stop after capturing the attach command")
+
+    monkeypatch.setattr(pty_session_module.subprocess, "Popen", popen)
+    with pytest.raises(OSError):
+        await session.start()
+    cmd = spawned[0]
+    assert cmd[cmd.index("attach-session"):] == ["attach-session", "-d", "-t", "pt-solo"]
+
+
+@pytest.mark.asyncio
+async def test_idle_reap_runs_close_to_completion(monkeypatch):
+    """close() cancels the idle timer, which is the task running the reap: it
+    must not cancel itself, or the session stays registered but dead and its
+    tmux attach client is never released."""
+    from subprocess import CompletedProcess
+
+    class _Proc:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+        def send_signal(self, _sig):
+            self.returncode = -9
+
+    session = PtySession(agent_id="idle-reap", cmd=["claude"], cwd="/tmp", env={})
+    session._tmux_session = "pt-idle-reap"
+    session.proc = _Proc()
+    tmux_calls = []
+
+    def tmux(args, **kwargs):
+        tmux_calls.append(args)
+        return CompletedProcess(args, 1, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(session, "_tmux_run", tmux)
+    monkeypatch.setattr(pty_session_module, "IDLE_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr(pty_session_module, "_SESSIONS", {"idle-reap": session})
+
+    session._schedule_idle_timer()
+    timer = session._idle_timer
+    await asyncio.wait_for(asyncio.shield(timer), timeout=5)
+
+    assert not timer.cancelled()
+    assert ["kill-session", "-t", "pt-idle-reap"] in tmux_calls
+    assert "idle-reap" not in pty_session_module._SESSIONS
+
+
 @pytest.mark.asyncio
 async def test_terminal_creation_waits_for_project_transition(monkeypatch):
     import pty_session

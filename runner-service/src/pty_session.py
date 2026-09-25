@@ -147,6 +147,23 @@ def _tmux_session_name(agent_id: str) -> str:
     """tmux session names may not contain '.' or ':' — sanitise the agent id."""
     return "pt-" + re.sub(r"[.:\s]", "_", agent_id)
 
+
+def _attach_client_preexec(agent_preexec: Optional[Callable]) -> Callable[[], None]:
+    """preexec_fn making the PTY slave (already on fds 0-2) the attach client's
+    controlling terminal, then dropping to the agent UID.
+
+    The kernel only delivers SIGWINCH to a tty's foreground process group, and
+    only a controlling tty has one. Without this, TIOCSWINSZ on the master
+    never reaches `tmux attach`: tmux keeps drawing at the spawn size while
+    every viewer adopts the claimed grid, so a narrower claim crops the
+    rightmost columns (the /login URL lost 2 chars per line)."""
+    def _preexec() -> None:
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        if agent_preexec is not None:
+            agent_preexec()
+    return _preexec
+
 _INTERRUPT_RECIPES = {
     # Claude Code documents Ctrl-C as the hardcoded interrupt/cancel shortcut.
     "claude": ("ctrl-c", b"\x03"),
@@ -977,7 +994,10 @@ class PtySession:
             self._slave_tty = None
 
         env = self._tmux_env()
-        spawn_cmd = [_TMUX_BIN, "-L", _TMUX_SOCKET, "attach-session", "-t", self._tmux_session]
+        # -d detaches every other client of the session: the broker must be its
+        # only one, or under `window-size latest` a leftover attach (from a
+        # broker that never finished closing) can own the window size.
+        spawn_cmd = [_TMUX_BIN, "-L", _TMUX_SOCKET, "attach-session", "-d", "-t", self._tmux_session]
 
         try:
             self.proc = subprocess.Popen(
@@ -987,7 +1007,7 @@ class PtySession:
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
-                preexec_fn=self.preexec_fn,
+                preexec_fn=_attach_client_preexec(self.preexec_fn),
                 close_fds=True,
             )
         except Exception as e:
@@ -1869,9 +1889,15 @@ class PtySession:
         await self.close()
 
     def _cancel_idle_timer(self) -> None:
-        if self._idle_timer and not self._idle_timer.done():
-            self._idle_timer.cancel()
+        timer = self._idle_timer
+        if timer and not timer.done():
             self._idle_timer = None
+            # The reaper reaches here through its own close(): cancelling the
+            # running task would abort close() at its next await, skipping
+            # kill-session and leaving a dead session registered with its tmux
+            # attach client still connected.
+            if timer is not asyncio.current_task():
+                timer.cancel()
 
     def _schedule_idle_timer(self) -> None:
         self._cancel_idle_timer()
