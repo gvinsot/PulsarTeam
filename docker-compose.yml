@@ -150,6 +150,11 @@ services:
   #   - per-service named volumes only
 
   claudecode-service:
+    # PID 1 reaper (tini). The runner's CLIs daemonise: tmux forks a server that
+    # detaches, and the CLI's own children outlive it — all reparented to PID 1.
+    # Without an init there, python server.py never wait()s them and the container
+    # slowly fills with [tmux: server] / [claude] <defunct> entries.
+    init: true
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -218,6 +223,7 @@ services:
     restart: unless-stopped
 
   openclaw-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -275,6 +281,7 @@ services:
     restart: unless-stopped
 
   opencode-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -332,6 +339,7 @@ services:
     restart: unless-stopped
 
   aider-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -400,6 +408,7 @@ services:
     restart: unless-stopped
 
   codex-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -463,6 +472,7 @@ services:
     restart: unless-stopped
 
   hermes-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -520,6 +530,7 @@ services:
     restart: unless-stopped
 
   sandbox-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -563,6 +574,7 @@ services:
     restart: unless-stopped
 
   mock-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     build:
       context: .
       dockerfile: runner-service/Dockerfile

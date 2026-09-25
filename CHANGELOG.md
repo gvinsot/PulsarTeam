@@ -39,6 +39,18 @@ added under `[Unreleased]` as work lands.
   way the Socket.IO handshake already did. Socket.IO in turn falls back to the
   cookie when `handshake.auth.token` is absent, which is the browser's path
   now — `auth.token` stays for the desktop bridge.
+- The shared runner API key no longer lands in the runner's logs. The terminal
+  proxy dialled the runner-service PTY socket with `?api_key=<CODER_API_KEY>`,
+  and uvicorn logs a WebSocket handshake target verbatim — so every terminal
+  attach printed the key that authenticates _all_ runner traffic into
+  `docker service logs` and into anything shipping them off the node. The proxy
+  now presents it as `Authorization: Bearer` (the dial is server→server, so
+  unlike the browser's WebSocket API it can set headers), and the runner
+  installs a log filter, `runner-service/src/log_redaction.py`, that masks
+  credential-bearing query parameters, URL userinfo and auth headers in every
+  log record before a handler formats it. Runners still accept `?api_key=` so
+  an older proxy keeps working; the leak it used to cause is now scrubbed. This
+  is the server-side twin of the `?token=<jwt>` removal above.
 - The API's cookie-hardening middleware (`HttpOnly` + `SameSite=Lax` +
   `Secure`-in-production on every `Set-Cookie`) is now actually mounted. It had
   been written and unit-tested but never wired into `index.ts`, so it protected
@@ -135,6 +147,15 @@ added under `[Unreleased]` as work lands.
 
 ### Fixed
 
+- Runner containers no longer accumulate zombie processes. `python server.py`
+  ran as PID 1, and PID 1 inherits every orphan: the agent CLIs daemonise
+  (`tmux new-session -d` forks a server that detaches, and the CLI processes
+  inside it outlive the client that spawned them), so each finished session
+  left `[tmux: server]` and `[claude] <defunct>` entries that nothing ever
+  `wait()`ed, until the container reached its pid limit. Every runner service
+  in `docker-compose.yml` and `devops/docker-compose.swarm.yml` now sets
+  `init: true`, and the image itself runs `tini -s` as its entrypoint so a
+  plain `docker run` — or an orchestrator that ignores `init` — is covered too.
 - Agents no longer need GitHub reconnecting several times a day. A GitHub user
   token was treated as an eternal, per-scope credential, and both halves of that
   are wrong for a GitHub App: the token expires after 8 h, and authorizing again

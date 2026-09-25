@@ -27,8 +27,13 @@ The WS protocol is bidirectional binary + small JSON control frames:
                       (a claim: latest wins) | {type: "refresh"}
 
 Authentication mirrors the rest of the service: the caller (team-api proxy)
-supplies the shared `CODER_API_KEY` via the `Authorization: Bearer …` header
-or the `?api_key=` query parameter on the WS handshake.
+supplies the shared `CODER_API_KEY` via the `Authorization: Bearer …` header.
+
+`?api_key=` on the WS handshake is still accepted so an older team-api can
+talk to a current runner, but it is deprecated and callers must not use it:
+uvicorn logs the handshake target verbatim, which published the shared key to
+the container log. Such lines are scrubbed by log_redaction, installed from
+config.py — the query parameter is a defused leak, not a supported channel.
 """
 from __future__ import annotations
 
@@ -266,10 +271,11 @@ async def ws_terminal(
     session lives on for other connected admins until either the subprocess
     exits or the idle timeout in pty_session.IDLE_TIMEOUT_SEC kicks in.
     """
-    # Authenticate on the handshake. Header-based auth is awkward over the
-    # browser WS API (you can't set arbitrary headers), so we accept the
-    # API key on the query string too — the team-api proxy is the only
-    # caller and supplies it server-side.
+    # Authenticate on the handshake. The team-api proxy is the only caller and
+    # dials server-side, so it presents the key on the Authorization header.
+    # The `?api_key=` query parameter stays accepted for older proxies only —
+    # it ends up in uvicorn's handshake log line (scrubbed by log_redaction,
+    # but still the wrong place for a credential).
     auth_header = websocket.headers.get("authorization")
     try:
         _check_api_key(auth_header, api_key)

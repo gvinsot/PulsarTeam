@@ -17,7 +17,9 @@
  *   • We verify the session, look up the agent by id, and check the user owns
  *     it (or is an admin). Failing → the upgrade is refused with a plain HTTP
  *     status, which the browser surfaces as a failed connection.
- *   • Server → runner-service uses the shared CODER_API_KEY as before.
+ *   • Server → runner-service uses the shared CODER_API_KEY, presented as
+ *     `Authorization: Bearer` — never as a query parameter, which the runner's
+ *     uvicorn would log in clear (see services/execution/runnerTerminalDial.ts).
  *
  * Lifecycle:
  *   • Connecting to a runner that already has a session for this agent
@@ -39,6 +41,7 @@ import { getGitHubCredentialsForAgent } from './github.js';
 import { ensureTerminalWorkspace } from '../services/execution/agentWorkspace.js';
 import { isCliRunner } from '../services/runners.js';
 import { runnerServiceUrlFor } from '../services/execution/runnerRegistry.js';
+import { buildRunnerTerminalDial } from '../services/execution/runnerTerminalDial.js';
 
 // Which runners get a terminal is the single source of truth in runners.ts
 // (isCliRunner — recognises the deprecated 'coder' alias and lowercases). The
@@ -295,16 +298,24 @@ function wireProxy(
     clientWs.close(1011, 'No runner URL configured');
     return;
   }
-  const wsUrl =
-    baseUrl.replace(/^http/, 'ws') +
-    `/ws/terminal/${encodeURIComponent(agentId)}` +
-    `?api_key=${encodeURIComponent(apiKey)}` +
-    (ownerId ? `&owner_id=${encodeURIComponent(ownerId)}` : '') +
-    `&cols=${encodeURIComponent(cols)}&rows=${encodeURIComponent(rows)}`;
+  const contextHeaders: Record<string, string> = {};
+  if (context.permissions)
+    contextHeaders['X-Agent-Permissions'] = JSON.stringify(context.permissions);
+  if (context.llmConfig !== undefined)
+    contextHeaders['X-LLM-Config'] = JSON.stringify(context.llmConfig);
 
-  const headers: Record<string, string> = {};
-  if (context.permissions) headers['X-Agent-Permissions'] = JSON.stringify(context.permissions);
-  if (context.llmConfig !== undefined) headers['X-LLM-Config'] = JSON.stringify(context.llmConfig);
+  // The API key goes in the Authorization header, never on the URL: uvicorn
+  // logs the handshake target verbatim on the runner side. See
+  // services/execution/runnerTerminalDial.ts.
+  const { url: wsUrl, headers } = buildRunnerTerminalDial({
+    baseUrl,
+    agentId,
+    apiKey,
+    ownerId,
+    cols,
+    rows,
+    headers: contextHeaders,
+  });
 
   const runnerWs = new WebSocket(wsUrl, {
     perMessageDeflate: {

@@ -242,6 +242,11 @@ services:
         - 'traefik.http.routers.pulsarteam-frontend-http.service=noop@internal'
 
   claudecode-service:
+    # PID 1 reaper (tini). The runner's CLIs daemonise: tmux forks a server that
+    # detaches, and the CLI's own children outlive it — all reparented to PID 1.
+    # Without an init there, python server.py never wait()s them and the container
+    # slowly fills with [tmux: server] / [claude] <defunct> entries.
+    init: true
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
@@ -335,6 +340,7 @@ services:
       replicas: 0
 
   sandbox-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     image: registry.methodinfo.fr/sandbox-service:latest
     build:
       context: ..
@@ -385,6 +391,7 @@ services:
         - 'traefik.enable=false'
 
   openclaw-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     image: registry.methodinfo.fr/openclaw-service:latest
     build:
       context: ..
@@ -456,6 +463,7 @@ services:
       start_period: 120s
 
   opencode-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     image: registry.methodinfo.fr/opencode-service:latest
     build:
       context: ..
@@ -527,6 +535,7 @@ services:
       start_period: 120s
 
   aider-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     image: registry.methodinfo.fr/aider-service:latest
     build:
       context: ..
@@ -606,6 +615,7 @@ services:
       start_period: 120s
 
   codex-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     image: registry.methodinfo.fr/codex-service:latest
     build:
       context: ..
@@ -678,6 +688,7 @@ services:
       start_period: 120s
 
   hermes-service:
+    init: true # reap reparented tmux/CLI children (see claudecode-service)
     image: registry.methodinfo.fr/hermes-service:latest
     build:
       context: ..

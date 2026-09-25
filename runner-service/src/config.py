@@ -8,6 +8,7 @@ hermes, opencode, sandbox).
 
 import os
 import logging
+import log_redaction
 from swarm_secrets import read as read_secret
 
 # --- Runner selection ---------------------------------------------------------
@@ -42,6 +43,14 @@ class HealthCheckFilter(logging.Filter):
 
 
 logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+
+# Credentials must never reach the log stream. uvicorn logs the WebSocket
+# handshake target verbatim, and the terminal proxy may authenticate with
+# `?api_key=…` on that URL (older team-api proxies still do), which published
+# the shared runner key in clear to `docker service logs`. The filter is
+# installed on root's handlers and on the library loggers — it applies to every
+# record regardless of which logger emitted it. See log_redaction.py.
+log_redaction.install(extra_logger_names=(f"runner_service[{RUNNER_TYPE}]",))
 
 # --- Shared constants ---------------------------------------------------------
 

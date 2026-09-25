@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     bubblewrap \
     tmux \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium headless environment
@@ -156,6 +157,7 @@ RUN chmod +x entrypoint.sh
 
 # Verify installations
 RUN echo "=== Python ===" && python --version && \
+    echo "=== tini ===" && /usr/bin/tini --version && \
     echo "=== Node.js ===" && node --version && \
     echo "=== Claude Code ===" && claude --version && \
     echo "=== OpenCode ===" && (opencode --version 2>&1 || echo "not installed") && \
@@ -214,4 +216,21 @@ RUN CODEX_RESOLVED_VERSION="$(jq -er '.version | select(type == "string" and len
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
     CMD curl -sf http://localhost:8000/health || exit 1
 
+# ─── Init process: reap the CLIs' orphans ─────────────────────────────────
+# The agent CLIs daemonise. `tmux new-session -d` forks a server that detaches
+# from its caller, and the CLI processes inside it outlive the client that
+# spawned them — every one of those is reparented to PID 1 when its parent
+# goes. `python server.py` as PID 1 only wait()s the children it spawned
+# itself, so the reparented ones pile up as [tmux: server] / [claude]
+# <defunct> until the container hits its pid limit.
+#
+# tini reaps them. `-s` registers it as a child subreaper so it still collects
+# orphans when it is NOT PID 1 — which is the case under `init: true` (set on
+# every runner service in docker-compose.yml and devops/docker-compose.swarm.yml),
+# where Docker's own init takes PID 1. Baking it in means a plain `docker run`
+# of this image, or an orchestrator that ignores `init`, is covered too.
+#
+# Signals still reach the server: tini forwards them to its direct child, the
+# entrypoint execs python, and uvicorn's lifespan tears the PTY sessions down.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 CMD ["./entrypoint.sh"]
