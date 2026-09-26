@@ -253,7 +253,7 @@ def test_auto_answers_codex_update_prompt(monkeypatch):
         """
     )
 
-    assert written == [b"2\r"]
+    assert written == [b"2"]
     assert "codex_update" in session._auto_answered
 
 
@@ -273,7 +273,7 @@ def test_auto_answers_codex_update_prompt_once(monkeypatch):
     session._last_auto_answer_at = time.monotonic() - 10
     session._maybe_auto_answer_startup_prompt(prompt)
 
-    assert written == [b"2\r"]
+    assert written == [b"2"]
 
 
 def test_auto_answers_codex_trust_directory_prompt(monkeypatch):

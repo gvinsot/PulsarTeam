@@ -62,8 +62,10 @@ def build_trust_re(extra_alternatives: tuple = ()) -> re.Pattern:
 # would just move the bug to the next reordering, so the keystrokes are derived
 # from the screen instead: find the accept line, find the selection marker, and
 # walk from one to the other.
+# Codex >= 0.15x words its accept row "Trust and continue" (question: "Trust
+# this folder? Codex can read, edit, and run files here…").
 _TRUST_ACCEPT_RE = re.compile(
-    r"(yes,?\s*i\s*trust\s*this\s*folder|yes,?\s*continue)",
+    r"(yes,?\s*i\s*trust\s*this\s*folder|yes,?\s*continue|trust\s*and\s*continue)",
     re.IGNORECASE,
 )
 # Markers Claude Code has used for the highlighted row. A bare ">" is
@@ -123,10 +125,21 @@ BYPASS_PERMS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Codex's update prompt. Current releases render
+#
+#     Update available · 0.150.0 → 0.157.1
+#     Release notes: https://github.com/openai/codex/releases/latest
+#     › 1. Update now (runs `npm install -g @openai/codex@latest`)
+#       2. Skip
+#       3. Skip until next version
+#
+# The "runs `…`" command depends on how Codex was installed (npm, bun, brew,
+# the standalone script), so only its "(runs" prefix is matched — the heading
+# also changed across releases, so it isn't required. `\s*` everywhere
+# tolerates the cursor-positioned layout that ANSI-stripping compacts.
 CODEX_UPDATE_RE = re.compile(
-    r"(update\s+now"
-    r".{0,500}npm\s+install\s+-g\s+@openai/codex"
-    r".{0,500}\bskip\b)",
+    r"(update\s*now\s*\(\s*runs"
+    r".{0,400}?skip)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -155,13 +168,15 @@ class StartupPrompt:
 
 # Table order is match priority (checked first to last).
 STARTUP_PROMPTS: tuple[StartupPrompt, ...] = (
-    # Codex's update prompt: option 2 is "Skip".
+    # Codex's update prompt: option 2 is "Skip". The digit selects AND
+    # confirms on its own (UpdatePromptScreen.select), so no Enter follows — a
+    # trailing Enter would leak into the next screen (the trust dialog).
     StartupPrompt(
         key="codex_update",
         pattern=CODEX_UPDATE_RE,
-        keys=(b"2\r",),
+        keys=(b"2",),
         description="codex update",
-        keys_label="2+Enter",
+        keys_label="2 (Skip)",
     ),
     # OpenCode's update prompt: move Left to "No", confirm after a render tick.
     StartupPrompt(
