@@ -978,6 +978,16 @@ export default function TasksBoard({
     }
   }, [workflow, activeBoardId, handleSaveWorkflow]);
 
+  // Every task shown here lives on `activeBoardId` (fetched with `board_id:
+  // activeBoardId` above), so an assignment surface must only ever offer
+  // agents linked to that same board — otherwise selecting "All Projects"
+  // upstream (which widens the `agents` prop to every board) would let a task
+  // be handed to an agent from an unrelated board/project.
+  const boardScopedAgents = useMemo(
+    () => agents.filter(a => a.boardId === activeBoardId),
+    [agents, activeBoardId]
+  );
+
   const unseenOnActiveBoard = activeBoardId ? unseenTaskCounts[activeBoardId] || 0 : 0;
 
   /**
@@ -1320,7 +1330,7 @@ export default function TasksBoard({
         <TaskDetailModal
           onViewed={refreshUnseenTaskCounts}
           task={liveSelectedTask}
-          agents={agents}
+          agents={boardScopedAgents}
           statusOptions={statusOptions}
           onClose={() => setSelectedTask(null)}
           onRefresh={refreshAll}
@@ -1337,7 +1347,7 @@ export default function TasksBoard({
       {/* Create task modal */}
       {createOpen && (
         <CreateTaskModal
-          agents={agents}
+          agents={boardScopedAgents}
           projectName={activeProjectName}
           defaultRepoFullName={lastRepoFullName}
           defaultStoragePath={lastStoragePath}

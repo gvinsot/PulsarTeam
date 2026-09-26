@@ -276,6 +276,16 @@ async function applyTaskFieldEdits(
     if (agentId) {
       const assignee = mgr.agents.get(agentId);
       if (!assignee) return { ok: false, status: 404, error: 'Assignee agent not found' };
+      // A task may only be assigned to an agent linked to the SAME board —
+      // this holds for every role, admins included, since it is a data
+      // integrity rule, not a permission check (see checkBoardAccess below).
+      if (assignee.boardId && task.boardId && assignee.boardId !== task.boardId) {
+        return {
+          ok: false,
+          status: 400,
+          error: "Assignee agent does not belong to this task's board",
+        };
+      }
       if (user.role !== 'admin' && assignee.boardId) {
         const access = await checkBoardAccess(assignee.boardId, user.userId, user.role, 'edit');
         if (!access.ok)
