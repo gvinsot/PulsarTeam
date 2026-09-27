@@ -1798,6 +1798,14 @@ class PtySession:
             "cols": self.cols,
             "rows": self.rows,
             "auth_error": self.auth_error,
+            # Seconds since the PTY last produced output — whether or not a
+            # viewer is attached. The CLI TUIs redraw continuously while they
+            # think or run a tool (spinner, elapsed timer), so this is what the
+            # API uses to tell "still working" from "waiting at the prompt".
+            "idle_seconds": (
+                round(max(0.0, time.monotonic() - self._last_output_at), 1)
+                if self._last_output_at else None
+            ),
         }
 
     def begin_history_capture(self) -> None:

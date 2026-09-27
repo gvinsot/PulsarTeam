@@ -66,6 +66,7 @@ import type { Task, TaskWriteInput, TaskRecurrence } from '../database/tasks.js'
 import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
+import { watchCliActivity, isCliRecentlyActive } from './cliActivity.js';
 import { checkBoardAccess } from '../../middleware/authz.js';
 import { checkAgentAccess, type AgentAccessSubject } from '../../lib/agentAccess.js';
 import type { SessionClaims } from '../../middleware/session.js';
@@ -1576,7 +1577,11 @@ export const tasksMethods = {
         }
 
         const currentExecutor = this.agents.get(executorId);
-        if (!currentExecutor || currentExecutor.status === 'busy') {
+        if (
+          !currentExecutor ||
+          currentExecutor.status === 'busy' ||
+          (terminalDriven && isCliRecentlyActive(executorId))
+        ) {
           console.log(`🔔 [Execution] Executor "${executorName}" is busy — skipping reminder`);
           continue;
         }
@@ -1722,6 +1727,34 @@ export const tasksMethods = {
     setTaskSignal(taskId, 'watching', true);
     updateTaskExecutionStatus(taskId, 'watching');
 
+    // Keep the executor's busy/idle status in step with the CLI's real activity
+    // for the whole wait (it never goes through sendMessage, which is what
+    // marks the other runners busy).
+    const stopActivityWatch = terminalDriven ? watchCliActivity(this, executorId) : null;
+    try {
+      return await this._watchExecutionPhases(
+        taskId,
+        executorId,
+        executorName,
+        taskText,
+        startStatus,
+        { terminalDriven, gitBaselineHead }
+      );
+    } finally {
+      stopActivityWatch?.();
+    }
+  },
+
+  /** Phases 1–3 of _waitForExecutionComplete, run once the task is being watched. */
+  async _watchExecutionPhases(
+    this: any,
+    taskId: string,
+    executorId: string,
+    executorName: string,
+    taskText: string,
+    startStatus: string | undefined,
+    { terminalDriven, gitBaselineHead }: { terminalDriven: boolean; gitBaselineHead: string | null }
+  ): Promise<string> {
     // ── Phase 1: terminal-driven auth/error probe ──────────────────────────
     if (terminalDriven) {
       const probeVerdict = await this._probeCliAuth(

@@ -42,6 +42,7 @@ import { ensureTerminalWorkspace } from '../services/execution/agentWorkspace.js
 import { isCliRunner } from '../services/runners.js';
 import { runnerServiceUrlFor } from '../services/execution/runnerRegistry.js';
 import { buildRunnerTerminalDial } from '../services/execution/runnerTerminalDial.js';
+import { noteCliActivity } from '../services/agentManager/cliActivity.js';
 
 // Which runners get a terminal is the single source of truth in runners.ts
 // (isCliRunner — recognises the deprecated 'coder' alias and lowercases). The
@@ -62,57 +63,14 @@ function rejectUpgrade(socket: Duplex, statusLine: string, body = ''): void {
 
 // ─── Console-activity → agent.status ──────────────────────────────────────
 //
-// When the wrapped CLI prints anything to the PTY (LLM thinking, tool calls,
-// shell commands…) the agent should appear "busy" in the UI even if no task
-// was explicitly assigned via the workflow. After CONSOLE_IDLE_TIMEOUT_MS of
-// quiet on the PTY, we flip back to "idle" — but only when no `currentTask`
-// is set, so the workflow engine remains the authority for task-driven busy.
+// PTY output relayed to a viewer is one of the CLI activity signals that keep
+// the agent "busy" (see services/agentManager/cliActivity.ts, which owns the
+// quiet timer and asks the runner before flipping back to idle).
 //
 // REPLAY_GRACE_MS skips the scrollback burst the runner sends right after WS
 // attach: otherwise every reconnect to a long-idle session would briefly
 // show "busy" while the buffered bytes are flushed.
-const CONSOLE_IDLE_TIMEOUT_MS = 5000;
 const REPLAY_GRACE_MS = 1500;
-
-interface ConsoleActivityState {
-  idleTimer: NodeJS.Timeout;
-}
-const consoleActivity = new Map<string, ConsoleActivityState>();
-
-function noteConsoleOutput(agentId: string, agentManager: any): void {
-  if (!agentManager || !agentId) return;
-  const prev = consoleActivity.get(agentId);
-  if (prev?.idleTimer) clearTimeout(prev.idleTimer);
-
-  const agent = agentManager.agents?.get?.(agentId);
-  if (agent && agent.status !== 'busy') {
-    try {
-      agentManager.setStatus(agentId, 'busy', 'Console activity');
-    } catch (err: any) {
-      console.warn(`[Terminal] setStatus(busy) failed for ${agentId.slice(0, 8)}: ${err.message}`);
-    }
-  }
-
-  const idleTimer = setTimeout(() => {
-    consoleActivity.delete(agentId);
-    const a = agentManager.agents?.get?.(agentId);
-    if (!a) return;
-    // Workflow-driven busy owns the status: when a task is in progress, leave
-    // the agent busy so the task pipeline can clear it the usual way.
-    if (a.currentTask) return;
-    if (a.status === 'busy') {
-      try {
-        agentManager.setStatus(agentId, 'idle', 'Console quiet');
-      } catch (err: any) {
-        console.warn(
-          `[Terminal] setStatus(idle) failed for ${agentId.slice(0, 8)}: ${err.message}`
-        );
-      }
-    }
-  }, CONSOLE_IDLE_TIMEOUT_MS);
-
-  consoleActivity.set(agentId, { idleTimer });
-}
 
 interface TerminalRunnerContext {
   permissions?: any | null;
@@ -363,7 +321,7 @@ function wireProxy(
     // resize), not CLI output — skip them. The grace window suppresses the
     // scrollback replay sent right after attach.
     if (isBinary && Date.now() - connectionOpenedAt > REPLAY_GRACE_MS) {
-      noteConsoleOutput(agentId, agentManager);
+      noteCliActivity(agentManager, agentId);
     }
   });
   runnerWs.on('close', (code, reason) => closeBoth(code, reason?.toString() || ''));

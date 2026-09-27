@@ -675,3 +675,16 @@ async def test_close_detaches_nothing_when_the_tmux_session_is_gone(tmp_path, mo
     await session.close()
 
     assert "creds-agent" not in pty_session_module._DETACHED_CREDS_WATCHERS
+
+
+def test_status_reports_idle_seconds_since_last_output():
+    session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
+    # Never produced output yet → unknown, not "idle for ages".
+    assert session.status()["idle_seconds"] is None
+
+    session._last_output_at = time.monotonic() - 42
+    idle = session.status()["idle_seconds"]
+    assert 41 <= idle <= 44
+
+    session._last_output_at = time.monotonic()
+    assert session.status()["idle_seconds"] < 1
