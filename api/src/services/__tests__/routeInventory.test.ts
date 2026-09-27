@@ -369,6 +369,11 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'PUT /api/budget/config': ['authenticateToken', 'requireRole(admin)'],
   'GET /api/budget/alerts': ['authenticateToken'],
 
+  // ── /api/analytics ────────────────────────────────────────────────
+  'GET /api/analytics/boards': ['authenticateToken'],
+  'GET /api/analytics/tasks': ['authenticateToken'],
+  'GET /api/analytics/errors': ['authenticateToken'],
+
   // ── /api/settings ─────────────────────────────────────────────────
   'GET /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],
   'POST /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],

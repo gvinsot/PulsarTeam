@@ -12,7 +12,7 @@ import {
   Users,
   KanbanSquare,
   Menu,
-  DollarSign,
+  BarChart3,
   Eye,
   ChevronDown,
   Sun,
@@ -49,20 +49,32 @@ const TasksBoard = lazy(() => import('./TasksBoard'));
 const AddAgentModal = lazy(() => import('./AddAgentModal'));
 const BroadcastPanel = lazy(() => import('./BroadcastPanel'));
 const ProjectDrawer = lazy(() => import('./ProjectDrawer'));
-const BudgetDashboard = lazy(() => import('./BudgetDashboard'));
+const AnalyticsDashboard = lazy(() => import('./AnalyticsDashboard'));
 const AdminPanel = lazy(() => import('./AdminPanel'));
 
 // Hash views the render switch actually handles. Used by both the useState
 // initializer and the hashchange effect so the two lists can never drift.
 // Projects are no longer a peer view — they live in the left ProjectDrawer.
-const VALID_VIEWS: string[] = ['agents', 'tasks', 'budget'];
+const VALID_VIEWS: string[] = ['agents', 'tasks', 'analytics'];
+
+// The Analytics view used to be called "Budget": keep old #budget links working.
+const VIEW_ALIASES: Record<string, string> = { budget: 'analytics' };
+const viewFromHash = () => {
+  const hash = window.location.hash.replace('#', '').toLowerCase();
+  return VIEW_ALIASES[hash] || hash;
+};
 
 // Top-nav items, shared by the mobile dropdown and the desktop view-switcher.
 // Only the DATA is shared; the two render maps stay separate (different markup).
 const NAV_VIEWS = [
   { key: 'agents', label: 'Agents', icon: Users, title: 'Agents view' },
   { key: 'tasks', label: 'Workflows', icon: KanbanSquare, title: 'Workflows board' },
-  { key: 'budget', label: 'Budget', icon: DollarSign, title: 'Budget' },
+  {
+    key: 'analytics',
+    label: 'Analytics',
+    icon: BarChart3,
+    title: 'Analytics — budget, board usage, project tasks & errors',
+  },
 ];
 
 interface DashboardProps {
@@ -120,7 +132,7 @@ export default function Dashboard({
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [viewMode, setViewMode] = useState('grid'); // grid | list
   const [activeView, setActiveViewRaw] = useState(() => {
-    const hash = window.location.hash.replace('#', '').toLowerCase();
+    const hash = viewFromHash();
     return VALID_VIEWS.includes(hash) ? hash : 'tasks';
   });
   const setActiveView = useCallback((view: string) => {
@@ -179,6 +191,12 @@ export default function Dashboard({
       .finally(() => setProjectsLoaded(true));
   }, []);
 
+  // Offered in the Analytics budget-limit settings (per-project limits).
+  const analyticsProjects = useMemo(
+    () => dbProjects.map(p => ({ id: p.id, name: p.name })),
+    [dbProjects]
+  );
+
   const activeProject = useMemo(
     () => dbProjects.find(p => p.id === projectFilter) || null,
     [dbProjects, projectFilter]
@@ -230,7 +248,7 @@ export default function Dashboard({
 
   useEffect(() => {
     const onHashChange = () => {
-      const hash = window.location.hash.replace('#', '').toLowerCase();
+      const hash = viewFromHash();
       if (VALID_VIEWS.includes(hash)) setActiveViewRaw(hash);
     };
     window.addEventListener('hashchange', onHashChange);
@@ -522,13 +540,14 @@ export default function Dashboard({
               </div>
             </Suspense>
           )}
-          {activeView === 'budget' && (
+          {activeView === 'analytics' && (
             <Suspense fallback={null}>
               <div className="flex-1 min-h-0 flex flex-col overflow-auto">
-                <BudgetDashboard
+                <AnalyticsDashboard
                   agents={projectScopedAgents}
                   projectId={projectFilter}
                   projectName={activeProject?.name || ''}
+                  projects={analyticsProjects}
                 />
               </div>
             </Suspense>

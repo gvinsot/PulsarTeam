@@ -49,6 +49,18 @@ export interface BudgetConfig {
   dailyBudget: number;
   /** Percentage, z.coerce.number().min(0).max(100).default(80). */
   alertThreshold: number;
+  /** Rolling 30-day limit; 0 = none. Absent on configs saved before it existed
+   *  (GET /budget/config fills it in, /budget/summary does not). */
+  monthlyBudget?: number;
+  /** Per-project overrides keyed by project id; a project without an entry is
+   *  judged against the global limits. */
+  projectBudgets?: Record<string, BudgetLimits>;
+}
+
+/** A daily + rolling 30-day spend limit pair; 0 means "no limit". */
+export interface BudgetLimits {
+  dailyBudget: number;
+  monthlyBudget: number;
 }
 
 /**
@@ -152,6 +164,10 @@ export interface BudgetAlert {
   /** Pre-formatted, dollar-signed and localised server-side; the frontend renders
    *  it raw and applies its own currency symbol elsewhere. */
   message: string;
+  /** Which limit tripped: the rolling 24h one or the rolling 30-day one. */
+  period?: 'daily' | 'monthly';
+  /** Set when the alert is about one project's own limits. */
+  projectId?: string;
 }
 
 /**
@@ -166,6 +182,10 @@ export interface BudgetAlertsResponse {
   /** Copied from the stored budget_config; guaranteed numeric only for configs
    *  written through PUT. */
   dailyBudget: number;
+  /** Spend over the rolling 30-day window, same scope as todayCost. */
+  monthCost?: number;
+  /** The 30-day limit in force for this scope (the project's own, else global). */
+  monthlyBudget?: number;
   /** Over a 1-day window, and NOT enriched — see BudgetByAgentRow. */
   byAgent: BudgetByAgentRow[];
 }

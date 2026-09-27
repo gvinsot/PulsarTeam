@@ -244,6 +244,7 @@ export type {
   BudgetAlertLevel,
   BudgetTimelineGroupBy,
   BudgetConfig,
+  BudgetLimits,
   BudgetSummaryResponse,
   BudgetByAgentRow,
   BudgetTimelinePoint,
@@ -254,6 +255,17 @@ export type {
   BudgetConfigErrorDetail,
   BudgetConfigErrorResponse,
 } from './budget';
+
+// ── analytics ──────────────────────────────────────────────────────────────
+export type {
+  AnalyticsCountBucket,
+  AnalyticsBoardRow,
+  AnalyticsActivityPoint,
+  AnalyticsBoardsResponse,
+  AnalyticsTasksResponse,
+  AnalyticsErrorTask,
+  AnalyticsErrorsResponse,
+} from './analytics';
 
 // ── code: github, commit diffs, code graph, code index ─────────────────────
 export type {

@@ -91,6 +91,7 @@ import { localFolderRoutes } from './routes/localFolder.js';
 import { createS3McpHandler } from './services/s3Mcp.js';
 import { createLocalFolderMcpHandler } from './services/localFolderMcp.js';
 import budgetRoutes from './routes/budget.js';
+import analyticsRoutes from './routes/analytics.js';
 import { userRoutes } from './routes/users.js';
 import { llmConfigRoutes } from './routes/llmConfigs.js';
 import { boardRoutes } from './routes/boards.js';
@@ -253,6 +254,7 @@ app.use('/api/realtime', authenticateToken, realtimeRoutes(agentManager));
 app.use('/api/external-voice', authenticateToken, externalVoiceRoutes(agentManager));
 app.use('/api/leader-tools', authenticateToken, leaderToolsRoutes(agentManager));
 app.use('/api/budget', authenticateToken, budgetRoutes);
+app.use('/api/analytics', authenticateToken, analyticsRoutes);
 app.use('/api/settings/api-key', authenticateToken, apiKeyRoutes);
 app.use(
   '/api/settings/api-docs',

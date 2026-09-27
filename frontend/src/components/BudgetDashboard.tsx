@@ -33,7 +33,7 @@ import {
   selectBudgetView,
   type BudgetFetchers,
 } from './budgetScope';
-import type { Agent, BudgetConfig } from '../types';
+import type { Agent, BudgetConfig, BudgetLimits } from '../types';
 
 ChartJS.register(
   CategoryScale,
@@ -78,10 +78,13 @@ export default function BudgetDashboard({
   agents: _agents = [],
   projectId = '',
   projectName = '',
+  projects = [],
 }: {
   agents?: Agent[];
   projectId?: string;
   projectName?: string;
+  /** Projects offered in the settings modal for per-project budget limits. */
+  projects?: { id: string; name: string }[];
 }) {
   // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
   const { theme } = useTheme() as { theme: string };
@@ -166,10 +169,31 @@ export default function BudgetDashboard({
   };
 
   const todayCost = summary?.total_cost || 0;
-  const dailyBudget = config?.dailyBudget || 0;
-  const budgetPct = dailyBudget > 0 ? Math.min((todayCost / dailyBudget) * 100, 100) : 0;
-  const budgetColor =
-    budgetPct >= 100 ? 'bg-red-500' : budgetPct >= 80 ? 'bg-yellow-500' : 'bg-green-500';
+  // /alerts reports the limits IN FORCE for this scope (a project's own limits
+  // when it has some, else the global ones); fall back to the global config.
+  const dailyBudget = alerts?.dailyBudget ?? config?.dailyBudget ?? 0;
+  const monthlyBudget = alerts?.monthlyBudget ?? config?.monthlyBudget ?? 0;
+  const monthCost = alerts?.monthCost || 0;
+  const threshold = config?.alertThreshold ?? 80;
+  const pctOf = (cost: number, limit: number) =>
+    limit > 0 ? Math.min((cost / limit) * 100, 100) : 0;
+  const barColor = (pct: number) =>
+    pct >= 100 ? 'bg-red-500' : pct >= threshold ? 'bg-yellow-500' : 'bg-green-500';
+  const budgetPct = pctOf(todayCost, dailyBudget);
+  const budgetColor = barColor(budgetPct);
+  const monthPct = pctOf(monthCost, monthlyBudget);
+  const monthColor = barColor(monthPct);
+  const scopedLimitsSource =
+    projectId && config?.projectBudgets?.[projectId] ? 'project limit' : 'global limit';
+
+  const setProjectLimit = (id: string, field: keyof BudgetLimits, value: number) => {
+    if (!editConfig) return;
+    const current = editConfig.projectBudgets?.[id] || { dailyBudget: 0, monthlyBudget: 0 };
+    const next = { ...(editConfig.projectBudgets || {}), [id]: { ...current, [field]: value } };
+    // A project with no limit at all is dropped rather than stored as zeros.
+    if (!next[id].dailyBudget && !next[id].monthlyBudget) delete next[id];
+    setEditConfig({ ...editConfig, projectBudgets: next });
+  };
 
   const dailyChartData = {
     labels: daily.map(d => d.day?.slice(5) || ''),
@@ -301,7 +325,7 @@ export default function BudgetDashboard({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-dark-100">💰 Budget Dashboard</h1>
+          <h2 className="text-xl font-bold text-dark-100">💰 Budget &amp; Spend Limits</h2>
           <p className="text-sm text-dark-400 mt-1">
             AI agent token usage &amp; cost tracking ·{' '}
             {/* Name the scope the figures below are filtered to, so a
@@ -328,7 +352,7 @@ export default function BudgetDashboard({
             }}
             className="bg-dark-700 hover:bg-dark-600 text-dark-200 px-3 py-1.5 rounded text-sm"
           >
-            ⚙️ Settings
+            ⚙️ Limits
           </button>
           <button
             onClick={loadData}
@@ -362,7 +386,7 @@ export default function BudgetDashboard({
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
         <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
           <div className="text-xs text-dark-400 uppercase tracking-wider mb-1">Today's Cost</div>
           <div className="text-2xl font-bold text-dark-100">
@@ -372,7 +396,7 @@ export default function BudgetDashboard({
           {dailyBudget > 0 && (
             <div className="mt-2">
               <div className="flex justify-between text-xs text-dark-400 mb-1">
-                <span>{budgetPct.toFixed(0)}% of budget</span>
+                <span title={scopedLimitsSource}>{budgetPct.toFixed(0)}% of budget</span>
                 <span>
                   {currency}
                   {dailyBudget.toFixed(2)}
@@ -385,6 +409,32 @@ export default function BudgetDashboard({
                 />
               </div>
             </div>
+          )}
+        </div>
+        <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
+          <div className="text-xs text-dark-400 uppercase tracking-wider mb-1">30-Day Cost</div>
+          <div className="text-2xl font-bold text-dark-100">
+            {currency}
+            {monthCost.toFixed(2)}
+          </div>
+          {monthlyBudget > 0 ? (
+            <div className="mt-2">
+              <div className="flex justify-between text-xs text-dark-400 mb-1">
+                <span>{monthPct.toFixed(0)}% of limit</span>
+                <span>
+                  {currency}
+                  {monthlyBudget.toFixed(2)}
+                </span>
+              </div>
+              <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full ${monthColor} rounded-full transition-all`}
+                  style={{ width: `${monthPct}%` }}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-dark-500 mt-1">No 30-day limit set</div>
           )}
         </div>
         <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
@@ -567,9 +617,9 @@ export default function BudgetDashboard({
       {/* Settings modal */}
       {showSettings && editConfig && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-lg p-6 space-y-4">
+          <div className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-dark-100">Budget Settings</h2>
+              <h2 className="text-lg font-bold text-dark-100">Budget Limits</h2>
               <button
                 onClick={() => setShowSettings(false)}
                 className="text-dark-400 hover:text-dark-200"
@@ -590,6 +640,22 @@ export default function BudgetDashboard({
               />
             </div>
             <div>
+              <label className="block text-sm text-dark-400 mb-1">30-Day Budget ({currency})</label>
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={editConfig.monthlyBudget || 0}
+                onChange={e =>
+                  setEditConfig({ ...editConfig, monthlyBudget: parseFloat(e.target.value) || 0 })
+                }
+                className="w-full bg-dark-800 border border-dark-600 rounded px-3 py-2 text-sm text-dark-200"
+              />
+              <p className="text-xs text-dark-500 mt-1">
+                Rolling 30-day spend limit across all projects (0 = no limit)
+              </p>
+            </div>
+            <div>
               <label className="block text-sm text-dark-400 mb-1">Alert Threshold (%)</label>
               <input
                 type="number"
@@ -605,8 +671,56 @@ export default function BudgetDashboard({
                 Alert when daily spend exceeds this % of budget
               </p>
             </div>
+            {projects.length > 0 && (
+              <div>
+                <div className="text-sm text-dark-400 mb-1">Per-project limits ({currency})</div>
+                <p className="text-xs text-dark-500 mb-2">
+                  A project with its own limits is judged against them instead of the global ones.
+                  Leave both at 0 to use the global limits.
+                </p>
+                <div className="border border-dark-700 rounded overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-dark-800">
+                      <tr>
+                        <th className="text-left px-3 py-1.5 text-dark-400 font-medium">Project</th>
+                        <th className="text-right px-3 py-1.5 text-dark-400 font-medium">Daily</th>
+                        <th className="text-right px-3 py-1.5 text-dark-400 font-medium">30-day</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {projects.map(p => {
+                        const limits = editConfig.projectBudgets?.[p.id];
+                        return (
+                          <tr key={p.id} className="border-t border-dark-800">
+                            <td className="px-3 py-1.5 text-dark-200 truncate max-w-[14rem]">
+                              {p.name}
+                            </td>
+                            {(['dailyBudget', 'monthlyBudget'] as const).map(field => (
+                              <td key={field} className="px-3 py-1.5 text-right">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min={0}
+                                  aria-label={`${p.name} ${field === 'dailyBudget' ? 'daily' : '30-day'} limit`}
+                                  value={limits?.[field] || 0}
+                                  onChange={e =>
+                                    setProjectLimit(p.id, field, parseFloat(e.target.value) || 0)
+                                  }
+                                  className="w-24 bg-dark-800 border border-dark-600 rounded px-2 py-1 text-sm text-dark-200 text-right"
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             <p className="text-xs text-dark-500">
-              Token costs are managed via LLM configurations in Admin Settings.
+              Limits raise alerts on this page; they do not stop agents. Token costs are managed via
+              LLM configurations in Admin Settings.
             </p>
             {saveError && (
               <div className="px-4 py-3 rounded-lg text-sm font-medium bg-red-900/40 text-red-300 border border-red-800">

@@ -10,38 +10,134 @@ import {
   setSetting,
   getAllLlmConfigs,
   getPool,
+  getAllProjects,
 } from '../services/database.js';
+import { getCostByProject } from '../services/database/analytics.js';
 import { requireRole } from '../middleware/auth.js';
 import { validateBody, z } from '../lib/validate.js';
 import type { SessionClaims } from '../middleware/session.js';
 
 const router = express.Router();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A daily + monthly spend limit pair. 0 means "no limit". */
+const limitSchema = z.object({
+  dailyBudget: z.coerce.number().min(0).default(0),
+  monthlyBudget: z.coerce.number().min(0).default(0),
+});
+
 // /alerts does arithmetic + .toFixed() on these fields, so a malformed PUT
 // would otherwise break every subsequent /alerts poll until re-PUT correctly.
 const budgetConfigSchema = z
   .object({
     dailyBudget: z.coerce.number().min(0).default(0),
+    // Rolling 30-day limit, matching the rolling 24h window of dailyBudget.
+    monthlyBudget: z.coerce.number().min(0).default(0),
     alertThreshold: z.coerce.number().min(0).max(100).default(80),
+    // Per-project overrides, keyed by project id.
+    projectBudgets: z.record(z.string().regex(UUID_RE), limitSchema).default({}),
   })
   .passthrough();
 
-/**
- * The two numeric fields /alerts does arithmetic on. `getSetting` hands back
- * `unknown` — the settings table stores free-form JSON — so the value is
- * narrowed at the point of use rather than trusted. `budgetConfigSchema` above
- * is what keeps the persisted object in this shape.
- */
-interface BudgetConfig {
+export interface BudgetLimits {
   dailyBudget: number;
-  alertThreshold: number;
+  monthlyBudget: number;
 }
 
-function isBudgetConfig(value: unknown): value is BudgetConfig {
-  if (typeof value !== 'object' || value === null) return false;
-  if (!('dailyBudget' in value) || !('alertThreshold' in value)) return false;
-  return typeof value.dailyBudget === 'number' && typeof value.alertThreshold === 'number';
+/**
+ * The fields /alerts does arithmetic on. `getSetting` hands back `unknown` —
+ * the settings table stores free-form JSON — so the value is normalised at the
+ * point of use rather than trusted. `budgetConfigSchema` above is what keeps
+ * the persisted object in this shape; configs saved before monthly/per-project
+ * limits existed simply lack those keys and read as "no limit".
+ */
+export interface BudgetConfig extends BudgetLimits {
+  alertThreshold: number;
+  projectBudgets: Record<string, BudgetLimits>;
 }
+
+const finiteOr = (v: unknown, fallback: number) =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : fallback;
+
+export function normalizeBudgetConfig(value: unknown): BudgetConfig {
+  const fallback: BudgetConfig = {
+    dailyBudget: 10.0,
+    monthlyBudget: 0,
+    alertThreshold: 80,
+    projectBudgets: {},
+  };
+  if (typeof value !== 'object' || value === null) return fallback;
+  const v = value as Record<string, unknown>;
+  const projectBudgets: Record<string, BudgetLimits> = {};
+  if (typeof v.projectBudgets === 'object' && v.projectBudgets !== null) {
+    for (const [id, limits] of Object.entries(v.projectBudgets as Record<string, unknown>)) {
+      if (typeof limits !== 'object' || limits === null) continue;
+      const l = limits as Record<string, unknown>;
+      projectBudgets[id] = {
+        dailyBudget: finiteOr(l.dailyBudget, 0),
+        monthlyBudget: finiteOr(l.monthlyBudget, 0),
+      };
+    }
+  }
+  return {
+    dailyBudget: finiteOr(v.dailyBudget, fallback.dailyBudget),
+    monthlyBudget: finiteOr(v.monthlyBudget, 0),
+    alertThreshold: finiteOr(v.alertThreshold, 80),
+    projectBudgets,
+  };
+}
+
+export interface BudgetAlert {
+  level: 'critical' | 'warning';
+  message: string;
+  period: 'daily' | 'monthly';
+  projectId?: string;
+}
+
+/**
+ * Compare spend to one limit pair. `label` prefixes the message so a
+ * project's alert is distinguishable from the global one.
+ */
+export function evaluateLimits(
+  limits: BudgetLimits,
+  spend: { daily: number; monthly: number },
+  alertThreshold: number,
+  label = '',
+  projectId?: string
+): BudgetAlert[] {
+  const alerts: BudgetAlert[] = [];
+  const periods: { period: 'daily' | 'monthly'; limit: number; cost: number; name: string }[] = [
+    { period: 'daily', limit: limits.dailyBudget, cost: spend.daily, name: 'daily budget' },
+    {
+      period: 'monthly',
+      limit: limits.monthlyBudget,
+      cost: spend.monthly,
+      name: '30-day budget',
+    },
+  ];
+  for (const { period, limit, cost, name } of periods) {
+    if (!(limit > 0)) continue;
+    const pct = (cost / limit) * 100;
+    const figures = `$${cost.toFixed(4)} / $${limit.toFixed(2)} (${pct.toFixed(0)}%)`;
+    const base = { period, ...(projectId ? { projectId } : {}) };
+    if (pct >= 100)
+      alerts.push({
+        ...base,
+        level: 'critical',
+        message: `${label}${cap(name)} exceeded: ${figures}`,
+      });
+    else if (pct >= alertThreshold)
+      alerts.push({
+        ...base,
+        level: 'warning',
+        message: `${label}Approaching ${name}: ${figures}`,
+      });
+  }
+  return alerts;
+}
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * Build a map from raw (provider, model) pairs to human-friendly config names.
@@ -87,8 +183,6 @@ function enrichProviderNames<T extends { provider?: string | null; model?: strin
 function budgetUserId(req: { user: SessionClaims }) {
   return req.user.role === 'admin' ? null : req.user.userId;
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Resolve the optional `projectId` scope the web UI sends when a project is
@@ -168,8 +262,13 @@ router.get(
 router.get(
   '/config',
   asyncHandler((_req, res) => {
-    const config = getSetting('budget_config') || { dailyBudget: 10.0, alertThreshold: 80 };
-    res.json(config);
+    const stored = getSetting('budget_config');
+    const config =
+      typeof stored === 'object' && stored !== null
+        ? stored
+        : { dailyBudget: 10.0, alertThreshold: 80 };
+    // Configs saved before monthly / per-project limits existed lack those keys.
+    res.json({ monthlyBudget: 0, projectBudgets: {}, ...config });
   })
 );
 
@@ -191,36 +290,66 @@ router.put(
 router.get(
   '/alerts',
   asyncHandler(async (req, res) => {
-    const storedConfig = getSetting('budget_config');
-    const config: BudgetConfig = isBudgetConfig(storedConfig)
-      ? storedConfig
-      : { dailyBudget: 10.0, alertThreshold: 80 };
+    const config = normalizeBudgetConfig(getSetting('budget_config'));
     const uid = budgetUserId(req);
     const projectId = resolveProjectScope(req, res);
     if (projectId === undefined) return;
-    // Scoped to the selected project too: the alert compares today's spend to
-    // the budget, and the dashboard shows it next to project-scoped figures.
-    const todaySummary =
+    // Scoped to the selected project too: the alert compares spend to the
+    // budget, and the dashboard shows it next to project-scoped figures.
+    const summaryFor = (days: number) =>
       uid || projectId
-        ? await getTokenUsageSummaryAsync(1, uid, projectId)
-        : getTokenUsageSummary(1);
+        ? getTokenUsageSummaryAsync(days, uid, projectId)
+        : Promise.resolve(getTokenUsageSummary(days));
+    const [todaySummary, monthSummary] = await Promise.all([summaryFor(1), summaryFor(30)]);
     const todayCost = todaySummary?.total_cost || 0;
-    const alerts: { level: string; message: string }[] = [];
-    if (config.dailyBudget > 0) {
-      const pct = (todayCost / config.dailyBudget) * 100;
-      if (pct >= 100)
-        alerts.push({
-          level: 'critical',
-          message: `Daily budget exceeded: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)`,
-        });
-      else if (pct >= config.alertThreshold)
-        alerts.push({
-          level: 'warning',
-          message: `Approaching daily budget: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)`,
-        });
+    const monthCost = monthSummary?.total_cost || 0;
+    const spend = { daily: todayCost, monthly: monthCost };
+
+    let alerts: BudgetAlert[];
+    let limits: BudgetLimits = config;
+    if (projectId) {
+      // A project with its own limits is judged against them; otherwise the
+      // global limits still apply to what is on screen.
+      const own = config.projectBudgets[projectId];
+      if (own && (own.dailyBudget > 0 || own.monthlyBudget > 0)) limits = own;
+      alerts = evaluateLimits(limits, spend, config.alertThreshold, '', projectId);
+    } else {
+      alerts = evaluateLimits(config, spend, config.alertThreshold);
+      // All-projects view: also surface every project over its own limits.
+      const limited = Object.entries(config.projectBudgets).filter(
+        ([, l]) => l.dailyBudget > 0 || l.monthlyBudget > 0
+      );
+      if (limited.length > 0) {
+        const [daily, monthly, projects] = await Promise.all([
+          getCostByProject(1, uid),
+          getCostByProject(30, uid),
+          getAllProjects().catch(() => []),
+        ]);
+        const names = new Map(projects.map(p => [p.id, p.name]));
+        for (const [pid, l] of limited) {
+          // Skip deleted projects: their limits are orphaned config.
+          if (!names.has(pid)) continue;
+          alerts.push(
+            ...evaluateLimits(
+              l,
+              { daily: daily.get(pid) || 0, monthly: monthly.get(pid) || 0 },
+              config.alertThreshold,
+              `[${names.get(pid)}] `,
+              pid
+            )
+          );
+        }
+      }
     }
     const byAgent = await getTokenUsageByAgent(1, uid, projectId);
-    res.json({ alerts, todayCost, dailyBudget: config.dailyBudget, byAgent });
+    res.json({
+      alerts,
+      todayCost,
+      monthCost,
+      dailyBudget: limits.dailyBudget,
+      monthlyBudget: limits.monthlyBudget,
+      byAgent,
+    });
   })
 );
 

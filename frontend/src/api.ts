@@ -24,6 +24,9 @@ import type {
   BoardShare,
   BoardShareMutationResult,
   BoardWorkflow,
+  AnalyticsBoardsResponse,
+  AnalyticsErrorsResponse,
+  AnalyticsTasksResponse,
   BudgetAlertsResponse,
   BudgetByAgentRow,
   BudgetConfig,
@@ -1393,6 +1396,19 @@ export const fetchBudgetAlerts = (projectId?: string | null) =>
   get<BudgetAlertsResponse>(
     projectId ? `/budget/alerts?projectId=${encodeURIComponent(projectId)}` : '/budget/alerts'
   );
+
+// Analytics (board usage, task mix, errors). Same project scoping as Budget.
+const analyticsQuery = (days: number, projectId?: string | null) =>
+  `?days=${days}${projectScopeParam(projectId)}`;
+
+export const fetchAnalyticsBoards = (days = 30, projectId?: string | null) =>
+  get<AnalyticsBoardsResponse>(`/analytics/boards${analyticsQuery(days, projectId)}`);
+
+export const fetchAnalyticsTasks = (days = 30, projectId?: string | null) =>
+  get<AnalyticsTasksResponse>(`/analytics/tasks${analyticsQuery(days, projectId)}`);
+
+export const fetchAnalyticsErrors = (days = 30, projectId?: string | null) =>
+  get<AnalyticsErrorsResponse>(`/analytics/errors${analyticsQuery(days, projectId)}`);
 
 export default api;
 
