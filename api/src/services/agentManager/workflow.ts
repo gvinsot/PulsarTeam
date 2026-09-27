@@ -24,7 +24,7 @@ export const workflowMethods = {
     // Special case: idle_agent_available needs access to agent list
     if (cond.field === 'idle_agent_available') {
       const role = cond.value;
-      const found = hasIdleAgentWithRole(this.agents, role);
+      const found = hasIdleAgentWithRole(this.agents, role, task?.boardId || null);
       const result = cond.operator === 'neq' ? !found : found;
       if (result) console.log(`[Workflow] Condition: idle_agent_available role="${role}" => true`);
       return result;

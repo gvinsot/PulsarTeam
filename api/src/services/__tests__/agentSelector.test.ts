@@ -164,15 +164,13 @@ test('findAgentByRole prefers the task board over the task repo', () => {
   assert.equal(picked.id, 'a2', 'the board preference is applied before the repo preference');
 });
 
-// ── Board is a preference, not a fence ──────────────────────────────────────
+// ── Board is a fence ────────────────────────────────────────────────────────
 //
-// The role pickers in the workflow editor offer every role the user has an
-// agent for, including roles staffed only on another board. Hard-filtering on
-// the board here would accept such a workflow and then silently strand its
-// tasks (`idle_agent_available` goes green — hasIdleAgentWithRole is board-
-// agnostic — while the action finds nobody).
+// A task is never handed to another board's agent, even one with the right
+// role. The `idle_agent_available` condition is scoped the same way so it never
+// goes green on an agent the following action would refuse.
 
-test('findAgentByRole falls back to another board when the role is staffed elsewhere', () => {
+test('findAgentByRole never picks an agent from another board', () => {
   const agents = makeAgents([
     {
       id: 'a1',
@@ -185,16 +183,10 @@ test('findAgentByRole falls back to another board when the role is staffed elsew
     },
   ]);
 
-  const picked = findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target') as any;
-
-  assert.ok(
-    picked,
-    'a role with no agent on this board must still run rather than strand the task'
-  );
-  assert.equal(picked.id, 'a1');
+  assert.equal(findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target'), null);
 });
 
-test('an idle agent that makes the condition green is reachable by the action', () => {
+test('idle_agent_available and the selector agree on the board scope', () => {
   const agents = makeAgents([
     {
       id: 'a1',
@@ -207,11 +199,9 @@ test('an idle agent that makes the condition green is reachable by the action', 
     },
   ]);
 
-  assert.equal(hasIdleAgentWithRole(agents, 'dev'), true);
-  assert.ok(
-    findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo'),
-    'condition and selection must agree'
-  );
+  assert.equal(hasIdleAgentWithRole(agents, 'dev', 'b1'), false);
+  assert.equal(hasIdleAgentWithRole(agents, 'dev', 'b2'), true);
+  assert.equal(findAgentByRole(agents, 'dev', null, () => [], 'b2', 'org/repo')?.id, 'a1');
 });
 
 test('findAgentByRole still returns null when no agent holds the role at all', () => {
@@ -233,8 +223,8 @@ test('findAgentByRole still returns null when no agent holds the role at all', (
   );
 });
 
-test('findAgentForAssignment prefers the task board but falls back to another one', () => {
-  const onBoard = makeAgents([
+test('findAgentForAssignment only draws from the task board', () => {
+  const agents = makeAgents([
     {
       id: 'a1',
       name: 'A1',
@@ -254,48 +244,24 @@ test('findAgentForAssignment prefers the task board but falls back to another on
       enabled: true,
     },
   ]);
-  const picked = findAgentForAssignment(
-    onBoard,
-    'dev',
-    null,
-    () => [],
-    null,
-    'b1',
-    'org/repo'
-  ) as any;
-  assert.equal(picked.id, 'a2', 'an agent on the task board wins');
-
-  const offBoard = makeAgents([
-    {
-      id: 'a1',
-      name: 'A1',
-      role: 'dev',
-      boardId: 'b2',
-      status: 'idle',
-      project: 'org/repo',
-      enabled: true,
-    },
-  ]);
-  const fallback = findAgentForAssignment(
-    offBoard,
-    'dev',
-    null,
-    () => [],
-    null,
-    'b1',
-    'org/repo'
-  ) as any;
-  assert.ok(
-    fallback,
-    'assignment must not return null just because the role lives on another board'
+  assert.equal(
+    findAgentForAssignment(agents, 'dev', null, () => [], null, 'b1', 'org/repo')?.id,
+    'a2',
+    'an agent on the task board wins'
   );
-  assert.equal(fallback.id, 'a1');
+
+  agents.delete('a2');
+  assert.equal(
+    findAgentForAssignment(agents, 'dev', null, () => [], null, 'b1', 'org/repo'),
+    null,
+    'a same-role agent on another board must never receive the task'
+  );
 });
 
 test('automatic assignment excludes occupied agents before board and repo preferences', () => {
   const agents = makeAgents([
     { id: 'busy', role: 'dev', status: 'busy', boardId: 'home', project: 'org/repo' },
-    { id: 'free', role: 'dev', status: 'idle', boardId: 'other', project: 'org/other' },
+    { id: 'free', role: 'dev', status: 'idle', boardId: 'home', project: 'org/other' },
   ]);
   assert.equal(
     findAgentForAssignment(agents, 'dev', null, () => [], null, 'home', 'org/repo')?.id,

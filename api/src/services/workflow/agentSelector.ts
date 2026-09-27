@@ -146,18 +146,32 @@ export function clearAgentBusy(agentId: string) {
 }
 
 /**
- * Whether at least one idle, enabled agent exists (optionally matching a role).
- * Deliberately board-agnostic — like the selectors below, a board is a
- * preference, not a fence: an `idle_agent_available` condition must not go
- * green on a pool the following action would refuse to draw from.
+ * Whether an agent may work a task of `boardId`. The board is a fence: a task
+ * is never handed to another board's agent, even one with the right role.
+ * A task with no board (legacy/agent-level) is not restricted.
  */
-export function hasIdleAgentWithRole(agents: Map<any, any>, role?: string): boolean {
+export function isOnTaskBoard(agent: any, boardId: string | null | undefined): boolean {
+  return !boardId || agent.boardId === boardId;
+}
+
+/**
+ * Whether at least one idle, enabled agent exists (optionally matching a role)
+ * on the task's board. Scoped like the selectors below, so an
+ * `idle_agent_available` condition never goes green on an agent the following
+ * action would refuse to draw from.
+ */
+export function hasIdleAgentWithRole(
+  agents: Map<any, any>,
+  role?: string,
+  boardId: string | null = null
+): boolean {
   for (const a of agents.values()) {
     if (
       a.status === 'idle' &&
       a.enabled !== false &&
       !isAgentBusy(a.id) &&
-      (!role || a.role === role)
+      (!role || a.role === role) &&
+      isOnTaskBoard(a, boardId)
     )
       return true;
   }
@@ -168,12 +182,8 @@ export function hasIdleAgentWithRole(agents: Map<any, any>, role?: string): bool
 
 /**
  * Narrow `pool` to the candidates matching `predicate`, keeping the whole pool
- * when none match.
- *
- * Board and project are *preferences*, not filters: a workflow may name a role
- * whose agents live on another board (the role pickers offer every role the
- * user has an agent for), and hard-filtering there would strand the task with
- * no agent at all rather than run it slightly off-home.
+ * when none match. Used for the project preference only — the board is a hard
+ * filter (see isOnTaskBoard).
  */
 function _preferOrFallback(
   pool: any[],
@@ -196,7 +206,7 @@ function _preferOrFallback(
  * @param {string} role            - required role
  * @param {string|null} ownerId    - only consider agents owned by this user (or unowned)
  * @param {Function} getAgentTasks - (agentId) => Task[]
- * @param {string|null} boardId    - board to prefer (not a filter — see _preferOrFallback)
+ * @param {string|null} boardId    - the task's board; only its agents are eligible
  * @returns {Object|null}          - the selected agent, or null
  */
 export function findAgentByRole(
@@ -209,17 +219,20 @@ export function findAgentByRole(
 ) {
   const allAgents = Array.from(agents.values()) as any[];
 
-  // Step 1: match role + owner filter. The board is applied later as a
-  // preference, so a role staffed only on another board still runs.
+  // Step 1: match role + owner + board. The board is a fence: another board's
+  // agent never picks up this task, even with the right role.
   const matching = allAgents.filter(
     (a: any) =>
       a.enabled !== false &&
       (a.role || '').toLowerCase() === role.toLowerCase() &&
-      (!ownerId || !a.ownerId || a.ownerId === ownerId)
+      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
+      isOnTaskBoard(a, boardId)
   );
 
   if (matching.length === 0) {
-    console.log(`[AgentSelector] No agents with role="${role}" ownerId="${ownerId}"`);
+    console.log(
+      `[AgentSelector] No agents with role="${role}" ownerId="${ownerId}" board="${boardId}"`
+    );
     return null;
   }
 
@@ -246,20 +259,12 @@ export function findAgentByRole(
     return null;
   }
 
-  // Step 3: prefer the task's own board, then — inside that pool — an agent
-  // already on the task's project, so we don't ship a bug about repo X to an
-  // agent that lives in repo Y when a same-project candidate is available.
-  // Both fall back to the wider pool: the caller's repo-switch logic
-  // (executeRunAgent / _resumeActiveTask) moves the picked agent to the task's
-  // repo before running.
+  // Step 3: prefer an agent already on the task's project, so we don't ship a
+  // bug about repo X to an agent that lives in repo Y when a same-project
+  // candidate is available. Falls back to the wider (same-board) pool: the
+  // caller's repo-switch logic (executeRunAgent / _resumeActiveTask) moves the
+  // picked agent to the task's repo before running.
   let eligible = eligibleAll;
-  if (boardId) {
-    eligible = _preferOrFallback(
-      eligible,
-      (a: any) => a.boardId === boardId,
-      `[AgentSelector] No idle role="${role}" agent on board="${boardId}" — reusing an idle agent from another board`
-    );
-  }
   if (taskProject) {
     eligible = _preferOrFallback(
       eligible,
@@ -318,22 +323,15 @@ export function findAgentForAssignment(
       (a.status === 'idle' || a.status === 'error') &&
       !isAgentBusy(a.id) &&
       (a.role || '').toLowerCase() === (role || '').toLowerCase() &&
-      (!ownerId || !a.ownerId || a.ownerId === ownerId)
+      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
+      isOnTaskBoard(a, boardId)
   );
 
   if (candidates.length === 0) return null;
 
-  // Same preference order as findAgentByRole: the task's board first, then the
-  // task's project — each falling back to the wider pool rather than returning
-  // nobody.
+  // Same rule as findAgentByRole: only the task's board, preferring the task's
+  // project and falling back to the rest of the board.
   let pool = candidates;
-  if (boardId) {
-    pool = _preferOrFallback(
-      pool,
-      (a: any) => a.boardId === boardId,
-      `[AgentSelector] assign: no role="${role}" agent on board="${boardId}" — falling back to any board`
-    );
-  }
   if (taskProject) {
     pool = _preferOrFallback(
       pool,

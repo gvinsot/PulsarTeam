@@ -199,7 +199,7 @@ export async function processColumnEntry(
           transition.conditions || [],
           task,
           agentId => agentManager.agents.get(agentId),
-          role => hasIdleAgentWithRole(agentManager.agents, role)
+          role => hasIdleAgentWithRole(agentManager.agents, role, task.boardId || null)
         );
         if (!allMet) {
           console.log(
@@ -464,7 +464,7 @@ function _recheckTask(
       transition.conditions || [],
       { ...task, agentId },
       id => agentManager.agents.get(id),
-      role => hasIdleAgentWithRole(agentManager.agents, role)
+      role => hasIdleAgentWithRole(agentManager.agents, role, task.boardId || null)
     );
     if (!allMet) continue;
 

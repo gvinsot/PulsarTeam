@@ -27,42 +27,32 @@ const ROLE_DESC_MAX_CHARS = 300;
  * role, with a short description sourced from one agent's instructions (used to
  * help the LLM disambiguate similarly-named roles).
  *
- * The board is a preference, not a filter (same rule as AgentSelector): route
- * within the board's own roles when it has any, otherwise offer every role the
- * owner has an agent for instead of failing the action outright.
+ * The board is a fence (same rule as AgentSelector): only roles staffed on the
+ * task's own board are offered — a task never routes to another board's agent.
  */
 function _collectAvailableRoles(
   agents: Map<any, any>,
   ownerId: string | null,
   boardId: string | null
 ) {
-  const roleMap = new Map<string, { agents: string[]; description: string; onBoard: boolean }>();
+  const roleMap = new Map<string, { agents: string[]; description: string }>();
   for (const a of agents.values()) {
     if (a.enabled === false) continue;
     if (ownerId && a.ownerId && a.ownerId !== ownerId) continue;
+    if (boardId && a.boardId !== boardId) continue;
     const role = (a.role || '').trim();
     if (!role) continue;
     let entry = roleMap.get(role);
     if (!entry) {
-      entry = { agents: [], description: '', onBoard: false };
+      entry = { agents: [], description: '' };
       roleMap.set(role, entry);
     }
     entry.agents.push(a.name || a.id);
-    if (boardId && a.boardId === boardId) entry.onBoard = true;
     if (!entry.description && a.instructions) {
       entry.description = String(a.instructions)
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, ROLE_DESC_MAX_CHARS);
-    }
-  }
-  if (boardId) {
-    const onBoard = new Map([...roleMap].filter(([, entry]) => entry.onBoard));
-    if (onBoard.size > 0) return onBoard;
-    if (roleMap.size > 0) {
-      console.warn(
-        `[RoleRouter] board="${boardId}" has no enabled agent — routing across every available role`
-      );
     }
   }
   return roleMap;
@@ -83,7 +73,7 @@ export async function resolveAutoRole(task: any, { agentManager, ownerId }: any)
 
   if (roles.length === 0) {
     throw new Error(
-      'Automatic role selection: no eligible agent role is available — add an agent (or check it is enabled) and retry.'
+      'Automatic role selection: no eligible agent role is available — add an agent to this board (or check it is enabled) and retry.'
     );
   }
   // Nothing to route when a single role exists — use it without an LLM call so

@@ -3,7 +3,8 @@ import { AUTO_ROLE, buildRoleOptions, type RoleAgent } from './workflowRoles';
 // Role dropdown shared by the workflow editor and the instructions modal.
 // It always receives the *unfiltered* agent list plus the edited board id:
 // roles backed by an agent on this board come first, roles that only exist on
-// other boards stay reachable in a second group.
+// other boards stay visible in a second group — but tasks are never handed to
+// another board's agent, so such a role only runs once this board staffs it.
 
 interface RoleSelectProps {
   /** Stored role, AUTO_ROLE, or absent when the action/condition has none. */
@@ -48,7 +49,7 @@ export default function RoleSelect({
         </option>
       ))}
       {otherRoles.length > 0 && (
-        <optgroup label="Agents on other boards">
+        <optgroup label="No agent on this board (won't run until one is added)">
           {otherRoles.map(r => (
             <option key={r} value={r}>
               {r}
