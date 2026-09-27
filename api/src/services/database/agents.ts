@@ -129,6 +129,24 @@ export async function getAgentById(id: string): Promise<Agent | null> {
   }
 }
 
+/**
+ * Runtime-only flags that describe an in-flight operation of THIS process.
+ * They must never reach the database: if the process dies mid-operation, a
+ * persisted `true` would be reloaded with nothing left to clear it (e.g. the
+ * "Switching repository…" overlay stuck forever after a deploy mid-clone).
+ */
+const TRANSIENT_AGENT_FIELDS = ['projectSwitching'] as const;
+
+/** JSON for the `data` column, without the runtime-only fields. */
+export function serializeAgentData(agent: PersistableAgent): string {
+  return JSON.stringify(agent, function (this: unknown, key: string, value: unknown) {
+    if (this === agent && (TRANSIENT_AGENT_FIELDS as readonly string[]).includes(key)) {
+      return undefined;
+    }
+    return value;
+  });
+}
+
 export async function saveAgent(agent: PersistableAgent) {
   const pool = getPool();
   if (!pool) return;
@@ -138,7 +156,7 @@ export async function saveAgent(agent: PersistableAgent) {
       `INSERT INTO agents (id, data, owner_id, board_id, updated_at)
        VALUES ($1, $2, $3, $4, NOW())
        ON CONFLICT (id) DO UPDATE SET data = $2, owner_id = $3, board_id = $4, updated_at = NOW()`,
-      [agent.id, JSON.stringify(agent), agent.ownerId || null, agent.boardId || null]
+      [agent.id, serializeAgentData(agent), agent.ownerId || null, agent.boardId || null]
     );
   } catch (err) {
     console.error('Failed to save agent:', errorMessage(err));

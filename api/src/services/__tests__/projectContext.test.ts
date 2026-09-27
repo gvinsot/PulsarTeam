@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { RunnerExecutionProvider } from '../execution/runnerExecutionProvider.js';
 import { conversationMethods } from '../agentManager/conversation.js';
 import { crudMethods } from '../agentManager/crud.js';
+import { serializeAgentData } from '../database/agents.js';
 
 test('detaching a repository reaches the runner and only commits state on success', async () => {
   const provider = new RunnerExecutionProvider({ baseUrl: 'http://runner', apiKey: 'test' });
@@ -93,4 +94,19 @@ test('manual and bulk switches await preparation and preserve history on failure
   assert.equal(agent.project, 'owner/b');
   assert.equal(agent.conversationHistory[0].content, 'work in B');
   assert.equal(agent.projectSwitching, false);
+});
+
+test('the in-flight projectSwitching flag is never persisted', () => {
+  const agent = {
+    id: 'a',
+    project: 'owner/a',
+    projectSwitching: true,
+    meta: { projectSwitching: 1 },
+  };
+  const data = JSON.parse(serializeAgentData(agent));
+  assert.equal('projectSwitching' in data, false);
+  assert.equal(data.project, 'owner/a');
+  // Only the top-level runtime flag is dropped, nested data is untouched.
+  assert.deepEqual(data.meta, { projectSwitching: 1 });
+  assert.equal(agent.projectSwitching, true);
 });

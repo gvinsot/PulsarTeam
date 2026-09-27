@@ -603,6 +603,9 @@ export class AgentManager {
         agent.ttsEnabled = agent.ttsEnabled || false;
         agent.projectContexts = agent.projectContexts || {};
         agent.runnerSessions = agent.runnerSessions || {};
+        // A switch interrupted by a restart never finished; older rows may
+        // still carry the flag from before it was excluded from persistence.
+        agent.projectSwitching = false;
         if (agent.projectChangedAt === undefined) {
           agent.projectChangedAt = agent.project
             ? agent.updatedAt || agent.createdAt || null
