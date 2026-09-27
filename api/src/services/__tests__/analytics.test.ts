@@ -67,8 +67,8 @@ test('every analytics query binds the window first, then the scope', async () =>
   await analytics.getTaskActivityTimeline(7, scope);
   await analytics.getTaskMixStats(7, scope);
   await analytics.getErrorStats(7, scope);
-  // board usage 1 + activity 1 + task mix 4 + errors 6
-  assert.equal(queries.length, 12);
+  // board usage 1 + activity 1 + task mix 6 + errors 6
+  assert.equal(queries.length, 14);
   for (const q of queries) {
     assert.deepEqual(q.params, [7, [BOARD], PROJECT], q.text);
     assert.match(q.text, /b\.project_id = \$3::uuid/);

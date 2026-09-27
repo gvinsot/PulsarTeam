@@ -57,6 +57,42 @@ const TABS: { key: Tab; label: string }[] = [
 
 const TAB_STORAGE_KEY = 'analytics.tab';
 
+/** Which tasks the "tasks by type" pie counts. */
+type TypeMix = 'created' | 'completed' | 'open' | 'all';
+
+const TYPE_MIX: { key: TypeMix; label: string }[] = [
+  { key: 'created', label: 'Created' },
+  { key: 'completed', label: 'Completed' },
+  { key: 'open', label: 'Open now' },
+  { key: 'all', label: 'All tasks' },
+];
+
+function typeMixBuckets(data: AnalyticsTasksResponse, mix: TypeMix): AnalyticsCountBucket[] {
+  switch (mix) {
+    case 'completed':
+      return data.completedByType;
+    case 'open':
+      return data.openByType || [];
+    case 'all':
+      return data.allByType || [];
+    default:
+      return data.byType;
+  }
+}
+
+function typeMixTitle(mix: TypeMix, days: number) {
+  switch (mix) {
+    case 'completed':
+      return `completed in the last ${days} days`;
+    case 'open':
+      return 'open right now';
+    case 'all':
+      return 'all tasks';
+    default:
+      return `created in the last ${days} days`;
+  }
+}
+
 function initialTab(): Tab {
   try {
     const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
@@ -168,6 +204,7 @@ export default function AnalyticsDashboard({
   const { theme } = useTheme() as { theme: string };
   const [tab, setTabRaw] = useState<Tab>(initialTab);
   const [days, setDays] = useState(30);
+  const [typeMix, setTypeMix] = useState<TypeMix>('created');
   const [boards, setBoards] = useState<AnalyticsBoardsResponse | null>(null);
   const [tasks, setTasks] = useState<AnalyticsTasksResponse | null>(null);
   const [errors, setErrors] = useState<AnalyticsErrorsResponse | null>(null);
@@ -451,7 +488,7 @@ export default function AnalyticsDashboard({
   };
 
   const renderProject = (data: AnalyticsTasksResponse) => {
-    const byType = orderByType(foldOther(data.byType));
+    const byType = orderByType(foldOther(typeMixBuckets(data, typeMix)));
     const completedTotal = data.completedByType.reduce((s, b) => s + b.count, 0);
     const openTotal = data.byStatus.filter(b => b.key !== 'done').reduce((s, b) => s + b.count, 0);
     const bugs = data.byType.find(b => b.key === 'bug')?.count || 0;
@@ -473,7 +510,23 @@ export default function AnalyticsDashboard({
           />
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card title={`🥧 Tasks by type — created in the last ${data.days} days`}>
+          <Card title={`🥧 Tasks by type — ${typeMixTitle(typeMix, data.days)}`}>
+            <div className="flex flex-wrap gap-1 mb-3" role="group" aria-label="Tasks counted">
+              {TYPE_MIX.map(m => (
+                <button
+                  key={m.key}
+                  onClick={() => setTypeMix(m.key)}
+                  aria-pressed={typeMix === m.key}
+                  className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                    typeMix === m.key
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
             {byType.length > 0 ? (
               <div className="flex flex-col sm:flex-row gap-4 items-center">
                 <div className="h-56 w-56 shrink-0">

@@ -216,6 +216,10 @@ export interface TaskMixStats {
   completedByType: CountBucket[];
   /** Current column of every live task (not windowed). */
   byStatus: CountBucket[];
+  /** Every live task that is not done yet, by task type (not windowed). */
+  openByType: CountBucket[];
+  /** Every live task, by task type (not windowed). */
+  allByType: CountBucket[];
   /** Tasks created within the window, by priority ('none' when unset). */
   byPriority: CountBucket[];
 }
@@ -233,6 +237,8 @@ export async function getTaskMixStats(days: number, scope: AnalyticsScope): Prom
     byType: [],
     completedByType: [],
     byStatus: [],
+    openByType: [],
+    allByType: [],
     byPriority: [],
   };
   if (!getPool()) return empty;
@@ -241,33 +247,46 @@ export async function getTaskMixStats(days: number, scope: AnalyticsScope): Prom
   const params = [days, ...filter.params];
   const windowed = (column: string) =>
     ` AND t.${column} >= NOW() - INTERVAL '1 day' * $1${filter.clause}`;
+  // Not windowed: the current board state. $1 is still bound (and unused) so
+  // the scope placeholders keep the same numbering as the windowed queries.
+  const current = ` AND $1::int IS NOT NULL${filter.clause}`;
+  const typeKey = `COALESCE(NULLIF(t.task_type, ''), 'untyped')`;
   try {
-    const [byType, completedByType, byStatus, byPriority] = await Promise.all([
-      countBy(
-        `SELECT COALESCE(NULLIF(t.task_type, ''), 'untyped') AS key, COUNT(*) AS count
+    const [byType, completedByType, byStatus, openByType, allByType, byPriority] =
+      await Promise.all([
+        countBy(
+          `SELECT COALESCE(NULLIF(t.task_type, ''), 'untyped') AS key, COUNT(*) AS count
          ${from}${windowed('created_at')} GROUP BY 1 ORDER BY 2 DESC`,
-        params
-      ),
-      countBy(
-        `SELECT COALESCE(NULLIF(t.task_type, ''), 'untyped') AS key, COUNT(*) AS count
+          params
+        ),
+        countBy(
+          `SELECT COALESCE(NULLIF(t.task_type, ''), 'untyped') AS key, COUNT(*) AS count
          ${from}${windowed('completed_at')} GROUP BY 1 ORDER BY 2 DESC`,
-        params
-      ),
-      // Not windowed: the current board state. $1 is still bound (and unused)
-      // so the scope placeholders keep the same numbering as the other three.
-      countBy(
-        `SELECT t.status AS key, COUNT(*) AS count
-         ${from} AND $1::int IS NOT NULL${filter.clause} GROUP BY 1 ORDER BY 2 DESC`,
-        params
-      ),
-      countBy(
-        `SELECT COALESCE(NULLIF(t.priority, ''), 'none') AS key, COUNT(*) AS count
+          params
+        ),
+        countBy(
+          `SELECT t.status AS key, COUNT(*) AS count
+         ${from}${current} GROUP BY 1 ORDER BY 2 DESC`,
+          params
+        ),
+        countBy(
+          `SELECT ${typeKey} AS key, COUNT(*) AS count
+         ${from} AND t.status <> 'done'${current} GROUP BY 1 ORDER BY 2 DESC`,
+          params
+        ),
+        countBy(
+          `SELECT ${typeKey} AS key, COUNT(*) AS count
+         ${from}${current} GROUP BY 1 ORDER BY 2 DESC`,
+          params
+        ),
+        countBy(
+          `SELECT COALESCE(NULLIF(t.priority, ''), 'none') AS key, COUNT(*) AS count
          ${from}${windowed('created_at')} GROUP BY 1 ORDER BY 2 DESC`,
-        params
-      ),
-    ]);
+          params
+        ),
+      ]);
     const total = byType.reduce((s, b) => s + b.count, 0);
-    return { total, byType, completedByType, byStatus, byPriority };
+    return { total, byType, completedByType, byStatus, openByType, allByType, byPriority };
   } catch (err) {
     console.error('Failed to get task mix stats:', errorMessage(err));
     return empty;

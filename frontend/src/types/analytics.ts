@@ -49,6 +49,10 @@ export interface AnalyticsTasksResponse {
   completedByType: AnalyticsCountBucket[];
   /** Current column of every live task — not windowed. */
   byStatus: AnalyticsCountBucket[];
+  /** Every live task not done yet, by type — not windowed. */
+  openByType: AnalyticsCountBucket[];
+  /** Every live task, by type — not windowed. */
+  allByType: AnalyticsCountBucket[];
   byPriority: AnalyticsCountBucket[];
 }
 
