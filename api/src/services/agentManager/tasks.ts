@@ -930,6 +930,11 @@ export const tasksMethods = {
     if (!requestedExecutor || !(await checkAgentAccess(requestedExecutor, user, 'edit')).ok) {
       throw new Error('Access denied to executor');
     }
+    // Access and board scope are distinct questions: being allowed to edit an
+    // agent does not let it run another board's task with its own repo/secrets.
+    if (isAssigneeOffBoard(requestedExecutor, task.boardId)) {
+      throw new Error(ASSIGNEE_BOARD_MISMATCH_ERROR);
+    }
     if (requestedExecutor.enabled === false) throw new Error('Executor is disabled');
     if (isTaskRunning(task.id) || isAgentBusy(requestedExecutorId)) {
       throw new Error('Agent or task is already processing another execution');

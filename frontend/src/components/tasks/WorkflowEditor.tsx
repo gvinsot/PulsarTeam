@@ -251,8 +251,11 @@ export default function WorkflowEditor({
   // here: role/agent pickers must offer everything the Agents view shows, with
   // the edited board's own agents surfaced first (see workflowRoles.ts).
   const enabledAgents = (agents || []).filter(a => a.enabled !== false);
-  const boardAgents = boardId ? enabledAgents.filter(a => a.boardId === boardId) : enabledAgents;
-  const otherAgents = boardId ? enabledAgents.filter(a => a.boardId !== boardId) : [];
+  // A task can only be assigned to an agent of its own board (or a board-less
+  // one) — the server skips any other target, so only offer those.
+  const boardAgents = boardId
+    ? enabledAgents.filter(a => !a.boardId || a.boardId === boardId)
+    : enabledAgents;
 
   const handleSave = async () => {
     setSaving(true);
@@ -658,15 +661,15 @@ export default function WorkflowEditor({
                                             {a.name}
                                           </option>
                                         ))}
-                                        {otherAgents.length > 0 && (
-                                          <optgroup label="Agents on other boards">
-                                            {otherAgents.map(a => (
-                                              <option key={a.id} value={a.id}>
-                                                {a.name}
+                                        {action.agentId &&
+                                          !boardAgents.some(a => a.id === action.agentId) && (
+                                            <optgroup label="Not on this board (won't run)">
+                                              <option value={action.agentId} disabled>
+                                                {enabledAgents.find(a => a.id === action.agentId)
+                                                  ?.name || action.agentId}
                                               </option>
-                                            ))}
-                                          </optgroup>
-                                        )}
+                                            </optgroup>
+                                          )}
                                       </select>
                                     )}
 

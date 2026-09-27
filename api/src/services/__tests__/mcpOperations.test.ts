@@ -12,6 +12,9 @@ const realDb = await import('../database.js');
 const realTasks = await import('../database/tasks.js');
 const { rows, exports: taskDb } = makeTaskDbFake();
 const BOARD = '11111111-1111-4111-8111-111111111111';
+// A second board Alice also owns: she may edit its agents, but they must still
+// never be handed (or run) a task of BOARD.
+const NEIGHBOR_BOARD = '22222222-2222-4222-8222-222222222222';
 const actor = { userId: 'alice', username: 'alice', role: 'advanced', csrf: '' };
 const initialWorkflow = () => ({
   version: 1,
@@ -39,7 +42,11 @@ const dbExports = {
   ...realDb,
   ...taskDb,
   getBoardById: async (id: string) =>
-    id === BOARD ? board : { id, user_id: 'bob', workflow: initialWorkflow() },
+    id === BOARD
+      ? board
+      : id === NEIGHBOR_BOARD
+        ? { id, user_id: 'alice', name: 'Neighbor', workflow: initialWorkflow() }
+        : { id, user_id: 'bob', workflow: initialWorkflow() },
   getBoardsByUser: async () => [board],
   getBoardShare: async () => null,
   getProjectById: async () => null,
@@ -115,6 +122,11 @@ function setup() {
       [
         'foreign-agent',
         { ...agent, id: 'foreign-agent', ownerId: 'bob', boardId: 'foreign-board' },
+      ],
+      ['neighbor', { ...agent, id: 'neighbor', name: 'Neighbor', boardId: NEIGHBOR_BOARD }],
+      [
+        'floating',
+        { ...agent, id: 'floating', name: 'Floating', boardId: null as unknown as string },
       ],
     ]),
     abortControllers: new Map([['agent', controller]]),
@@ -334,6 +346,47 @@ test('execution rejects foreign targets, completed tasks and busy agents without
     true
   );
   assert.equal(h.resume.mock.callCount(), 0);
+});
+
+test('delegate_task refuses an editable agent of another board and persists nothing', async t => {
+  const h = setup();
+  const client = await connect(h.management);
+  t.after(() => client.close());
+  rows.get('task').assignee = 'agent';
+  const res = await call(client, 'delegate_task', { task_id: 'task', agent_id: 'neighbor' });
+  assert.equal(res.error, true);
+  assert.match(JSON.stringify(res.body), /does not belong to this task's board/);
+  assert.equal(rows.get('task').assignee, 'agent');
+
+  // A board-less agent stays assignable (isAssigneeOffBoard exemption).
+  assert.ok(
+    !(await call(client, 'delegate_task', { task_id: 'task', agent_id: 'floating' })).error
+  );
+  assert.equal(rows.get('task').assignee, 'floating');
+});
+
+test('start_task / resume_task refuse an explicit executor from another board', async t => {
+  const h = setup();
+  const client = await connect(h.management);
+  t.after(() => client.close());
+  for (const name of ['start_task', 'resume_task']) {
+    const res = await call(client, name, {
+      task_id: 'task',
+      agent_id: 'neighbor',
+      status: 'doing',
+    });
+    assert.equal(res.error, true, name);
+    assert.match(JSON.stringify(res.body), /does not belong to this task's board/);
+  }
+  assert.equal(rows.get('task').status, 'backlog');
+  assert.equal(rows.get('task').assignee, undefined);
+  assert.equal(h.resume.mock.callCount(), 0);
+
+  // A task without a board may still run on any agent the caller can edit.
+  rows.set('loose', { ...rows.get('task'), id: 'loose', boardId: null, agentId: 'agent' });
+  await assert.doesNotReject(
+    h.manager.executeTask('neighbor', 'loose', null, actor, { executorId: 'neighbor' })
+  );
 });
 
 test('recurrence creation, editing, manual run and deletion preserve the schedule and past runs', async t => {

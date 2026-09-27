@@ -9,6 +9,11 @@
 //   3. PUT   /tasks/:id moving the task to another board whose first column has
 //      the SAME id as the current status (so no status change unassigns it).
 //
+//   4. The workflow action assign_agent_individual.
+//
+// The MCP paths (delegate_task, start_task/resume_task with agent_id) are
+// pinned in mcpOperations.test.ts, which has the MCP client harness.
+//
 // Only the DB and transport are faked; routes and mutators are the real ones.
 
 import test, { beforeEach, mock } from 'node:test';
@@ -25,6 +30,7 @@ const BOARD_B = '00000000-0000-4000-8000-00000000000b';
 const AGENT_A = '00000000-0000-4000-8000-0000000000a1';
 const AGENT_A2 = '00000000-0000-4000-8000-0000000000a2';
 const AGENT_B = '00000000-0000-4000-8000-0000000000b1';
+const AGENT_FREE = '00000000-0000-4000-8000-0000000000f1';
 const workflow = { columns: [{ id: 'backlog' }, { id: 'done' }] };
 const boards = new Map<string, any>([
   [BOARD_A, { id: BOARD_A, user_id: 'root', name: 'A', workflow }],
@@ -46,6 +52,7 @@ mock.module('../database.js', {
 const tasksRouter = (await import('../../routes/tasks.js')).default;
 const { agentRoutes } = await import('../../routes/agents.js');
 const { tasksMethods } = await import('../agentManager/tasks.js');
+const { executeAction } = await import('../workflow/actionExecutor.js');
 
 const admin: SessionClaims = { userId: 'root', username: 'root', role: 'admin', csrf: 'test' };
 
@@ -55,6 +62,7 @@ function makeManager() {
       [AGENT_A, { id: AGENT_A, name: 'A1', ownerId: 'root', boardId: BOARD_A }],
       [AGENT_A2, { id: AGENT_A2, name: 'A2', ownerId: 'root', boardId: BOARD_A }],
       [AGENT_B, { id: AGENT_B, name: 'B1', ownerId: 'root', boardId: BOARD_B }],
+      [AGENT_FREE, { id: AGENT_FREE, name: 'Free', ownerId: 'root', boardId: null }],
     ]),
     getTask: (id: string) => taskDb.getTaskById(id),
     saveTaskDirectly: (task: any) => taskDb.saveTaskToDb(task),
@@ -189,4 +197,42 @@ test('a board move that re-sends the current (old-board) assignee still drops it
   assert.equal(res.status, 200);
   assert.equal(rows.get('task').boardId, BOARD_B);
   assert.equal(rows.get('task').assignee, null);
+});
+
+// ── 4. Workflow assign_agent_individual ─────────────────────────────────────
+
+function assignIndividually(agentId: string, task: any) {
+  return executeAction({ type: 'assign_agent_individual', agentId } as any, task, {
+    agentManager: manager,
+    io: null as any,
+    ownerId: 'root',
+    workflow: workflow as any,
+  });
+}
+
+test('assign_agent_individual skips an agent of another board and persists nothing', async () => {
+  const task = { ...rows.get('task') };
+  const result = await assignIndividually(AGENT_B, task);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'agent-off-board');
+  assert.equal(task.assignee, AGENT_A);
+  assert.equal(rows.get('task').assignee, AGENT_A);
+});
+
+test('assign_agent_individual still accepts same-board and board-less agents', async () => {
+  const same = await assignIndividually(AGENT_A2, { ...rows.get('task') });
+  assert.equal(same.executed, true);
+  await new Promise(r => setImmediate(r));
+  assert.equal(rows.get('task').assignee, AGENT_A2);
+
+  const free = await assignIndividually(AGENT_FREE, { ...rows.get('task') });
+  assert.equal(free.executed, true);
+  await new Promise(r => setImmediate(r));
+  assert.equal(rows.get('task').assignee, AGENT_FREE);
+});
+
+test('assign_agent_individual on a board-less task accepts any agent', async () => {
+  rows.get('task').boardId = null;
+  const result = await assignIndividually(AGENT_B, { ...rows.get('task') });
+  assert.equal(result.executed, true);
 });

@@ -25,7 +25,11 @@ import {
   updateTaskFields,
 } from '../database/tasks.js';
 import { getReposForBoard } from '../database/boardRepos.js';
-import { emitTaskUpdated } from '../taskMutations.js';
+import {
+  emitTaskUpdated,
+  isAssigneeOffBoard,
+  ASSIGNEE_BOARD_MISMATCH_ERROR,
+} from '../taskMutations.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from '../mcpResponses.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { createMcpHttpHandler } from '../mcpHttpHandler.js';
@@ -166,6 +170,10 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
         const agent = agentManager.agents.get(agent_id);
         const reachable = await scopedAgent(actor, agent, 'edit');
         if (!reachable.ok) return reachable.error!;
+        // Access is not board scope: a task only goes to an agent of its board.
+        if (isAssigneeOffBoard(agent, allowed.value.boardId)) {
+          return jsonError(ASSIGNEE_BOARD_MISMATCH_ERROR);
+        }
       }
 
       const assignee = agent_id || null;

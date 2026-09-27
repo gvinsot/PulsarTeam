@@ -30,7 +30,12 @@ import {
   updateTaskFields,
   getTaskById,
 } from '../database.js';
-import { clearTaskErrorForRun, emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
+import {
+  clearTaskErrorForRun,
+  emitTaskUpdated,
+  isAssigneeOffBoard,
+  persistThenEmit,
+} from '../taskMutations.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { isValidRepoFullName } from '../taskRepos.js';
 import {
@@ -391,6 +396,14 @@ async function executeAssignAgentIndividual(
   { agentManager, io: _io }: ActionContext
 ): Promise<ActionResult> {
   const targetAgentId = action.agentId || null;
+  // Same hard rule as assign_agent's findAgentForAssignment: a workflow can
+  // only hand its task to an agent of the task's own board.
+  if (targetAgentId && isAssigneeOffBoard(agentManager.agents.get(targetAgentId), task.boardId)) {
+    console.warn(
+      `[ActionExecutor] assign_agent_individual: agent ${targetAgentId} is not on board ${task.boardId} — skipped`
+    );
+    return { executed: false, skipped: true, reason: 'agent-off-board' };
+  }
   const actualTask = task.agentId ? await getTaskById(task.id) : null;
   const mutable = actualTask || task; // board-level tasks: mutate the working copy
   const prev = mutable.assignee || null;
