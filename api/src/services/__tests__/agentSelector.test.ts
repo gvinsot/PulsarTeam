@@ -183,7 +183,10 @@ test('findAgentByRole never picks an agent from another board', () => {
     },
   ]);
 
-  assert.equal(findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target'), null);
+  assert.equal(
+    findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target'),
+    null
+  );
 });
 
 test('idle_agent_available and the selector agree on the board scope', () => {
