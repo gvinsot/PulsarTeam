@@ -15,6 +15,7 @@ import {
   getAgentById,
 } from '../services/database.js';
 import { isValidRepoFullName } from '../services/taskRepos.js';
+import { isAssigneeOffBoard, ASSIGNEE_BOARD_MISMATCH_ERROR } from '../services/taskMutations.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { requireRole, sessionUser } from '../middleware/auth.js';
 import { resolveSessionToken } from '../middleware/session.js';
@@ -899,6 +900,14 @@ export function agentRoutes(agentManager: AgentManager) {
           }
         }
       }
+      // Same-board invariant (every role): the transferred task keeps its board,
+      // so the target agent must belong to that board.
+      const targetAgent = agentManager.agents.get(targetAgentId);
+      const existing = targetAgent ? await agentManager.getTask(req.params.taskId) : null;
+      if (existing && isAssigneeOffBoard(targetAgent, existing.boardId)) {
+        res.status(400).json({ error: ASSIGNEE_BOARD_MISMATCH_ERROR });
+        return;
+      }
       const task = await agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
       if (!task) {
         res.status(404).json({ error: 'Agent or task not found' });
@@ -914,9 +923,19 @@ export function agentRoutes(agentManager: AgentManager) {
     asyncHandler(async (req, res) => {
       const { assigneeId } = req.body;
       // assigneeId can be null to unassign
-      if (assigneeId && !agentManager.agents.get(assigneeId)) {
+      const assignee = assigneeId ? agentManager.agents.get(assigneeId) : null;
+      if (assigneeId && !assignee) {
         res.status(404).json({ error: 'Assignee agent not found' });
         return;
+      }
+      // Same-board invariant (every role): `requireAgentEditAccess` only vets the
+      // agent in the path, never the one being assigned. Unassigning stays allowed.
+      if (assignee) {
+        const existing = await agentManager.getTask(req.params.taskId);
+        if (existing && isAssigneeOffBoard(assignee, existing.boardId)) {
+          res.status(400).json({ error: ASSIGNEE_BOARD_MISMATCH_ERROR });
+          return;
+        }
       }
       const task = await agentManager.setTaskAssignee(
         req.params.id,

@@ -18,7 +18,13 @@ import {
 import { buildRecurrenceConfig, nextRunAt } from '../services/taskRecurrence.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
-import { enrichAssignee, emitTaskUpdated, applyTaskMove } from '../services/taskMutations.js';
+import {
+  enrichAssignee,
+  emitTaskUpdated,
+  applyTaskMove,
+  isAssigneeOffBoard,
+  ASSIGNEE_BOARD_MISMATCH_ERROR,
+} from '../services/taskMutations.js';
 import { normalizeSecondaryRepos, isValidRepoFullName } from '../services/taskRepos.js';
 import { validateBody } from '../lib/validate.js';
 import { projectObject, projectionIncludesField, type FieldProjection } from '../lib/projection.js';
@@ -243,7 +249,8 @@ async function applyTaskFieldEdits(
   mgr: AgentManager,
   task: EditableTask,
   body: UpdateTaskBody,
-  user: SessionClaims
+  user: SessionClaims,
+  targetBoardId: string | null = task.boardId || null
 ) {
   const {
     title,
@@ -279,12 +286,10 @@ async function applyTaskFieldEdits(
       // A task may only be assigned to an agent linked to the SAME board —
       // this holds for every role, admins included, since it is a data
       // integrity rule, not a permission check (see checkBoardAccess below).
-      if (assignee.boardId && task.boardId && assignee.boardId !== task.boardId) {
-        return {
-          ok: false,
-          status: 400,
-          error: "Assignee agent does not belong to this task's board",
-        };
+      // Checked against the board the task is ENDING UP on, so a PUT that moves
+      // and reassigns in one go validates the new board, not the old one.
+      if (isAssigneeOffBoard(assignee, targetBoardId)) {
+        return { ok: false, status: 400, error: ASSIGNEE_BOARD_MISMATCH_ERROR };
       }
       if (user.role !== 'admin' && assignee.boardId) {
         const access = await checkBoardAccess(assignee.boardId, user.userId, user.role, 'edit');
@@ -698,7 +703,13 @@ router.put(
     }
 
     // ── Field-edit phase (plain editable attributes) ───────────────────────
-    const edits = await applyTaskFieldEdits(mgr, task, req.body, req.user);
+    const edits = await applyTaskFieldEdits(
+      mgr,
+      task,
+      req.body,
+      req.user,
+      targetBoard ? targetBoard.id : oldBoardId
+    );
     if (!edits.ok) return res.status(edits.status).json({ error: edits.error });
     const editedFields = edits.editedFields;
 

@@ -46,7 +46,13 @@ import {
   isUserStopError,
   reArmInterruptedChains,
 } from '../workflow/index.js';
-import { clearTaskErrorForRun, enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
+import {
+  clearTaskErrorForRun,
+  enrichAssignee,
+  emitTaskUpdated,
+  isAssigneeOffBoard,
+  ASSIGNEE_BOARD_MISMATCH_ERROR,
+} from '../taskMutations.js';
 import {
   snapshotGitBaseline,
   reconcileTaskCommits,
@@ -784,6 +790,10 @@ export const tasksMethods = {
     if (!agent) return null;
     const task = await getTaskById(taskId);
     if (!task) return null;
+    // Defense in depth behind the route check: never persist a cross-board assignee.
+    if (assigneeId && isAssigneeOffBoard(this.agents.get(assigneeId), task.boardId)) {
+      throw new Error(ASSIGNEE_BOARD_MISMATCH_ERROR);
+    }
     task.assignee = assigneeId;
     if (!task.history) task.history = [];
     task.history.push({
@@ -857,6 +867,10 @@ export const tasksMethods = {
     if (!fromAgent || !toAgent) return null;
     const taskToTransfer = await getTaskById(taskId);
     if (!taskToTransfer) return null;
+    // Checked BEFORE the delete below so a refused transfer never loses the task.
+    if (isAssigneeOffBoard(toAgent, taskToTransfer.boardId)) {
+      throw new Error(ASSIGNEE_BOARD_MISMATCH_ERROR);
+    }
     const prevStatus = taskToTransfer.status;
     await deleteTaskFromDb(taskId);
     this._emit('agent:updated', this._sanitize(fromAgent));

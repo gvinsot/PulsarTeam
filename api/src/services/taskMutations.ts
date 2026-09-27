@@ -12,6 +12,22 @@
 // is no in-memory task store.
 import { saveTaskToDb, updateTaskFields } from './database.js';
 
+/** Error surfaced when an assignee is linked to a different board than its task. */
+export const ASSIGNEE_BOARD_MISMATCH_ERROR = "Assignee agent does not belong to this task's board";
+
+/**
+ * True when `assignee` is linked to a board other than `taskBoardId`. A task may
+ * only be assigned to an agent of its OWN board — a data-integrity rule that
+ * holds for every role and every write path (PUT /tasks/:id, the agent-scoped
+ * assignee/transfer routes, board moves). Board-less agents or tasks are exempt.
+ */
+export function isAssigneeOffBoard(
+  assignee: { boardId?: string | null } | null | undefined,
+  taskBoardId: string | null | undefined
+): boolean {
+  return !!(assignee?.boardId && taskBoardId && assignee.boardId !== taskBoardId);
+}
+
 /** Attach assigneeName/assigneeIcon to a task IN PLACE, resolved from the agent
  * registry (null when unassigned or the agent is gone). Returns the task. */
 export function enrichAssignee(agentManager: any, task: any): any {
@@ -142,8 +158,10 @@ export function clearExecutionOnMove(
  * @param editedFields extra non-move field markers to fold into the history
  *   entry (PUT's field-edit phase). This array IS mutated: an `assignee` marker
  *   is appended when a status move unassigns, so the caller's audit log sees it.
- * @param unassignOnStatusChange drop the assignee when the status changes
- *   (default true; PUT passes false when the request explicitly sets `agentId`).
+ * @param unassignOnStatusChange drop the assignee when the status or board
+ *   changes (default true; PUT passes false when the request explicitly sets
+ *   `agentId`). An assignee from another board is dropped on a board move
+ *   regardless of this flag.
  * @param setTaskSignal injected `agentManager/tasks#setTaskSignal` used to raise
  *   the `stopped` flag on a status move. Injected (rather than imported) so this
  *   module stays free of the heavy agentManager import graph — importing it here
@@ -189,8 +207,17 @@ export async function applyTaskMove(
 
   // Unassign on a status move so a different column's owner doesn't inherit the
   // previous agent. (PUT suppresses this when the request explicitly reassigns.)
+  // A board move also drops the assignee: the old board's agent must never stay
+  // attached to a task living on another board — even when the target board's
+  // first column shares the current status id (so `statusChanged` is false), and
+  // even when the caller asked to keep it, if it does not belong to the new board.
   let previousAssignee: string | null = null;
-  if (statusChanged && unassignOnStatusChange && task.assignee) {
+  const moved = statusChanged || boardChanged;
+  const offBoard =
+    boardChanged &&
+    !!task.assignee &&
+    isAssigneeOffBoard(agentManager.agents?.get(task.assignee), task.boardId);
+  if (((moved && unassignOnStatusChange) || offBoard) && task.assignee) {
     previousAssignee = task.assignee;
     task.assignee = null;
     if (!editedFields.includes('assignee')) editedFields.push('assignee');
@@ -221,12 +248,12 @@ export async function applyTaskMove(
       historyEntry.fromBoardName = targetBoard?.oldName ?? null;
       historyEntry.toBoardName = targetBoard?.name ?? null;
     }
+    if (previousAssignee) {
+      historyEntry.previousAssignee = previousAssignee;
+      historyEntry.assignee = null;
+    }
     if (statusChanged) {
       historyEntry.from = oldStatus;
-      if (previousAssignee) {
-        historyEntry.previousAssignee = previousAssignee;
-        historyEntry.assignee = null;
-      }
       fields.push('status');
     }
     if (!task.history) task.history = [];
