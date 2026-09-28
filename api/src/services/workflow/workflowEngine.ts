@@ -443,9 +443,9 @@ function _recheckTask(
   // Environment isolation: ignore tasks tagged for another deployment.
   if (task.environment !== ownEnv) return;
 
-  const transitions =
-    boardTransMap.get(task.boardId) ||
-    (boardTransMap.size === 1 ? [...boardTransMap.values()][0] : []);
+  // Strictly per-board: a board with no on_enter/condition transitions is absent
+  // from the map, and its tasks must NOT borrow another board's transitions.
+  const transitions = boardTransMap.get(task.boardId) || [];
   const matching = transitions.filter(t => t.from === task.status);
   if (matching.length === 0) return;
 
@@ -527,9 +527,7 @@ function _recheckTask(
       `[WorkflowEngine] Condition met for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`
     );
 
-    const wf =
-      boardWorkflowMap.get(task.boardId) ||
-      (boardWorkflowMap.size === 1 ? [...boardWorkflowMap.values()][0] : null);
+    const wf = boardWorkflowMap.get(task.boardId) || null;
     const ownerId = wf?.userId || agent?.ownerId || null;
 
     _processingTasks.set(task.id, task.status);

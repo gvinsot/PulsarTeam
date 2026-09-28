@@ -485,7 +485,7 @@ test('single task flows through entire pipeline: todo → done', async () => {
   }
 });
 
-test('skipped decide action clears actionRunning before saving retry state', async () => {
+test('decide action without instructions errors the task instead of retrying forever', async () => {
   const restore = replaceWorkflow({
     columns: [
       { id: 'backlog', color: '#6b7280', label: 'Backlog' },
@@ -512,16 +512,58 @@ test('skipped decide action clears actionRunning before saving retry state', asy
     const started = Date.now();
     while (Date.now() - started < 1000) {
       final = taskRows.get(task.id);
-      if (final?._pendingOnEnter === 'code') break;
+      if (final?.status === 'error') break;
       await new Promise(r => setTimeout(r, 10));
     }
 
-    assert.equal(final?._pendingOnEnter, 'code');
-    assert.equal(final?.completedActionIdx, -1);
+    // A misconfigured action can never succeed on retry: surface it as an error
+    // (kept in its column via errorFromStatus) rather than arming on_enter again.
+    assert.equal(final?.status, 'error');
+    assert.equal(final?.errorFromStatus, 'code');
+    assert.notEqual(final?._pendingOnEnter, 'code');
     assert.equal(final?.actionRunning, false);
     assert.equal(final?.actionRunningAgentId ?? null, null);
     assert.equal(final?.actionRunningMode ?? null, null);
     assert.equal(final?.startedAt ?? null, null);
+  } finally {
+    restore();
+  }
+});
+
+test('change_status to a missing column errors the task instead of retrying forever', async () => {
+  const restore = replaceWorkflow({
+    columns: [
+      { id: 'backlog', color: '#6b7280', label: 'Backlog' },
+      { id: 'code', color: '#3b82f6', label: 'Code' },
+      { id: 'done', color: '#22c55e', label: 'Done' },
+    ],
+    transitions: [
+      {
+        from: 'code',
+        trigger: 'on_enter',
+        conditions: [],
+        actions: [{ type: 'change_status', target: 'nope' }],
+      },
+    ],
+  });
+
+  try {
+    const mgr = await setup([{ name: 'Architect', role: 'assistant' }]);
+    const { task, agentId } = createTask(mgr, 'Bad target');
+
+    await mgr.setTaskStatus(agentId, task.id, 'code', { by: 'user' });
+
+    let final = taskRows.get(task.id);
+    const started = Date.now();
+    while (Date.now() - started < 1000) {
+      final = taskRows.get(task.id);
+      if (final?.status === 'error') break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    assert.equal(final?.status, 'error');
+    assert.equal(final?.errorFromStatus, 'code');
+    assert.notEqual(final?._pendingOnEnter, 'code');
   } finally {
     restore();
   }

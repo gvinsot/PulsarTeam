@@ -170,7 +170,7 @@ export function hasIdleAgentWithRole(
       a.status === 'idle' &&
       a.enabled !== false &&
       !isAgentBusy(a.id) &&
-      (!role || a.role === role) &&
+      (!role || (a.role || '').toLowerCase() === role.toLowerCase()) &&
       isOnTaskBoard(a, boardId)
     )
       return true;

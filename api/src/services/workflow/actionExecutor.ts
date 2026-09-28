@@ -332,8 +332,14 @@ export async function executeAction(
       return executeRunAgent(action, task, context);
 
     default:
+      // A misconfigured workflow never heals by retrying — surface it as an
+      // error instead of flagging an endless on_enter retry.
       console.warn(`[ActionExecutor] Unknown action type: ${action.type}`);
-      return { executed: false, skipped: true, reason: `unknown-action-type: ${action.type}` };
+      return {
+        executed: false,
+        error: true,
+        message: `Workflow misconfigured: unknown action type "${action.type}"`,
+      };
   }
 }
 
@@ -451,19 +457,38 @@ async function executeChangeStatus(
       console.log(
         `[ActionExecutor] change_status: __next__ — no column after "${task.status}" — skipping`
       );
-      return { executed: false, skipped: true, reason: 'no-next-column' };
+      return {
+        executed: false,
+        error: true,
+        message: `Workflow misconfigured: change_status "__next__" has no column after "${task.status}"`,
+      };
     }
     target = cols[curIdx + 1].id;
   }
 
-  if (!target || target === task.status) {
-    return { executed: false, skipped: true, reason: 'same-status' };
+  if (!target) {
+    return {
+      executed: false,
+      error: true,
+      message: 'Workflow misconfigured: change_status action has no target column',
+    };
+  }
+
+  // Moving to the column the task is already in is a no-op — let the chain go on
+  // rather than flagging a retry that could never succeed.
+  if (target === task.status) {
+    console.log(`[ActionExecutor] change_status: task="${task.id}" already in "${target}" — no-op`);
+    return { executed: true };
   }
 
   // Validate target column exists
   if (!columnExists(workflow, target)) {
-    console.warn(`[ActionExecutor] change_status: target "${target}" does not exist — skipping`);
-    return { executed: false, skipped: true, reason: 'column-not-found' };
+    console.warn(`[ActionExecutor] change_status: target "${target}" does not exist`);
+    return {
+      executed: false,
+      error: true,
+      message: `Workflow misconfigured: change_status target column "${target}" does not exist`,
+    };
   }
 
   // Check if the real task is already at the target status (concurrent chain
@@ -898,7 +923,11 @@ async function executeRunAgent(
           break;
         default:
           console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
-          result = { executed: false, skipped: true, reason: `unknown-mode: ${mode}` };
+          result = {
+            executed: false,
+            error: true,
+            message: `Workflow misconfigured: unknown run_agent mode "${mode}"`,
+          };
       }
 
       return result;
@@ -1248,8 +1277,12 @@ async function _runDecideMode(
   { agentManager, io: _io, execStartMsgIdx, execStartedAt, gitBaselineHead = null }: ModeRunContext
 ): Promise<ActionResult> {
   if (!instructions) {
-    console.log(`[ActionExecutor] decide: no instructions — skipping`);
-    return { executed: false, skipped: true, reason: 'no-instructions' };
+    console.log(`[ActionExecutor] decide: no instructions — failing`);
+    return {
+      executed: false,
+      error: true,
+      message: 'Workflow misconfigured: decide action has no instructions',
+    };
   }
 
   const prompt = buildInstructionsPrompt(task, instructions, columns);
