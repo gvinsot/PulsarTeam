@@ -64,7 +64,7 @@ async def test_http_success_after_partial_write_and_transient_errors(monkeypatch
             response = await client.post('/terminal/sessions/retry-test/input',
                                          headers={'Authorization': 'Bearer test-only'},
                                          json={'input': prompt})
-    assert calls == 4
+    assert calls == 5  # partial + 2 retries + rest of paste, then Enter as its own write
     assert received == b'\x1b[200~' + prompt.encode() + b'\x1b[201~\r'
     assert response.status_code == 200
     assert response.json()['status'] == 'success'
@@ -195,3 +195,29 @@ async def test_real_nonblocking_pty_recovers_when_reader_drains(monkeypatch, cap
         await asyncio.gather(pending, return_exceptions=True)
         os.close(master)
         os.close(slave)
+
+
+@pytest.mark.asyncio
+async def test_non_codex_submit_is_a_separate_keystroke_after_paste(monkeypatch):
+    """Enter glued to the paste-end marker is swallowed by the TUI's paste burst."""
+    s = pty_session.PtySession(agent_id='submit-test', cmd=['claude'], cwd='/tmp', env={})
+    monkeypatch.setattr(s, 'is_alive', lambda: True)
+    monkeypatch.setattr(s, 'wait_until_input_ready', lambda timeout: _true())
+    monkeypatch.setenv('TERMINAL_SUBMIT_DELAY_SEC', '0.01')
+    writes = []
+
+    async def fake_write(data):
+        writes.append(data)
+        return True
+
+    monkeypatch.setattr(s, '_write_input', fake_write)
+    await s.send_input('[SYSTEM REMINDER] finish')
+    assert writes == [b'\x1b[200~[SYSTEM REMINDER] finish\x1b[201~', b'\r']
+
+    writes.clear()
+    await s.send_input('draft only', submit=False)
+    assert writes == [b'\x1b[200~draft only\x1b[201~']
+
+
+async def _true():
+    return True

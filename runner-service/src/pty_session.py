@@ -1624,10 +1624,20 @@ class PtySession:
             payload = text.encode("utf-8", errors="replace")
             if bracketed_paste:
                 payload = b"\x1b[200~" + payload + b"\x1b[201~"
-            if submit and not codex:
-                payload += b"\r"
             if not await self._write_input(payload):
                 raise OSError("Terminal input could not be fully written")
+            if submit and not codex:
+                # Enter must be a separate keystroke AFTER the TUI has consumed
+                # the paste: a `\r` glued to the paste-end marker in the same
+                # PTY chunk is swallowed as part of the paste burst by Claude
+                # Code & co., leaving the prompt (e.g. a [SYSTEM REMINDER])
+                # sitting unsent in the input box.
+                delay = float(os.getenv("TERMINAL_SUBMIT_DELAY_SEC", "0.3"))
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                self._check_input_epoch(epoch)
+                if not await self._write_input(b"\r"):
+                    raise OSError("Terminal submit could not be written")
             if submit and codex:
                 draft = await self._wait_for_codex_paste(text, epoch)
                 await asyncio.sleep(0.2)
