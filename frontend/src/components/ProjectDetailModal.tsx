@@ -4,7 +4,6 @@ import {
   X,
   Users,
   FolderGit2,
-  BarChart3,
   FileText,
   Save,
   Loader2,
@@ -16,7 +15,6 @@ import {
   ExternalLink,
   GitCommit,
 } from 'lucide-react';
-import ProjectStats from './ProjectStats';
 import GitHubActivityModal from './GitHubActivityModal';
 import { api } from '../api';
 import { useEscapeKey, useBodyScrollLock } from '../hooks/useDismiss';
@@ -29,7 +27,6 @@ const TABS = [
   { id: 'repos', label: 'Repos', icon: GitBranch },
   { id: 'storage', label: 'Storage', icon: Cloud },
   { id: 'context', label: 'Context', icon: FileText },
-  { id: 'statistics', label: 'Statistics', icon: BarChart3 },
 ];
 
 interface ProjectDetailModalProps {
@@ -142,7 +139,6 @@ export default function ProjectDetailModal({
               {activeTab === 'repos' && <ReposTab project={project} />}
               {activeTab === 'storage' && <StoragesTab project={project} />}
               {activeTab === 'context' && <ContextTab project={project} onSaved={handleChanged} />}
-              {activeTab === 'statistics' && <StatisticsTab project={project} />}
             </>
           )}
         </div>
@@ -502,11 +498,6 @@ function ContextTab({ project, onSaved }: { project: ProjectDetail; onSaved?: ()
       </div>
     </div>
   );
-}
-
-/* ── Statistics ───────────────────────────────────────────────────────────── */
-function StatisticsTab({ project }: { project: ProjectDetail }) {
-  return <ProjectStats projectName={project.name} />;
 }
 
 /* ── Shared subcomponents ─────────────────────────────────────────────────── */

@@ -34,6 +34,7 @@ import type {
 } from '../types';
 
 const BudgetDashboard = lazy(() => import('./BudgetDashboard'));
+const ProjectStats = lazy(() => import('./ProjectStats'));
 
 ChartJS.register(
   CategoryScale,
@@ -46,10 +47,11 @@ ChartJS.register(
   Legend
 );
 
-type Tab = 'budget' | 'boards' | 'project' | 'errors';
+type Tab = 'budget' | 'stats' | 'boards' | 'project' | 'errors';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'budget', label: '💰 Budget' },
+  { key: 'stats', label: '📈 Statistics' },
   { key: 'boards', label: '📋 Board usage' },
   { key: 'project', label: '🥧 Project tasks' },
   { key: 'errors', label: '🚨 Errors' },
@@ -224,7 +226,8 @@ export default function AnalyticsDashboard({
   };
 
   const load = useCallback(async () => {
-    if (tab === 'budget') return;
+    // Budget and Statistics load their own data.
+    if (tab === 'budget' || tab === 'stats') return;
     const generation = ++generationRef.current;
     setLoading(true);
     setLoadError(null);
@@ -773,11 +776,11 @@ export default function AnalyticsDashboard({
         <div>
           <h1 className="text-2xl font-bold text-dark-100">📊 Analytics</h1>
           <p className="text-sm text-dark-400 mt-1">
-            Spend, board usage, project tasks &amp; errors ·{' '}
+            Spend, statistics, board usage, project tasks &amp; errors ·{' '}
             <span className="text-dark-300">{scopeLabel}</span>
           </p>
         </div>
-        {tab !== 'budget' && (
+        {tab !== 'budget' && tab !== 'stats' && (
           <div className="flex items-center gap-3">
             <select
               value={days}
@@ -829,6 +832,18 @@ export default function AnalyticsDashboard({
             projects={projects}
           />
         </Suspense>
+      ) : tab === 'stats' ? (
+        <div className="p-6">
+          {projectId && projectName ? (
+            <Suspense fallback={<div className="text-dark-400">Loading…</div>}>
+              <ProjectStats key={projectName} projectName={projectName} />
+            </Suspense>
+          ) : (
+            <div className="px-4 py-3 rounded-lg text-sm bg-dark-800 text-dark-300 border border-dark-700">
+              Select a project in the header to see its statistics.
+            </div>
+          )}
+        </div>
       ) : (
         <div className="p-6 space-y-4">
           {loadError && (
