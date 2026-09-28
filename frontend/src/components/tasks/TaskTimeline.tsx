@@ -173,6 +173,19 @@ export default function TaskTimeline({
                           <span className="text-dark-500 truncate">by {item.h.by}</span>
                         )}
                       </>
+                    ) : item.h.type === 'comment' ? (
+                      <>
+                        <MessageSquare className="w-2.5 h-2.5 text-emerald-400 flex-shrink-0" />
+                        <span className="text-emerald-300 font-medium">commented</span>
+                        {item.h.by && (
+                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                        )}
+                        {typeof item.h.newValue === 'string' && (
+                          <span className="text-dark-400 truncate" title={item.h.newValue}>
+                            {item.h.newValue.slice(0, 80)}
+                          </span>
+                        )}
+                      </>
                     ) : item.h.type === 'reassign' ? (
                       <>
                         <User className="w-2.5 h-2.5 text-indigo-400 flex-shrink-0" />

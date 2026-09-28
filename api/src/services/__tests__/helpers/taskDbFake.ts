@@ -49,6 +49,21 @@ export function makeTaskDbFake() {
       Object.assign(t, fields, { updatedAt: new Date().toISOString() });
       return clone(t);
     },
+    // Mirrors the atomic comment accessors: only `comments` is touched.
+    appendTaskComment: async (id: string, comment: any) => {
+      const t = rows.get(id);
+      if (!live(t)) return null;
+      t.comments = [...(Array.isArray(t.comments) ? t.comments : []), comment];
+      t.updatedAt = new Date().toISOString();
+      return clone(t);
+    },
+    deleteTaskComment: async (id: string, commentId: string) => {
+      const t = rows.get(id);
+      if (!live(t) || !(t.comments || []).some((c: any) => c.id === commentId)) return null;
+      t.comments = t.comments.filter((c: any) => c.id !== commentId);
+      t.updatedAt = new Date().toISOString();
+      return clone(t);
+    },
     updateTaskExecutionStatus: async (id: string, status: any) => {
       const t = rows.get(id);
       if (t) t.executionStatus = status || null;
@@ -173,9 +188,7 @@ export function makeTaskDbFake() {
       { retentionDays, keepLast }: { retentionDays?: number | null; keepLast?: number | null } = {}
     ) => {
       const finished = all()
-        .filter(
-          t => live(t) && t.templateId === templateId && ['done', 'error'].includes(t.status)
-        )
+        .filter(t => live(t) && t.templateId === templateId && ['done', 'error'].includes(t.status))
         .sort((a, b) => (b.occurrenceSeq || 0) - (a.occurrenceSeq || 0));
       const cutoff = retentionDays ? Date.now() - retentionDays * 86400000 : null;
       const doomed = finished.filter((t, index) => {

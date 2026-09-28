@@ -10,7 +10,10 @@
 // registry (assignee enrichment), emit over the WS layer, and (for the persist
 // variants) hit the DB accessors. The DB is the single source of truth — there
 // is no in-memory task store.
-import { saveTaskToDb, updateTaskFields } from './database.js';
+import { saveTaskToDb, updateTaskFields, appendTaskComment } from './database.js';
+import { recordTaskComment, type TaskComment, type TaskCommentInput } from '../lib/taskComments.js';
+
+export { recordTaskComment };
 
 /** Error surfaced when an assignee is linked to a different board than its task. */
 export const ASSIGNEE_BOARD_MISMATCH_ERROR = "Assignee agent does not belong to this task's board";
@@ -274,4 +277,25 @@ export async function applyTaskMove(
   }
 
   return { statusChanged, boardChanged, historyEntry, previousAssignee };
+}
+
+// ─── Comments ────────────────────────────────────────────────────────────────
+// A task's comment thread is separate from its description (lib/taskComments.ts).
+
+/**
+ * Add a comment and persist it: atomic append on `comments`, the history entry,
+ * then emit task:updated. Shared by REST (POST /tasks/:id/comments) and the MCP
+ * tools. Returns the comment and the re-read task, or null for a blank body.
+ */
+export async function addTaskComment(
+  agentManager: any,
+  task: any,
+  input: TaskCommentInput
+): Promise<{ comment: TaskComment; task: any } | null> {
+  const comment = recordTaskComment(task, input);
+  if (!comment) return null;
+  await appendTaskComment(task.id, comment);
+  const updated = (await updateTaskFields(task.id, { history: task.history })) || task;
+  emitTaskUpdated(agentManager, updated, { emitAgent: false });
+  return { comment, task: updated };
 }

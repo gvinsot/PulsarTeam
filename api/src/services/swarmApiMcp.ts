@@ -3,14 +3,19 @@ import { z } from 'zod';
 import { getAllBoards, getBoardById, searchTasks } from './database.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { getTaskByIdPrefix, getTasksByAgent } from './database/tasks.js';
-import { emitTaskUpdated, clearExecutionOnMove } from './taskMutations.js';
+import { emitTaskUpdated, clearExecutionOnMove, addTaskComment } from './taskMutations.js';
 import { getReposForBoard } from './database/boardRepos.js';
 import { resolveWorkflowStatus } from './workflow/columnIds.js';
 import { normalizeRepoFullName, normalizeStoragePath } from './taskRepos.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 import type { AgentManager } from './agentManager/index.js';
 import { getAgentBoardScope, agentsVisibleTo } from '../lib/agentScope.js';
-import { isExternalTask, listingTaskText, listingTaskTitle } from '../lib/taskTrust.js';
+import {
+  isExternalTask,
+  listingTaskText,
+  listingTaskTitle,
+  listingTaskComments,
+} from '../lib/taskTrust.js';
 
 /**
  * The tenant an MCP call runs in, from the authorized X-Agent-Id.
@@ -334,25 +339,14 @@ export async function applyTaskUpdate(
       });
       completed = Boolean(outcome?.isTerminal);
     } else if (comment && comment.trim()) {
-      // Board-level task: append the summary as a note + persist (no agent /
-      // no execute wait to signal). Mirrors appendTaskNote's card format.
-      const now = new Date().toISOString();
-      const actorName = callerAgent?.name || 'mcp';
-      const detailBlock = `**[${actorName}]** ${comment.trim()}`;
-      task.text = (task.text || '') + '\n\n---\n' + detailBlock;
-      if (!task.history) task.history = [];
-      task.history.push({
-        status: task.status,
-        at: now,
-        by: actorName,
-        type: 'edit',
-        field: 'text',
-        oldValue: null,
-        newValue: detailBlock,
+      // Board-level task: append the summary to the comment thread + persist
+      // (no agent / no execute wait to signal).
+      await addTaskComment(agentManager, task, {
+        author: callerAgent?.name || 'mcp',
+        authorType: callerAgent ? 'agent' : 'system',
+        authorId: callerAgent?.id ?? null,
+        text: comment,
       });
-      task.updatedAt = now;
-      await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
-      agentManager._emit('task:updated', { agentId: task.agentId || null, task });
       completed = true;
     }
   }
@@ -720,6 +714,59 @@ export function createSwarmApiMcpServer(
     }
   );
 
+  // ── add_task_comment / get_task_comments ─────────────────────────────────
+  // The comment thread is separate from the task description: use it for
+  // remarks, questions, review feedback or progress notes. Unlike update_task's
+  // `comment`, adding a comment here does NOT finish the task.
+  async function scopedTaskForComments(task_id: string) {
+    const task: any = await getTaskByIdPrefix(task_id);
+    if (!task || task.isTemplate) return { error: `Task "${task_id}" not found.` };
+    const scope = await callerScope(agentManager, callerAgentId);
+    if (scope && !(task.boardId && scope.boardIds.has(task.boardId))) {
+      return { error: `Task "${task_id}" not found.` };
+    }
+    return { task };
+  }
+
+  server.tool(
+    'add_task_comment',
+    "Add a comment to a task's comment thread. Comments are kept separate from the task description (which describes the work): use them for remarks, questions, review feedback or progress notes. Does NOT move or finish the task — use update_task for that.",
+    {
+      task_id: z.string().describe('Task UUID (a unique id prefix also works)'),
+      text: z.string().min(1).describe('Comment body (Markdown).'),
+    },
+    async ({ task_id, text }) => {
+      const found = await scopedTaskForComments(task_id);
+      if (found.error) return jsonError(found.error);
+      const caller: any = callerAgentId ? agentManager.agents.get(callerAgentId) : null;
+      const added = await addTaskComment(agentManager, found.task, {
+        author: caller?.name || 'mcp',
+        authorType: caller ? 'agent' : 'system',
+        authorId: caller?.id ?? null,
+        text,
+      });
+      if (!added) return jsonError('Comment text is empty.');
+      return jsonOk({ success: true, task_id: found.task.id, comment: added.comment });
+    }
+  );
+
+  server.tool(
+    'get_task_comments',
+    "Read a task's description and its comment thread (oldest first), kept as separate fields.",
+    { task_id: z.string().describe('Task UUID (a unique id prefix also works)') },
+    async ({ task_id }) => {
+      const found = await scopedTaskForComments(task_id);
+      if (found.error) return jsonError(found.error);
+      const t = found.task;
+      return jsonOk({
+        task_id: t.id,
+        title: listingTaskTitle(t),
+        description: listingTaskText(t),
+        comments: listingTaskComments(t),
+      });
+    }
+  );
+
   // ── search_tasks ────────────────────────────────────────────────────────
   server.tool(
     'search_tasks',
@@ -845,6 +892,7 @@ export function createSwarmApiMcpServer(
         storage_path: t.storagePath || null,
         commit_count: Array.isArray(t.commits) ? t.commits.length : 0,
         history_count: Array.isArray(t.history) ? t.history.length : 0,
+        comment_count: Array.isArray(t.comments) ? t.comments.length : 0,
         error: t.error || null,
         created_at: t.createdAt,
         started_at: t.startedAt || null,

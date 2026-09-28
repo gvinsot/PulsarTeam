@@ -30,6 +30,7 @@ import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, buildRecurrence } from './taskC
 import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
+import TaskComments from './TaskComments';
 import ExternalTaskPanel from './ExternalTaskPanel';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
@@ -514,7 +515,7 @@ export default function TaskDetailModal({
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-semibold text-dark-400 uppercase tracking-wide">
-                  Task
+                  Description
                 </span>
                 {!editing && (
                   <div className="flex items-center gap-2">
@@ -746,6 +747,13 @@ export default function TaskDetailModal({
                   <p className="text-xs font-semibold text-red-400 mb-0.5">Error</p>
                   <p className="text-xs text-red-300/80 leading-relaxed">{task.error}</p>
                 </div>
+              </div>
+            )}
+
+            {/* Comment thread — separate from the description above */}
+            {task.id && (
+              <div className="pt-4 border-t border-dark-700">
+                <TaskComments taskId={task.id} comments={task.comments} onChanged={onRefresh} />
               </div>
             )}
 

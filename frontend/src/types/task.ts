@@ -107,7 +107,10 @@ export type TaskHistoryEntryType =
   | 'board_move'
   | 'workflow_column_rename'
   // POST /api/tasks/:id/approve — a person let agents work on an external task.
-  | 'trust_approved';
+  | 'trust_approved'
+  // A comment was added to the thread (api/src/services/taskMutations.ts
+  // recordTaskComment). `newValue` carries a preview, `commentId` the comment.
+  | 'comment';
 
 /**
  * One git commit linked to a task, as pushed into task.commits.
@@ -127,6 +130,28 @@ export interface TaskCommit {
    *  reconcile path supplied it. TaskTimeline correctly tests `=== false`
    *  rather than falsiness. */
   pushed?: boolean;
+}
+
+/** Who wrote a TaskComment. */
+export type TaskCommentAuthorType = 'agent' | 'user' | 'system';
+
+/**
+ * One entry of task.comments — the discussion thread kept SEPARATE from the
+ * description (`text`). Produced by api/src/lib/taskComments.ts
+ * createTaskComment; agents write one through update_task's `comment`, users
+ * through POST /api/tasks/:id/comments.
+ */
+export interface TaskComment {
+  id: string;
+  /** Agent name or username. */
+  author: string;
+  authorType: TaskCommentAuthorType;
+  /** Agent id or user id when known. */
+  authorId?: string | null;
+  /** Markdown body. */
+  text: string;
+  /** ISO 8601. */
+  at: string;
 }
 
 /**
@@ -289,6 +314,8 @@ export interface TaskHistoryEntry {
    *  treat the elements as objects with .field/.oldValue/.newValue — that is the
    *  bug this type exists to surface. */
   fields?: string[];
+  /** 'comment' entries only: the id of the TaskComment added. */
+  commentId?: string;
   /** Only set (to literal true) on POST /tasks/bulk-move. */
   bulk?: boolean;
   // 'board_move', HTTP producer (api/src/services/taskMutations.ts:208-211).
@@ -388,6 +415,8 @@ export interface Task {
   commits: TaskCommit[];
   /** `row.history || []` — always an array. */
   history: TaskHistoryEntry[];
+  /** Comment thread, oldest first — always an array (normalizeComments). */
+  comments: TaskComment[];
   /** Free-text message set by markTaskError. */
   error?: string;
   /** ISO 8601. The DDL has no NOT NULL, but the INSERT always writes NOW(). */

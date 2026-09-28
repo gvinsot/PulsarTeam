@@ -147,6 +147,7 @@ const TABLES = [
       recurrence JSONB,
       commits JSONB DEFAULT '[]',
       history JSONB DEFAULT '[]',
+      comments JSONB DEFAULT '[]',
       error TEXT,
       error_from_status TEXT,
       execution_status TEXT,

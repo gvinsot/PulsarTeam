@@ -20,6 +20,7 @@
 //      text to a model as delimited DATA (`wrapUntrusted`).
 
 import crypto from 'crypto';
+import { normalizeComments, type TaskComment } from './taskComments.js';
 
 export type TaskTrustLevel = 'untrusted' | 'approved';
 
@@ -227,12 +228,53 @@ export function wrapUntrusted(content: string, label: string, external = false):
  * embeds a task's text goes through here, so the delimiting is uniform.
  */
 export function taskContentForPrompt(
-  task: TrustCarrier & { text?: string | null },
+  task: TrustCarrier & { text?: string | null; comments?: TaskComment[] | null },
   maxLen?: number
 ): string {
   const text = String(task.text || '');
   const body = maxLen && text.length > maxLen ? text.slice(0, maxLen) : text;
-  return wrapUntrusted(body, 'task_content', isExternalTask(task));
+  const external = isExternalTask(task);
+  const description = wrapUntrusted(body, 'task_content', external);
+  const comments = commentsForPrompt(task.comments, external);
+  return comments ? `${description}\n\n${comments}` : description;
+}
+
+/**
+ * A task's comment thread (lib/taskComments.ts), ready for a prompt: a separate
+ * delimited block, newest last, so the model can tell the description of the
+ * work from the discussion about it. Empty string when there are no comments.
+ * Only the most recent `maxComments` are included, each truncated to `maxLen`.
+ */
+export function commentsForPrompt(
+  comments: TaskComment[] | null | undefined,
+  external = false,
+  { maxComments = 20, maxLen = 2000 }: { maxComments?: number; maxLen?: number } = {}
+): string {
+  const list = normalizeComments(comments);
+  if (!list.length) return '';
+  const recent = list.slice(-maxComments);
+  const omitted = list.length - recent.length;
+  const body = recent
+    .map(c => {
+      const t = c.text.length > maxLen ? `${c.text.slice(0, maxLen)}…` : c.text;
+      return `[${String(c.at || '')
+        .slice(0, 16)
+        .replace('T', ' ')}] ${c.author} (${c.authorType}):\n${t}`;
+    })
+    .join('\n\n');
+  const header = `Comments on this task (oldest first${omitted ? `, ${omitted} older omitted` : ''}):`;
+  return `${header}\n${wrapUntrusted(body, 'task_comments', external)}`;
+}
+
+/**
+ * Comments as an agent may read them through a LISTING / tool result. External
+ * tasks withhold them, same rule as listingTaskText.
+ */
+export function listingTaskComments(
+  task: TrustCarrier & { comments?: TaskComment[] | null }
+): TaskComment[] {
+  if (isExternalTask(task)) return [];
+  return normalizeComments(task.comments);
 }
 
 /**

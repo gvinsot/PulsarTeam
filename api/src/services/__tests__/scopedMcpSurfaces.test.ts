@@ -620,6 +620,8 @@ test('the management surface exposes no agent, board, project or workflow mutati
       'restore_task',
       'search_tasks',
       'update_task',
+      'add_task_comment',
+      'delete_task_comment',
     ].sort(),
     'a management key must not be able to reshape the instance that runs its tasks'
   );

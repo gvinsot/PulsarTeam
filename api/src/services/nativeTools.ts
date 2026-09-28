@@ -100,7 +100,9 @@ export const NATIVE_TOOL_DEFINITIONS: NativeToolDefinition[] = [
       {
         task_id: string('Task ID.'),
         status: string('Target workflow column ID.'),
-        comment: string('Completion summary appended to the task.'),
+        comment: string(
+          "Completion summary, added to the task's comment thread (kept separate from the description)."
+        ),
         commits: string('Optional pushed commits, formatted as hash:message entries.'),
       },
       ['task_id']

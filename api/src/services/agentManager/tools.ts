@@ -5,6 +5,7 @@ import { buildRepoCloneUrl } from '../repoUrl.js';
 import {
   saveAgent,
   updateTaskFields,
+  appendTaskComment,
   getTaskByIdPrefix,
   getTaskByActionRunningAgent,
   getTasksByAssignee,
@@ -122,13 +123,14 @@ export const toolsMethods = {
       setTaskSignal(inProgressTask.id, 'comment', comment);
     }
 
-    // Append the completion comment to the task description, same convention as
-    // update_task's task move. This makes the agent's summary visible
-    // on the task itself (kanban card) instead of being only relayed to the leader.
+    // Record the completion comment in the task's comment thread (separate
+    // from the description). This makes the agent's summary visible on the
+    // task itself instead of being only relayed to the leader.
     // stampUpdatedAt=true: no setTaskStatus follows here (unlike update_task).
-    if (comment && comment.trim()) {
-      appendTaskNote(inProgressTask, agent.name, comment, true);
-    }
+    const newComment =
+      comment && comment.trim()
+        ? appendTaskNote(inProgressTask, agent.name, comment, true, { authorId: agentId })
+        : null;
 
     // ownerAgentId was captured while resolving inProgressTask above.
 
@@ -170,17 +172,18 @@ export const toolsMethods = {
     const ownerAgent = this.agents.get(ownerAgentId);
     if (ownerAgent) saveAgent(ownerAgent);
 
-    // Persist the description change (text + history) so the appended comment
+    // Persist the new comment (+ its history entry) so it
     // survives a restart and is visible to other clients in real time. Without
     // this, the mutation lives only in memory until the workflow engine later
     // calls setTaskStatus — and if that step is skipped/delayed, the comment
     // would never reach the DB.
-    if (comment && comment.trim()) {
+    if (newComment) {
       try {
-        // Persist only the comment fields: the task snapshot predates commit
-        // linking, so saving it wholesale would erase the newly linked commits.
+        // Persist only the comment + its history entry: the task snapshot
+        // predates commit linking, so saving it wholesale would erase the newly
+        // linked commits. The comment is appended atomically.
+        await appendTaskComment(inProgressTask.id, newComment);
         const updated = await updateTaskFields(inProgressTask.id, {
-          text: inProgressTask.text,
           history: inProgressTask.history,
         });
         if (updated) inProgressTask = updated;

@@ -63,7 +63,12 @@ export const updateTemplateSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       period: z.string().max(50).optional(),
-      intervalMinutes: z.number().int().min(1).max(60 * 24 * 365).optional(),
+      intervalMinutes: z
+        .number()
+        .int()
+        .min(1)
+        .max(60 * 24 * 365)
+        .optional(),
       originalStatus: optionalString(100),
       historyRetentionDays: z.number().int().min(0).max(3650).nullable().optional(),
       keepLastOccurrences: z.number().int().min(0).max(1000).nullable().optional(),
@@ -82,4 +87,9 @@ export const bulkMoveSchema = z.object({
 
 export const idParamsSchema = z.object({
   id: z.string().uuid(),
+});
+
+/** Body of POST /tasks/:id/comments — one comment on the task's thread. */
+export const addTaskCommentSchema = z.object({
+  text: z.string().trim().min(1).max(20000),
 });

@@ -151,6 +151,8 @@ export {
   countUnfinishedOccurrences,
   purgeTemplateOccurrences,
   updateTaskFields,
+  appendTaskComment,
+  deleteTaskComment,
   getTasksByStatusAndBoard,
   getTasksByStatusAndBoards,
   searchTasks,

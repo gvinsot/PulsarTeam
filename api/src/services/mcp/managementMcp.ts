@@ -23,10 +23,12 @@ import {
   getTaskByIdPrefix,
   getTasksByStatusAndBoards,
   updateTaskFields,
+  deleteTaskComment,
 } from '../database/tasks.js';
 import { getReposForBoard } from '../database/boardRepos.js';
 import {
   emitTaskUpdated,
+  addTaskComment,
   isAssigneeOffBoard,
   ASSIGNEE_BOARD_MISMATCH_ERROR,
 } from '../taskMutations.js';
@@ -279,7 +281,7 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
   // ── get_task ────────────────────────────────────────────────────────────
   server.tool(
     'get_task',
-    'Fetch one task by id, including its history. Only tasks on boards you can reach resolve.',
+    'Fetch one task by id, including its history and its comment thread (`comments`, separate from the `text` description). Only tasks on boards you can reach resolve.',
     { task_id: z.string().describe('Task UUID (a unique id prefix also works)') },
     async ({ task_id }) => {
       const task = await getTaskByIdPrefix(task_id);
@@ -287,6 +289,60 @@ export function createManagementMcpServer(agentManager: AgentManager, actor: Mcp
       const allowed = await scopedTask(actor, task, agentManager.agents, 'read');
       if (!allowed.ok) return allowed.error!;
       return jsonOk({ task: { ...taskView(allowed.value), history: allowed.value.history || [] } });
+    }
+  );
+
+  // ── add_task_comment / delete_task_comment ─────────────────────────────
+  // Comments are a thread SEPARATE from the description (lib/taskComments.ts).
+  // Same application function as POST/DELETE /api/tasks/:id/comments.
+  server.tool(
+    'add_task_comment',
+    'Add a comment to a task (kept separate from its description). Does not move or finish the task.',
+    {
+      task_id: z.string().describe('Task UUID (a unique id prefix also works)'),
+      text: z.string().min(1).max(20000).describe('Comment body (Markdown)'),
+    },
+    async ({ task_id, text }) => {
+      const task = await getTaskByIdPrefix(task_id);
+      // 'read' is enough to comment, like the REST route: commenting never
+      // changes the work itself.
+      const allowed = await scopedTask(actor, task, agentManager.agents, 'read');
+      if (!allowed.ok) return allowed.error!;
+      if (allowed.value.isTemplate) return notFound('Task');
+      const added = await addTaskComment(agentManager, allowed.value, {
+        author: actor.username || 'api',
+        authorType: 'user',
+        authorId: actor.userId || null,
+        text,
+      });
+      if (!added) return jsonError('Comment text is empty.');
+      return jsonOk({ success: true, comment: added.comment });
+    }
+  );
+
+  server.tool(
+    'delete_task_comment',
+    "Delete one comment from a task. You may delete your own comments; deleting anyone else's requires edit access to the board.",
+    {
+      task_id: z.string().describe('Task UUID (a unique id prefix also works)'),
+      comment_id: z.string().describe('Comment id (from get_task → comments[].id)'),
+    },
+    async ({ task_id, comment_id }) => {
+      const task = await getTaskByIdPrefix(task_id);
+      const readable = await scopedTask(actor, task, agentManager.agents, 'read');
+      if (!readable.ok) return readable.error!;
+      const comment = (readable.value.comments || []).find((c: McpRecord) => c.id === comment_id);
+      if (!comment) return notFound('Comment');
+      const own =
+        comment.authorType === 'user' && comment.authorId && comment.authorId === actor.userId;
+      if (!own) {
+        const editable = await scopedTask(actor, task, agentManager.agents, 'edit');
+        if (!editable.ok) return editable.error!;
+      }
+      const updated = await deleteTaskComment(readable.value.id, comment_id);
+      if (!updated) return notFound('Comment');
+      emitTaskUpdated(agentManager, updated, { emitAgent: false });
+      return jsonOk({ success: true, task_id: updated.id, comment_id });
     }
   );
 

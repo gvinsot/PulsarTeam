@@ -14,6 +14,7 @@ import {
   getTaskTemplateById,
   getOccurrencesForTemplate,
   countUnfinishedOccurrences,
+  deleteTaskComment,
 } from '../services/database.js';
 import { buildRecurrenceConfig, nextRunAt } from '../services/taskRecurrence.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
@@ -21,6 +22,7 @@ import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../se
 import {
   enrichAssignee,
   emitTaskUpdated,
+  addTaskComment,
   applyTaskMove,
   isAssigneeOffBoard,
   ASSIGNEE_BOARD_MISMATCH_ERROR,
@@ -36,6 +38,7 @@ import {
   updateTaskSchema,
   updateTemplateSchema,
   bulkMoveSchema,
+  addTaskCommentSchema,
 } from '../schemas/tasks.js';
 import type { UpdateTaskBody } from '../schemas/tasks.js';
 import type { z } from 'zod';
@@ -87,6 +90,7 @@ const TASK_ROW_COLUMNS = [
   'recurrence',
   'commits',
   'history',
+  'comments',
   'error',
   'error_from_status',
   'execution_status',
@@ -1034,6 +1038,66 @@ router.get(
       return res.status(403).json({ error: 'Access denied' });
     }
     res.json(task.history || []);
+  })
+);
+
+// ── Comments — a thread SEPARATE from the description ───────────────────────
+// GET    /tasks/:id/comments              → TaskComment[] (oldest first)
+// POST   /tasks/:id/comments  { text }    → the created TaskComment
+// DELETE /tasks/:id/comments/:commentId   → { ok: true }
+router.get(
+  '/:id/comments',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(task.comments || []);
+  })
+);
+
+router.post(
+  '/:id/comments',
+  validateBody(addTaskCommentSchema),
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task || task.isTemplate) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const added = await addTaskComment(mgr, task, {
+      author: req.user.username || 'user',
+      authorType: 'user',
+      authorId: req.user.userId || null,
+      text: req.body.text,
+    });
+    if (!added) return res.status(400).json({ error: 'Comment text is empty' });
+    await auditLog('comment_add', task.id, req.user.userId, req.user.username, {
+      commentId: added.comment.id,
+    });
+    res.status(201).json(added.comment);
+  })
+);
+
+router.delete(
+  '/:id/comments/:commentId',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const updated = await deleteTaskComment(task.id, req.params.commentId);
+    if (!updated) return res.status(404).json({ error: 'Comment not found' });
+    emitTaskUpdated(mgr, updated, { emitAgent: false });
+    await auditLog('comment_delete', task.id, req.user.userId, req.user.username, {
+      commentId: req.params.commentId,
+    });
+    res.json({ ok: true });
   })
 );
 

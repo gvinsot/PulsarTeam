@@ -63,6 +63,8 @@ export const TASK_VIEW_KEYS = [
   'occurrenceSeq',
   'recurrence',
   'commits',
+  // Discussion thread, separate from the description (lib/taskComments.ts).
+  'comments',
   // Provenance (lib/taskTrust.ts): whether the text came from outside, and
   // what the injection scan found in it.
   'trustLevel',

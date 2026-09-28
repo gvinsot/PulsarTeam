@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   User,
   GitCommit,
+  MessageSquare,
   Repeat,
   Loader2,
   Square,
@@ -561,6 +562,15 @@ export default function TaskCard({
           >
             <GitCommit className="w-2.5 h-2.5" />
             {task.commits.length}
+          </span>
+        )}
+        {task.comments && task.comments.length > 0 && (
+          <span
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
+            title={`${task.comments.length} comment${task.comments.length > 1 ? 's' : ''}`}
+          >
+            <MessageSquare className="w-2.5 h-2.5" />
+            {task.comments.length}
           </span>
         )}
         {/* One run of a recurring rule. The rule itself never reaches a board,

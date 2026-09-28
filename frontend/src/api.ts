@@ -71,6 +71,7 @@ import type {
   Settings,
   StoredAgentMode,
   Task,
+  TaskComment,
   TaskCreatedEvent,
   TaskExecutionStatus,
   TaskHistoryEntry,
@@ -1419,6 +1420,13 @@ export const updateTask = (taskId: string, fields: TaskUpdateInput) =>
   put<MutatedTask>(`/tasks/${taskId}`, fields);
 
 export const deleteTask = (taskId: string) => del<OkAck>(`/tasks/${taskId}`);
+
+/* ── Task comments (a thread separate from the description) ─────────────── */
+export const getTaskComments = (taskId: string) => get<TaskComment[]>(`/tasks/${taskId}/comments`);
+export const addTaskComment = (taskId: string, text: string) =>
+  post<TaskComment>(`/tasks/${taskId}/comments`, { text });
+export const deleteTaskComment = (taskId: string, commentId: string) =>
+  del<OkAck>(`/tasks/${taskId}/comments/${commentId}`);
 
 export const clearTaskStopped = (taskId: string) => patch<OkAck>(`/tasks/${taskId}/clear-stopped`);
 

@@ -29,6 +29,11 @@ import { getAgentBoardScope, agentsVisibleTo } from '../../../lib/agentScope.js'
 import { findBuiltinMcpServer } from '../../mcpManager.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isExternalTask, listingTaskText } from '../../../lib/taskTrust.js';
+import {
+  recordTaskComment,
+  type TaskComment,
+  type TaskCommentAuthorType,
+} from '../../../lib/taskComments.js';
 
 export interface HandlerCtx {
   mgr: any;
@@ -42,30 +47,23 @@ export interface HandlerCtx {
 
 export type ToolHandler = (ctx: HandlerCtx) => Promise<any | null>;
 
-/** Append an agent's note onto a task's description + a matching {type:'edit'}
- * history entry. `stampUpdatedAt` stamps task.updatedAt when no setTaskStatus
- * follows (recordTaskCompletion passes true; callers that move the task right
- * after can pass false since setTaskStatus stamps updatedAt itself). */
+/** Append an agent's note to a task's COMMENT thread (never to the
+ * description). Thin alias of lib/taskComments recordTaskComment kept for the
+ * agent-runtime call sites; the caller persists the returned comment. */
 export function appendTaskNote(
   task: any,
   agentName: string,
   note: string,
-  stampUpdatedAt: boolean
-): void {
-  const separator = '\n\n---\n';
-  const detailBlock = `**[${agentName}]** ${note.trim()}`;
-  task.text = (task.text || '') + separator + detailBlock;
-  if (!task.history) task.history = [];
-  task.history.push({
-    status: task.status,
-    at: new Date().toISOString(),
-    by: agentName,
-    type: 'edit',
-    field: 'text',
-    oldValue: null,
-    newValue: detailBlock,
+  stampUpdatedAt: boolean,
+  opts: { authorId?: string | null; authorType?: TaskCommentAuthorType } = {}
+): TaskComment | null {
+  return recordTaskComment(task, {
+    author: agentName,
+    authorType: opts.authorType || 'agent',
+    authorId: opts.authorId ?? null,
+    text: note,
+    stampUpdatedAt,
   });
-  if (stampUpdatedAt) task.updatedAt = new Date().toISOString();
 }
 
 /** Resolve board ids → display names for a set of tasks. `swallowErrors`

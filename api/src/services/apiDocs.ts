@@ -125,6 +125,11 @@ export const TASK_VIEW_PROPERTIES: Record<(typeof TASK_VIEW_KEYS)[number], JsonO
   occurrenceSeq: nullable('integer', 'Run number within its rule.'),
   recurrence: { type: ['object', 'null'], description: 'Recurrence configuration (rules only).' },
   commits: { type: ['array', 'null'], description: 'Linked commits.' },
+  comments: {
+    type: ['array', 'null'],
+    description:
+      'Comment thread, separate from the `text` description: `{ id, author, authorType (agent|user|system), authorId, text, at }`, oldest first.',
+  },
   trustLevel: {
     type: ['string', 'null'],
     enum: ['untrusted', 'approved', null],

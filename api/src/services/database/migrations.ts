@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { removeLegacyDefaultBoards } from './boards.js';
 import type { Queryable } from './baseSchema.js';
+import { splitLegacyComments } from '../../lib/taskComments.js';
 
 export type Migration = {
   id: string;
@@ -271,7 +272,47 @@ const MIGRATIONS: Migration[] = [
       'CREATE TRIGGER cleanup_remote_mcp_board AFTER DELETE ON boards FOR EACH ROW EXECUTE FUNCTION cleanup_remote_mcp_scope()',
     ]
   ),
+
+  // Comments get their own column, separate from the description. Until now an
+  // agent's update_task summary was appended to `text` behind a
+  // `\n\n---\n**[Author]** …` separator; the backfill moves every such block
+  // into `comments` (lib/taskComments.ts splitLegacyComments) and leaves the
+  // original description in `text`.
+  {
+    id: '202609280001_task_comments',
+    name: 'task comments column (split from the description)',
+    fingerprint:
+      "ALTER TABLE tasks ADD COLUMN comments JSONB DEFAULT '[]'; move legacy '\\n\\n---\\n**[Author]**' blocks from text to comments",
+    up: async db => {
+      await db.query("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'");
+      await backfillTaskComments(db);
+    },
+  },
 ];
+
+/** Move legacy appended notes out of `text` into `comments` (see migration above). */
+export async function backfillTaskComments(db: Queryable) {
+  const { rows } = await db.query(
+    `SELECT id, text, history, comments, updated_at FROM tasks
+      WHERE position(E'\\n\\n---\\n**[' in text) > 0`
+  );
+  let moved = 0;
+  for (const row of rows as any[]) {
+    const fallbackAt = row.updated_at
+      ? new Date(row.updated_at).toISOString()
+      : new Date().toISOString();
+    const split = splitLegacyComments(row.text, row.history, fallbackAt);
+    if (!split.comments.length) continue;
+    const existing = Array.isArray(row.comments) ? row.comments : [];
+    await db.query('UPDATE tasks SET text = $2, comments = $3::jsonb WHERE id = $1', [
+      row.id,
+      split.text,
+      JSON.stringify([...split.comments, ...existing]),
+    ]);
+    moved++;
+  }
+  if (moved) console.log(`   ↳ moved legacy comments out of ${moved} task description(s)`);
+}
 
 /**
  * Apply pending migrations on a session the CALLER owns.

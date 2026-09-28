@@ -44,7 +44,7 @@ export const taskMutationSharedShape = {
     .string()
     .optional()
     .describe(
-      'Completion summary appended onto the task card so the requester sees what was done. Providing it marks the task finished (commit and push your code first).'
+      "Completion summary, added to the task's COMMENT thread (never to its description) so the requester sees what was done. Providing it marks the task finished (commit and push your code first). To leave a remark without finishing the task, use add_task_comment instead."
     ),
   commits: z
     .string()

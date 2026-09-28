@@ -35,6 +35,8 @@ mock.module('../database.js', {
     updateTaskExecutionStatus: async () => {},
     saveTaskToDb: async () => {},
     updateTaskFields: async () => null,
+    appendTaskComment: async () => null,
+    deleteTaskComment: async () => null,
     getTasksByAssignee: async () => [],
     getTasksByAgent: async () => [],
     getTasksByBoard: async () => [],

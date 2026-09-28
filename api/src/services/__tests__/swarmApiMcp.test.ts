@@ -45,6 +45,8 @@ mock.module('../database.js', {
     // taskMutations.ts imports these from ../database.js
     saveTaskToDb: taskDbFake.saveTaskToDb,
     updateTaskFields: taskDbFake.updateTaskFields,
+    appendTaskComment: taskDbFake.appendTaskComment,
+    deleteTaskComment: taskDbFake.deleteTaskComment,
     // mcpHttpHandler now authorizes the X-Agent-Id / X-Board-Id headers through
     // lib/agentAccess.js → middleware/authz.js, which imports these four names
     // from this barrel. They are never called here (the tests drive the tool

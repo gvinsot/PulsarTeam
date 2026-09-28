@@ -2,6 +2,7 @@ import { getPool } from './connection.js';
 import { errorMessage } from '../../lib/errors.js';
 import type { normalizeSecondaryRepos } from '../taskRepos.js';
 import type { SecurityFlag, TaskTrustLevel } from '../../lib/taskTrust.js';
+import { normalizeComments, type TaskComment } from '../../lib/taskComments.js';
 
 // SELECT clause + joins shared by every task read query.
 // Hydrates `project` (name, derived from board.project_id) so `rowToTask`
@@ -148,6 +149,8 @@ export interface TaskRow {
   recurrence: TaskRecurrence | null;
   commits: TaskCommit[] | null;
   history: TaskHistoryEntry[] | null;
+  /** Discussion thread, separate from the description (lib/taskComments.ts). */
+  comments: TaskComment[] | null;
   error: string | null;
   error_from_status: string | null;
   execution_status: string | null;
@@ -228,6 +231,7 @@ export function rowToTask(row: TaskRow) {
     recurrence: row.recurrence || null,
     commits: row.commits || [],
     history: row.history || [],
+    comments: normalizeComments(row.comments),
     error: row.error || undefined,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
@@ -449,8 +453,8 @@ async function _doSaveTask(task: TaskWriteInput) {
                           execution_status, completed_action_idx, action_running, action_running_agent_id,
                           action_running_mode, error_from_status, is_manual, position, environment,
                           pending_on_enter, secondary_repos, is_template, template_id, occurrence_seq,
-                          trust_level, security_flags)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
+                          trust_level, security_flags, comments)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, repo_provider = $6, repo_full_name = $7,
          storage_provider = $8, storage_path = $9,
@@ -468,6 +472,9 @@ async function _doSaveTask(task: TaskWriteInput) {
       // without it: letting them write it would silently turn an external task
       // into a tenant one. Provenance is set once, here, on INSERT; the only way
       // to change it afterwards is an explicit updateTaskFields (approval).
+      // `comments` is excluded from the UPDATE for the same stale-snapshot
+      // reason: it is only ever mutated through appendTaskComment /
+      // deleteTaskComment, which touch the column atomically.
       [
         task.id,
         task.agentId,
@@ -507,6 +514,7 @@ async function _doSaveTask(task: TaskWriteInput) {
         task.occurrenceSeq != null ? task.occurrenceSeq : null,
         task.trustLevel || null,
         JSON.stringify(Array.isArray(task.securityFlags) ? task.securityFlags : []),
+        JSON.stringify(Array.isArray(task.comments) ? task.comments : []),
       ]
     );
   } catch (err) {
@@ -1344,4 +1352,47 @@ export async function updateTaskFields(taskId: string, fields: Record<string, un
     console.error('Failed to update task fields:', errorMessage(err));
     return null;
   }
+}
+
+/**
+ * Append one comment to a task's thread, atomically (`comments || $2`), so a
+ * concurrent writer holding a stale task snapshot can never drop it. Returns
+ * the re-read task, or null when the task does not exist / no DB.
+ */
+export async function appendTaskComment(taskId: string, comment: TaskComment) {
+  const pool = getPool();
+  if (!pool) return null;
+  const updated = await pool.query(
+    `UPDATE tasks SET comments = COALESCE(comments, '[]'::jsonb) || $2::jsonb, updated_at = NOW()
+     WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
+    [taskId, JSON.stringify([comment])]
+  );
+  if (updated.rows.length === 0) return null;
+  const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1`, [taskId]);
+  return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
+}
+
+/**
+ * Remove one comment (by id) from a task's thread, atomically. Returns the
+ * re-read task, or null when the task or the comment does not exist.
+ */
+export async function deleteTaskComment(taskId: string, commentId: string) {
+  const pool = getPool();
+  if (!pool) return null;
+  const updated = await pool.query(
+    `UPDATE tasks
+        SET comments = COALESCE(
+              (SELECT jsonb_agg(e.c ORDER BY e.n)
+                 FROM jsonb_array_elements(comments) WITH ORDINALITY AS e(c, n)
+                WHERE e.c->>'id' <> $2),
+              '[]'::jsonb),
+            updated_at = NOW()
+      WHERE id = $1 AND deleted_at IS NULL
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(comments) AS e(c) WHERE e.c->>'id' = $2)
+      RETURNING id`,
+    [taskId, commentId]
+  );
+  if (updated.rows.length === 0) return null;
+  const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1`, [taskId]);
+  return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
 }

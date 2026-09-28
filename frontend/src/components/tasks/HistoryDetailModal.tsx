@@ -98,6 +98,7 @@ function DiffBlock({ label, oldVal, newVal }: { label: string; oldVal?: string; 
 
 function renderEntryIcon(entry: TaskHistoryEntry) {
   if (entry.type === 'execution') return <MessageSquare className="w-5 h-5 text-blue-400" />;
+  if (entry.type === 'comment') return <MessageSquare className="w-5 h-5 text-emerald-400" />;
   if (entry.type === 'edit') return <Edit3 className="w-5 h-5 text-amber-400" />;
   if (entry.type === 'reassign') return <User className="w-5 h-5 text-indigo-400" />;
   if (entry.type === 'error') return <XCircle className="w-5 h-5 text-red-400" />;
@@ -117,6 +118,7 @@ function renderEntryTitle(entry: TaskHistoryEntry) {
       </span>
     );
   }
+  if (entry.type === 'comment') return <span className="text-emerald-300">Comment added</span>;
   if (entry.type === 'edit') return <span className="text-amber-300">Field edited</span>;
   if (entry.type === 'reassign') return <span className="text-indigo-300">Reassigned</span>;
   if (entry.type === 'error') return <span className="text-red-300">Error occurred</span>;
@@ -553,6 +555,13 @@ export default function HistoryDetailModal({
                 <div className="text-xs text-dark-500 italic">No change details recorded.</div>
               )}
             </>
+          )}
+
+          {/* Comment: show the (preview of the) comment body */}
+          {entry.type === 'comment' && typeof entry.newValue === 'string' && (
+            <div className="p-3 rounded-lg bg-dark-800/60 border border-dark-700 text-sm text-dark-200 break-words">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.newValue}</ReactMarkdown>
+            </div>
           )}
 
           {/* Reassign */}

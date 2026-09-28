@@ -107,7 +107,12 @@ test('completion links CLI commits using this run and preserves them when saving
     rows.get(task.id).commits.map((c: any) => c.hash),
     [hash]
   );
-  assert.ok(rows.get(task.id).text.includes('done'));
+  // The summary lands in the comment thread, not in the description.
+  assert.equal(rows.get(task.id).text, 'Fix bug');
+  assert.deepEqual(
+    rows.get(task.id).comments.map((c: any) => [c.author, c.text]),
+    [['CLI Runner', 'done']]
+  );
 });
 
 test('completion without a known run never uses old task dates or agent-name matches', async () => {
