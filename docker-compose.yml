@@ -288,7 +288,7 @@ services:
       args:
         RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-latest}
-        OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-1}
+        OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-2026-09-28}
     environment:
       - RUNNER_TYPE=opencode
       - TZ=${TZ:-Europe/Paris}

@@ -62,7 +62,7 @@ RUN echo "Agent CLI refresh key: ${RUNNER_CLI_CACHE_BUST}" \
 # OPENCODE_CLI_CACHE_BUST (or build with --no-cache) when rebuilding an
 # unchanged Dockerfile so Docker re-runs this layer and re-checks npm.
 ARG OPENCODE_CLI_VERSION=latest
-ARG OPENCODE_CLI_CACHE_BUST=1
+ARG OPENCODE_CLI_CACHE_BUST=2026-09-28
 RUN (echo "OpenCode CLI refresh key: ${OPENCODE_CLI_CACHE_BUST}" \
      && if [ "${OPENCODE_CLI_VERSION}" = "latest" ]; then \
           OPENCODE_RESOLVED_VERSION="$(npm view opencode-ai@latest version)" \
