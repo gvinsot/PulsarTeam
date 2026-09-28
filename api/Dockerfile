@@ -44,7 +44,11 @@ RUN apk add --no-cache git
 # SwiftProof, pinned by version and checksum. The release ships a statically
 # linked Go binary, so it runs on musl as-is. The sandbox has no network and
 # never installs anything at review time (`docker run --pull=never`, `--network
-# none`), which is exactly why this is baked in here.
+# none`), which is exactly why this is baked in here. The download is
+# best-effort: if the release is unreachable (e.g. the repo is private or the
+# tag is gone) the image still builds and `npm test` runs, only SwiftProof
+# reviews are unavailable. A downloaded archive with a wrong checksum still
+# fails the build.
 ARG TARGETARCH
 ARG SWIFTPROOF_VERSION=v0.2.0
 RUN set -eu; \
@@ -55,8 +59,12 @@ RUN set -eu; \
       *) echo "SwiftProof publishes linux amd64/arm64 only, not $arch" >&2; exit 1 ;; \
     esac; \
     dir="swiftproof-${SWIFTPROOF_VERSION}-linux-${arch}"; \
-    wget -qO /tmp/swiftproof.tar.gz \
-      "https://github.com/gvinsot/SwiftProof/releases/download/${SWIFTPROOF_VERSION}/${dir}.tar.gz"; \
+    if ! wget -qO /tmp/swiftproof.tar.gz \
+      "https://github.com/gvinsot/SwiftProof/releases/download/${SWIFTPROOF_VERSION}/${dir}.tar.gz"; then \
+      echo "WARN: SwiftProof ${SWIFTPROOF_VERSION} release is unreachable — test image built without swiftproof" >&2; \
+      rm -f /tmp/swiftproof.tar.gz; \
+      exit 0; \
+    fi; \
     echo "$sha  /tmp/swiftproof.tar.gz" | sha256sum -c -; \
     tar -xzf /tmp/swiftproof.tar.gz -C /tmp; \
     install -m 0755 "/tmp/${dir}/swiftproof" /usr/local/bin/swiftproof; \
