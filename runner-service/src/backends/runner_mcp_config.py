@@ -247,14 +247,21 @@ _CODEX_MARK_END = "# <<< pulsarteam-managed-mcp <<<"
 _BARE_TOML_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def strip_codex_managed_block(text: str) -> str:
-    """Return `~/.codex/config.toml` without our managed MCP block.
+_CODEX_PERMS_MARK_START = "# >>> pulsarteam-managed-permissions (do not edit) >>>"
+_CODEX_PERMS_MARK_END = "# <<< pulsarteam-managed-permissions <<<"
 
-    Used before persisting the file across restarts: the block is rewritten at
-    every spawn and carries a short-lived gateway token, so saving it would
-    just archive a stale credential. Everything else in the file is the user's
-    (their `/model` pick, project trust, …)."""
-    return _strip_managed_block(text or "", _CODEX_MARK_START, _CODEX_MARK_END)
+
+def strip_codex_managed_block(text: str) -> str:
+    """Return `~/.codex/config.toml` without our managed blocks (MCP and
+    permissions).
+
+    Used before persisting the file across restarts: both blocks are rewritten
+    at every spawn — the MCP one carries a short-lived gateway token, the
+    permissions one follows the agent's current toggle — so saving them would
+    only archive stale state. Everything else in the file is the user's (their
+    `/model` pick, project trust, …)."""
+    text = _strip_managed_block(text or "", _CODEX_MARK_START, _CODEX_MARK_END)
+    return _strip_managed_block(text, _CODEX_PERMS_MARK_START, _CODEX_PERMS_MARK_END)
 
 
 def _fetch_servers_or_none(agent_id: Optional[str]) -> Optional[dict]:
@@ -704,3 +711,76 @@ def configure_codex_mcp(agent_user: Optional[dict], agent_id: Optional[str]) -> 
         logger.info(f"[Codex MCP] configured {n} MCP server(s) for agent {(agent_id or '?')[:12]}")
     except OSError as e:
         logger.warning(f"[Codex MCP] failed to write {cfg_path}: {e}")
+
+
+# codex ≥ 0.157 resolves sandbox + approvals from permission profiles
+# (`default_permissions`; built-ins `:read-only`, `:workspace`,
+# `:danger-full-access`). `--dangerously-bypass-approvals-and-sandbox` only sets
+# the thread's STARTING policy: the TUI later re-applies its thread settings on
+# its own (a `thread_settings_applied` event in the rollout, with no user
+# action) and re-derives the profile from config.toml — `:workspace` when unset.
+# From then on the session runs workspace-write + approval "never", so every
+# MCP call codex doesn't consider read-only (update_task, …) fails with "MCP
+# tool call requires approval, but approval policy is never", and bwrap-less
+# containers can't run commands at all. Pinning the profile in config.toml makes
+# that re-derivation land on the policy the flag started with.
+_CODEX_FULL_ACCESS_TOML = 'default_permissions = ":danger-full-access"\napproval_policy = "never"'
+_CODEX_POLICY_KEY = re.compile(r"^\s*(default_permissions|approval_policy|sandbox_mode)\s*=")
+_TOML_TABLE_HEADER = re.compile(r"^\s*\[")
+
+
+def apply_codex_permissions(text: str, full_access: bool) -> str:
+    """Return config.toml with our permissions block reconciled.
+
+    The keys are top-level, so the block goes FIRST — anything after a
+    `[table]` header would belong to that table. With `full_access`, the user's
+    own top-level policy keys are dropped: a duplicate key is a TOML parse error
+    that would stop codex from starting. Without it, the block is removed and
+    the user's keys are left alone."""
+    lines = _strip_managed_block(text or "", _CODEX_PERMS_MARK_START, _CODEX_PERMS_MARK_END).splitlines()
+    if full_access:
+        kept: list[str] = []
+        in_root = True
+        in_multiline = False
+        for line in lines:
+            if in_root and not in_multiline:
+                if _TOML_TABLE_HEADER.match(line):
+                    in_root = False
+                elif _CODEX_POLICY_KEY.match(line):
+                    continue
+            if in_root and (line.count('"""') + line.count("'''")) % 2:
+                in_multiline = not in_multiline
+            kept.append(line)
+        lines = kept
+    body = "\n".join(lines).strip("\n")
+    if not full_access:
+        return body + "\n" if body.strip() else ""
+    managed = f"{_CODEX_PERMS_MARK_START}\n{_CODEX_FULL_ACCESS_TOML}\n{_CODEX_PERMS_MARK_END}\n"
+    return f"{managed}\n{body}\n" if body.strip() else managed
+
+
+def configure_codex_permissions(agent_user: Optional[dict], agent_id: Optional[str], full_access: bool) -> None:
+    home, uid, gid = _resolve_home(agent_user, agent_id)
+    if not home:
+        logger.warning(f"[Codex Perms] no HOME for agent {(agent_id or '?')[:12]} — skipping permissions write")
+        return
+    cfg_dir = os.path.join(home, ".codex")
+    cfg_path = os.path.join(cfg_dir, "config.toml")
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            existing = f.read()
+    except OSError:
+        existing = ""
+
+    new_text = apply_codex_permissions(existing, full_access)
+    if new_text == existing:
+        return
+    try:
+        _atomic_write(cfg_path, cfg_dir, new_text, uid, gid)
+        logger.info(
+            f"[Codex Perms] default_permissions "
+            f"{'pinned to :danger-full-access' if full_access else 'left to config'} "
+            f"for agent {(agent_id or '?')[:12]}"
+        )
+    except OSError as e:
+        logger.warning(f"[Codex Perms] failed to write {cfg_path}: {e}")

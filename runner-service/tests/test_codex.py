@@ -54,6 +54,25 @@ def test_build_command_uses_full_auto_when_dangerous_permissions_disabled():
     assert "--full-auto" in cmd
 
 
+def test_configure_mcp_pins_permission_profile_with_the_bypass_toggle(tmp_path, monkeypatch):
+    """The bypass flag only sets codex's starting policy; config.toml must carry
+    the same profile or the TUI falls back to `:workspace` mid-session and
+    refuses update_task ("requires approval, but approval policy is never")."""
+    import tomllib
+    import backends.runner_mcp_config as rmc
+    monkeypatch.setattr(rmc, "_fetch_agent_mcp", lambda agent_id: None)
+    agent = {"home": str(tmp_path), "uid": None, "gid": None}
+    cfg = tmp_path / ".codex" / "config.toml"
+    b = CodexBackend()
+
+    b._configure_mcp(agent, "a")  # toggle defaults ON
+    assert tomllib.loads(cfg.read_text())["default_permissions"] == ":danger-full-access"
+
+    b.set_agent_permissions("a", {"execution": {"dangerousSkipPermissions": False}})
+    b._configure_mcp(agent, "a")
+    assert "default_permissions" not in tomllib.loads(cfg.read_text())
+
+
 def test_resolve_owner_id_falls_back_to_the_agents_own_owner():
     """A terminal attach or an injected task may arrive without the owner
     header. Without the fallback, both hydration AND the push-back of a

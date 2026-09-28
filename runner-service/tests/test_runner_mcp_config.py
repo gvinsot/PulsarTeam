@@ -27,6 +27,10 @@ from backends.runner_mcp_config import (  # noqa: E402
     _rewrite_internal_mcp_urls,
     configure_opencode_mcp,
     configure_codex_mcp,
+    configure_codex_permissions,
+    apply_codex_permissions,
+    strip_codex_managed_block,
+    _CODEX_PERMS_MARK_START,
     configure_hermes_mcp,
     configure_openclaw_mcp,
     configure_claude_mcp,
@@ -270,6 +274,74 @@ def test_configure_codex_managed_block_idempotent(tmp_path, monkeypatch):
     assert text2.count(_CODEX_MARK_START) == 1
     assert "[mcp_servers.code-index]" not in text2
     assert 'model = "gpt-5"' in text2
+
+
+# ── codex permissions ────────────────────────────────────────────────────────
+
+def _toml(text):
+    import tomllib
+    return tomllib.loads(text)
+
+
+def test_codex_full_access_pins_profile_at_top_level():
+    user = 'model = "gpt-6"\n\n[projects."/w"]\ntrust_level = "trusted"\n'
+    data = _toml(apply_codex_permissions(user, True))
+    # Top-level keys — not swallowed by the [projects] table that follows.
+    assert data["default_permissions"] == ":danger-full-access"
+    assert data["approval_policy"] == "never"
+    assert data["model"] == "gpt-6"
+    assert data["projects"]["/w"] == {"trust_level": "trusted"}
+
+
+def test_codex_full_access_drops_conflicting_user_keys():
+    # A duplicate top-level key is a TOML parse error: codex would not start.
+    user = (
+        'approval_policy = "on-request"\nsandbox_mode = "workspace-write"\n'
+        'default_permissions = ":workspace"\nmodel = "gpt-6"\n'
+        '[profiles.p]\napproval_policy = "untrusted"\n'
+    )
+    data = _toml(apply_codex_permissions(user, True))
+    assert data["default_permissions"] == ":danger-full-access"
+    assert data["approval_policy"] == "never"
+    assert "sandbox_mode" not in data
+    assert data["profiles"]["p"]["approval_policy"] == "untrusted"  # tables untouched
+
+
+def test_codex_full_access_ignores_keys_inside_multiline_strings():
+    user = 'developer_instructions = """\n[not a table]\napproval_policy = "x"\n"""\nmodel = "m"\n'
+    data = _toml(apply_codex_permissions(user, True))
+    assert "approval_policy = \"x\"" in data["developer_instructions"]
+    assert data["approval_policy"] == "never"
+
+
+def test_codex_permissions_idempotent_and_reversible():
+    user = 'model = "gpt-6"\n'
+    once = apply_codex_permissions(user, True)
+    assert apply_codex_permissions(once, True) == once
+    assert once.count(_CODEX_PERMS_MARK_START) == 1
+    # Toggle OFF: block gone, user config back as it was.
+    assert apply_codex_permissions(once, False) == user
+
+
+def test_codex_permissions_and_mcp_blocks_coexist(tmp_path, monkeypatch):
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('model = "gpt-6"\n')
+    agent = _agent(tmp_path)
+    _patch_fetch(monkeypatch, {"mcpServers": CANONICAL})
+
+    for _ in range(2):  # every spawn runs both writers
+        configure_codex_mcp(agent, "a")
+        configure_codex_permissions(agent, "a", full_access=True)
+
+    text = cfg.read_text()
+    data = _toml(text)
+    assert data["default_permissions"] == ":danger-full-access"
+    assert "swarm-manager" in data["mcp_servers"]
+    assert text.count(_CODEX_PERMS_MARK_START) == 1
+    assert text.count(_CODEX_MARK_START) == 1
+    # Neither managed block is persisted across restarts.
+    assert strip_codex_managed_block(text).strip() == 'model = "gpt-6"'
 
 
 # ── hermes writer + flag ─────────────────────────────────────────────────────

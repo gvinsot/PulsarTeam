@@ -75,7 +75,11 @@ from .codex_oauth import (
 )
 from agent_user import ensure_agent_user
 from .claude_token_store import get_subprocess_kwargs, run_blocking
-from .runner_mcp_config import configure_codex_mcp, strip_codex_managed_block
+from .runner_mcp_config import (
+    configure_codex_mcp,
+    configure_codex_permissions,
+    strip_codex_managed_block,
+)
 from .runner_instructions_config import configure_codex_instructions
 
 
@@ -198,18 +202,30 @@ class CodexBackend(CliBackend):
 
 
     def _sanitize_persisted_config(self, name: str, raw: str) -> Optional[str]:
-        """Persist config.toml without our managed MCP block: configure_codex_mcp
-        rewrites it at every spawn and it embeds a short-lived gateway token, so
-        saving it would only archive a stale credential."""
+        """Persist config.toml without our managed blocks: they are rewritten at
+        every spawn, and the MCP one embeds a short-lived gateway token, so
+        saving them would only archive stale state."""
         if name != "config.toml":
             return raw
         stripped = strip_codex_managed_block(raw).strip()
         return stripped + "\n" if stripped else None
 
+    def _full_access(self, permissions: Optional[dict]) -> bool:
+        """The agent's `dangerousSkipPermissions` toggle — ON by default."""
+        exec_perms = (permissions or {}).get("execution", {})
+        return bool(exec_perms.get("dangerousSkipPermissions", True))
+
     def _configure_mcp(self, agent_user, agent_id) -> None:
         # Writes [mcp_servers.*] tables into ~/.codex/config.toml. NOTE: HTTP
         # MCP support in codex is version-dependent — see configure_codex_mcp.
         configure_codex_mcp(agent_user, agent_id)
+        # Pins the permission profile the bypass flag starts with, so the TUI
+        # doesn't fall back to `:workspace` mid-session — see
+        # configure_codex_permissions.
+        configure_codex_permissions(
+            agent_user, agent_id,
+            full_access=self._full_access(self._get_permissions(agent_id) if agent_id else None),
+        )
 
     def _configure_instructions(self, agent_user, agent_id) -> None:
         # Writes the agent's base instructions into ~/.codex/AGENTS.md.
@@ -249,8 +265,7 @@ class CodexBackend(CliBackend):
         # when the agent has an explicit model; otherwise let codex use its
         # own default (see _resolve_codex_model).
         cmd = [self.cli_command]
-        exec_perms = (self._get_permissions(agent_id) or {}).get("execution", {}) if agent_id else {}
-        if exec_perms.get("dangerousSkipPermissions", True):
+        if self._full_access(self._get_permissions(agent_id) if agent_id else None):
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
         model = _resolve_codex_model(self._get_llm_config(agent_id))
         if model:
@@ -476,8 +491,7 @@ class CodexBackend(CliBackend):
         # auto-runs safe operations but prompts for destructive ones (codex
         # in headless mode will then fail-fast, which is the expected
         # fallback when an agent isn't allowed to skip prompts).
-        exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
-        if exec_perms.get("dangerousSkipPermissions", True):
+        if self._full_access(permissions):
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
         else:
             cmd.append("--full-auto")
