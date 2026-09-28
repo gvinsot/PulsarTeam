@@ -51,7 +51,7 @@ const tasks = [
 ];
 
 mock.module('../database.js', {
-  exports: { ...realDb, getAllTasks: async () => tasks },
+  namedExports: { ...realDb, getAllTasks: async () => tasks },
 });
 
 const { taskStatsMethods } = await import('../agentManager/taskStats.js');
