@@ -770,9 +770,12 @@ export default function AnalyticsDashboard({
 
   const current = tab === 'boards' ? boards : tab === 'project' ? tasks : errors;
 
+  // The page scrolls in its parent. Header and tab bar must not shrink: the tab
+  // bar is an overflow container, so in a flex column it would otherwise collapse
+  // to ~0px under tall tab content and hide every tab but the current one.
   return (
-    <div className="flex flex-col min-h-0">
-      <div className="px-6 pt-6 flex flex-wrap items-end justify-between gap-3">
+    <div className="flex flex-col">
+      <div className="px-6 pt-6 flex flex-wrap items-end justify-between gap-3 shrink-0">
         <div>
           <h1 className="text-2xl font-bold text-dark-100">📊 Analytics</h1>
           <p className="text-sm text-dark-400 mt-1">
@@ -804,7 +807,7 @@ export default function AnalyticsDashboard({
         )}
       </div>
       <div
-        className="px-6 mt-4 border-b border-dark-700/50 flex gap-1 overflow-x-auto"
+        className="px-6 mt-4 border-b border-dark-700/50 flex gap-1 overflow-x-auto shrink-0"
         role="tablist"
       >
         {TABS.map(t => (
