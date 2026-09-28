@@ -108,9 +108,11 @@ export default function ProjectStats({ projectName }: { projectName: string }) {
   const [timeseries, setTimeseries] = useState<ProjectTimeSeries | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const [s, ts] = await Promise.all([
         api.getProjectTaskStats(projectName),
@@ -120,6 +122,7 @@ export default function ProjectStats({ projectName }: { projectName: string }) {
       setTimeseries(ts);
     } catch (err) {
       console.error('Failed to load project stats:', err);
+      setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -139,7 +142,13 @@ export default function ProjectStats({ projectName }: { projectName: string }) {
     );
   }
 
-  if (!stats || !timeseries) return null;
+  if (!stats || !timeseries) {
+    return (
+      <div className="px-4 py-3 rounded-lg text-sm bg-dark-800 text-dark-300 border border-dark-700">
+        {loadError ? `Could not load project statistics: ${loadError}` : 'No statistics available.'}
+      </div>
+    );
+  }
 
   const formatLabel = (d: string) => d?.slice(5) || '';
 

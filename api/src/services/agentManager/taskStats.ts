@@ -8,30 +8,20 @@ export const taskStatsMethods = {
     projectFilter: string | null = null,
     allowedBoardIds: Set<string> | null = null
   ): Promise<any[]> {
-    // Group every live task by owning agent (board-level, ownerless tasks are
-    // excluded from stats — matching the prior agent-keyed store).
-    const byAgent = new Map<string, any[]>();
-    for (const t of await getAllTasks()) {
-      if (!t.agentId) continue;
-      let list = byAgent.get(t.agentId);
-      if (!list) {
-        list = [];
-        byAgent.set(t.agentId, list);
-      }
-      list.push(t);
-    }
+    // Every live task counts: agent-owned ones and board-level tasks
+    // (agent_id NULL — the kanban default). Access is scoped by the task's
+    // board, falling back to the owning agent's board for board-less tasks.
+    const agents = new Map<string, any>();
+    for (const agent of this.agents.values()) agents.set((agent as any).id, agent);
     const tasks: any[] = [];
-    for (const agent of this.agents.values()) {
-      if (allowedBoardIds && (agent as any).boardId && !allowedBoardIds.has((agent as any).boardId))
-        continue;
-      const tasks_ = byAgent.get((agent as any).id) || [];
-      if (!tasks_.length) continue;
-      for (const t of tasks_) {
-        if (allowedBoardIds && t.boardId && !allowedBoardIds.has(t.boardId)) continue;
-        const proj = t.project || (agent as any).project || null;
-        if (projectFilter && proj !== projectFilter) continue;
-        tasks.push({ ...t, _agentId: (agent as any).id, _project: proj });
-      }
+    for (const t of await getAllTasks()) {
+      const agent = t.agentId ? agents.get(t.agentId) : null;
+      if (t.agentId && !agent && !t.boardId) continue;
+      const boardId = t.boardId || agent?.boardId || null;
+      if (allowedBoardIds && (!boardId || !allowedBoardIds.has(boardId))) continue;
+      const proj = t.project || agent?.project || null;
+      if (projectFilter && proj !== projectFilter) continue;
+      tasks.push({ ...t, _agentId: agent?.id || null, _project: proj });
     }
     return tasks;
   },
