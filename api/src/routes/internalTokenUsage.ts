@@ -52,7 +52,15 @@ export function internalTokenUsageRoutes(agentManager: AgentManager) {
         if (isCliRunner(agent)) noteCliActivity(agentManager, agent.id, 'Consuming tokens');
 
         const provider = (body.provider || agent.runner || 'cli').toString();
-        const model = (body.model || 'unknown').toString();
+        // Runners often cannot name the model (subscription CLIs); fall back to
+        // the agent's configured model before storing the 'unknown' placeholder.
+        let configuredModel = '';
+        try {
+          configuredModel = agentManager.resolveLlmConfig(agent)?.model || '';
+        } catch {
+          // No resolvable config — keep the placeholder.
+        }
+        const model = (body.model || configuredModel || 'unknown').toString();
         const userId = agent.ownerId || null;
         const idempotencyKey = (body.idempotency_key || '').toString().trim() || null;
 

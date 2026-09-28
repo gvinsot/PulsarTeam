@@ -13,6 +13,7 @@ import {
   getAllProjects,
 } from '../services/database.js';
 import { getCostByProject } from '../services/database/analytics.js';
+import { usageLabel } from '../services/llmVendor.js';
 import { requireRole } from '../middleware/auth.js';
 import { validateBody, z } from '../lib/validate.js';
 import type { SessionClaims } from '../middleware/session.js';
@@ -234,7 +235,18 @@ router.get(
       getTokenUsageByAgent(days, budgetUserId(req), projectId),
       buildProviderNameMap(),
     ]);
-    res.json(enrichProviderNames(rows, nameMap));
+    // `label` names the slice in "Cost by LLM": computed from the RAW provider
+    // (runner id / provider type) so rows without a model still resolve to
+    // their vendor (Anthropic, OpenAI, Copilot…) instead of "unknown".
+    const enriched = enrichProviderNames(rows, nameMap).map((row, i) => ({
+      ...row,
+      label: usageLabel({
+        provider: rows[i].provider,
+        model: rows[i].model,
+        displayName: row.provider,
+      }),
+    }));
+    res.json(enriched);
   })
 );
 
