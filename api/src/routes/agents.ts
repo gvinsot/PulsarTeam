@@ -20,6 +20,7 @@ import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { requireRole, sessionUser } from '../middleware/auth.js';
 import { agentAccessMiddleware, type AgentAccessLevel } from '../lib/agentAccess.js';
 import { getUserBoardIdSet as getUserBoardIds } from '../lib/boardAccess.js';
+import { canChangeTaskRepo, REPO_GRANT_ERROR } from '../lib/repoGrant.js';
 import { getMemTask } from './tasks.js';
 import {
   createAgentSchema,
@@ -708,6 +709,16 @@ export function agentRoutes(agentManager: AgentManager) {
         } else if (repoFullName !== undefined) {
           // Format check only — the picker is sourced from the board's GitHub plugin.
           const value = isValidRepoFullName(repoFullName) ? repoFullName : null;
+          const curTask = await getMemTask(agentManager, req.params.id, req.params.taskId);
+          if (
+            !canChangeTaskRepo(req.user, {
+              boardId: curTask?.boardId,
+              agentId: req.params.id,
+            })
+          ) {
+            res.status(403).json({ error: REPO_GRANT_ERROR });
+            return;
+          }
           await agentManager.updateTaskRepo(
             req.params.id,
             req.params.taskId,

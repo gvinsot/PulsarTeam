@@ -471,7 +471,13 @@ async function handleOAuthRedirect(req: express.Request, res: express.Response) 
         accessToken: data.access_token,
         refreshToken,
         expiresAt,
-        meta: { scope: data.scope, tokenType: data.token_type, login },
+        meta: {
+          scope: data.scope,
+          tokenType: data.token_type,
+          login,
+          // Who authorized it: only this user may change the active repo.
+          ...(scopeType === 'user' ? {} : { grantedBy: stateData.username }),
+        },
       },
       { throwOnPersistError: true }
     );

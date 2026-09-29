@@ -44,6 +44,7 @@ import type { UpdateTaskBody } from '../schemas/tasks.js';
 import type { z } from 'zod';
 import type { AgentManager } from '../services/agentManager/index.js';
 import type { Task } from '../services/database/tasks.js';
+import { canChangeTaskRepo, REPO_GRANT_ERROR } from '../lib/repoGrant.js';
 import type { SessionClaims } from '../middleware/session.js';
 import type { WorkflowConfig } from '../services/workflow/taskStateMachine.js';
 
@@ -339,6 +340,13 @@ async function applyTaskFieldEdits(
   if (repoFullName !== undefined) {
     const value = isValidRepoFullName(repoFullName) ? repoFullName : null;
     if (value !== (task.repoFullName || null)) {
+      if (
+        !canChangeTaskRepo(user, {
+          boardId: targetBoardId,
+          agentId: task.assignee || task.agentId,
+        })
+      )
+        return { ok: false, status: 403, error: REPO_GRANT_ERROR };
       task.repoFullName = value;
       task.repoProvider = value ? repoProvider || task.repoProvider || 'github' : null;
       task.secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos || [], value);
