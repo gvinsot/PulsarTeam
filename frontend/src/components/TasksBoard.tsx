@@ -1020,217 +1020,222 @@ export default function TasksBoard({
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      {/* Board Tabs */}
-      {visibleBoards.length > 0 && (
-        <BoardTabs
-          unseenTaskCounts={unseenTaskCounts}
-          boards={visibleBoards}
-          activeBoardId={activeBoardId}
-          onSelect={id => {
-            setActiveBoardId(id);
-            setAgentFilter('');
-          }}
-          onCreate={handleCreateBoard}
-          onRename={handleRenameBoard}
-          onDelete={handleDeleteBoard}
-          onShare={setShareBoard}
-        />
-      )}
-      {projectFilter && visibleBoards.length === 0 && boardsLoaded && (
-        <div className="px-4 py-8 flex flex-col items-center gap-3 text-center">
-          <p className="text-sm text-dark-400">No boards attached to the selected project yet.</p>
-          <button
-            onClick={handleCreateBoard}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium
-              bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/25 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Create board for this project
-          </button>
-          <p className="text-xs text-dark-500">
-            Or attach an existing board from the Projects view.
-          </p>
-        </div>
-      )}
-
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-4 py-1.5 border-b border-dark-700 bg-dark-900/30 overflow-x-auto scrollbar-hide">
-        {/* Search */}
-        <div className="relative flex-shrink-0">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-dark-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search tasks..."
-            title="Search across title, details, agent name, repo and storage path of visible tasks"
-            className="pl-8 pr-7 py-1.5 w-48 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
-              placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
+      {/* Header (tabs + toolbar) keeps the app's standard centred width */}
+      <div className="w-full max-w-[1800px] mx-auto flex-shrink-0">
+        {/* Board Tabs */}
+        {visibleBoards.length > 0 && (
+          <BoardTabs
+            unseenTaskCounts={unseenTaskCounts}
+            boards={visibleBoards}
+            activeBoardId={activeBoardId}
+            onSelect={id => {
+              setActiveBoardId(id);
+              setAgentFilter('');
+            }}
+            onCreate={handleCreateBoard}
+            onRename={handleRenameBoard}
+            onDelete={handleDeleteBoard}
+            onShare={setShareBoard}
           />
-          {search && (
+        )}
+        {projectFilter && visibleBoards.length === 0 && boardsLoaded && (
+          <div className="px-4 py-8 flex flex-col items-center gap-3 text-center">
+            <p className="text-sm text-dark-400">No boards attached to the selected project yet.</p>
             <button
-              onClick={() => setSearch('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
+              onClick={handleCreateBoard}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium
+              bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/25 transition-colors"
             >
-              <X className="w-3.5 h-3.5" />
+              <Plus className="w-3.5 h-3.5" />
+              Create board for this project
+            </button>
+            <p className="text-xs text-dark-500">
+              Or attach an existing board from the Projects view.
+            </p>
+          </div>
+        )}
+
+        {/* Toolbar */}
+        <div className="flex items-center gap-2 px-4 py-1.5 border-b border-dark-700 bg-dark-900/30 overflow-x-auto scrollbar-hide">
+          {/* Search */}
+          <div className="relative flex-shrink-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-dark-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search tasks..."
+              title="Search across title, details, agent name, repo and storage path of visible tasks"
+              className="pl-8 pr-7 py-1.5 w-48 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
+              placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Agent filter */}
+          <select
+            value={agentFilter}
+            onChange={e => setAgentFilter(e.target.value)}
+            className="px-3 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
+            focus:outline-none focus:border-indigo-500 transition-colors flex-shrink-0"
+          >
+            <option value="">All agents</option>
+            {agents
+              .filter(a => a.enabled !== false && a.boardId === activeBoardId)
+              .map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+          </select>
+
+          {/* Repo filter */}
+          {boardRepos.length > 0 && (
+            <select
+              value={repoFilter}
+              onChange={e => setRepoFilter(e.target.value)}
+              className="px-3 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
+              focus:outline-none focus:border-indigo-500 transition-colors flex-shrink-0"
+            >
+              <option value="">All repos</option>
+              {boardRepos.map(r => (
+                <option key={r.fullName} value={r.fullName}>
+                  {r.fullName}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Sort */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <ArrowUpDown className="w-3.5 h-3.5 text-dark-400" />
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value)}
+              className="px-3 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
+              focus:outline-none focus:border-indigo-500 transition-colors"
+            >
+              {SORT_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Clear filters */}
+          {activeFilters > 0 && (
+            <button
+              onClick={() => {
+                setAgentFilter('');
+                setRepoFilter('');
+                setSearch('');
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-amber-400 bg-amber-500/10
+              border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors flex-shrink-0 whitespace-nowrap"
+            >
+              <X className="w-3 h-3" />
+              Clear filters ({activeFilters})
+            </button>
+          )}
+
+          <div className="ml-auto" />
+
+          {/* Mark every unseen task of this board as seen (clears the tab badge) */}
+          {unseenOnActiveBoard > 0 && (
+            <button
+              onClick={handleMarkAllViewed}
+              disabled={markingAllViewed}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-indigo-400 bg-indigo-500/10
+              border border-indigo-500/20 rounded-lg hover:bg-indigo-500/20 transition-colors flex-shrink-0
+              whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Mark all unseen tasks of this board as seen"
+              aria-label={`Mark all ${unseenOnActiveBoard} unseen tasks as seen`}
+            >
+              <CheckCheck className="w-3 h-3" />
+              Mark all seen ({unseenOnActiveBoard})
+            </button>
+          )}
+
+          {/* Recurring rules */}
+          <button
+            onClick={() => setShowRecurringTasks(true)}
+            className="p-1.5 rounded-lg text-dark-400 hover:text-teal-400 hover:bg-dark-700 transition-colors flex-shrink-0"
+            title="Recurring tasks"
+          >
+            <Repeat className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Deleted tasks */}
+          <button
+            onClick={() => setShowDeletedTasks(true)}
+            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
+            title="View deleted tasks"
+          >
+            <Archive className="w-3.5 h-3.5" />
+          </button>
+
+          {/* GitHub Activity per project */}
+          {boardProjectsWithGithub.map(p => (
+            <button
+              key={p.name}
+              onClick={() => setActivityTarget(p.github)}
+              className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
+              title={`GitHub activity — ${p.name}`}
+            >
+              <GitCommit className="w-3.5 h-3.5" />
+              <span className="text-[10px] max-w-[80px] truncate">{p.name}</span>
+            </button>
+          ))}
+
+          {/* Board plugins */}
+          {canEdit && activeBoard && (
+            <button
+              onClick={() => setShowBoardPlugins(true)}
+              className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
+              title="Board plugins"
+            >
+              <Puzzle className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Workflow settings */}
+          {canEdit && (
+            <button
+              onClick={() => setShowWorkflowEditor(true)}
+              className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
+              title="Board workflow settings"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Create Task */}
+          {!isReadOnly && (
+            <button
+              onClick={() => setCreateOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white
+              bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors flex-shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              New Task
             </button>
           )}
         </div>
-
-        {/* Agent filter */}
-        <select
-          value={agentFilter}
-          onChange={e => setAgentFilter(e.target.value)}
-          className="px-3 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
-            focus:outline-none focus:border-indigo-500 transition-colors flex-shrink-0"
-        >
-          <option value="">All agents</option>
-          {agents
-            .filter(a => a.enabled !== false && a.boardId === activeBoardId)
-            .map(a => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-        </select>
-
-        {/* Repo filter */}
-        {boardRepos.length > 0 && (
-          <select
-            value={repoFilter}
-            onChange={e => setRepoFilter(e.target.value)}
-            className="px-3 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
-              focus:outline-none focus:border-indigo-500 transition-colors flex-shrink-0"
-          >
-            <option value="">All repos</option>
-            {boardRepos.map(r => (
-              <option key={r.fullName} value={r.fullName}>
-                {r.fullName}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {/* Sort */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <ArrowUpDown className="w-3.5 h-3.5 text-dark-400" />
-          <select
-            value={sortBy}
-            onChange={e => setSortBy(e.target.value)}
-            className="px-3 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
-              focus:outline-none focus:border-indigo-500 transition-colors"
-          >
-            {SORT_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Clear filters */}
-        {activeFilters > 0 && (
-          <button
-            onClick={() => {
-              setAgentFilter('');
-              setRepoFilter('');
-              setSearch('');
-            }}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-amber-400 bg-amber-500/10
-              border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors flex-shrink-0 whitespace-nowrap"
-          >
-            <X className="w-3 h-3" />
-            Clear filters ({activeFilters})
-          </button>
-        )}
-
-        <div className="ml-auto" />
-
-        {/* Mark every unseen task of this board as seen (clears the tab badge) */}
-        {unseenOnActiveBoard > 0 && (
-          <button
-            onClick={handleMarkAllViewed}
-            disabled={markingAllViewed}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-indigo-400 bg-indigo-500/10
-              border border-indigo-500/20 rounded-lg hover:bg-indigo-500/20 transition-colors flex-shrink-0
-              whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Mark all unseen tasks of this board as seen"
-            aria-label={`Mark all ${unseenOnActiveBoard} unseen tasks as seen`}
-          >
-            <CheckCheck className="w-3 h-3" />
-            Mark all seen ({unseenOnActiveBoard})
-          </button>
-        )}
-
-        {/* Recurring rules */}
-        <button
-          onClick={() => setShowRecurringTasks(true)}
-          className="p-1.5 rounded-lg text-dark-400 hover:text-teal-400 hover:bg-dark-700 transition-colors flex-shrink-0"
-          title="Recurring tasks"
-        >
-          <Repeat className="w-3.5 h-3.5" />
-        </button>
-
-        {/* Deleted tasks */}
-        <button
-          onClick={() => setShowDeletedTasks(true)}
-          className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
-          title="View deleted tasks"
-        >
-          <Archive className="w-3.5 h-3.5" />
-        </button>
-
-        {/* GitHub Activity per project */}
-        {boardProjectsWithGithub.map(p => (
-          <button
-            key={p.name}
-            onClick={() => setActivityTarget(p.github)}
-            className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
-            title={`GitHub activity — ${p.name}`}
-          >
-            <GitCommit className="w-3.5 h-3.5" />
-            <span className="text-[10px] max-w-[80px] truncate">{p.name}</span>
-          </button>
-        ))}
-
-        {/* Board plugins */}
-        {canEdit && activeBoard && (
-          <button
-            onClick={() => setShowBoardPlugins(true)}
-            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
-            title="Board plugins"
-          >
-            <Puzzle className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Workflow settings */}
-        {canEdit && (
-          <button
-            onClick={() => setShowWorkflowEditor(true)}
-            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
-            title="Board workflow settings"
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Create Task */}
-        {!isReadOnly && (
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white
-              bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors flex-shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            New Task
-          </button>
-        )}
       </div>
 
-      {/* Board */}
+      {/* Board — while the columns fit in the standard 1800px frame, the board keeps that
+          width and stays centred; once they need more, it grows up to the full window
+          width before the horizontal scrollbar kicks in. */}
       <div ref={boardScrollRef} className="flex-1 min-h-0 overflow-auto scrollbar-always-visible">
-        <div className="flex gap-4 p-6 min-w-max items-stretch">
+        <div className="flex gap-4 p-6 w-max min-w-[min(100%,1800px)] mx-auto items-stretch">
           {columns.map((col, colIdx) => (
             <KanbanColumn
               key={col.id}

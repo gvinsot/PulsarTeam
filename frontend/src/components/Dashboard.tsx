@@ -525,7 +525,11 @@ export default function Dashboard({
         )}
 
         {/* Main content */}
-        <div className="flex-1 flex max-w-[1800px] mx-auto w-full min-h-0 overflow-hidden">
+        {/* The tasks board manages its own width: it stays capped/centred like the other
+            views while its columns fit, and expands to the full window when they don't. */}
+        <div
+          className={`flex-1 flex w-full min-h-0 overflow-hidden ${activeView === 'tasks' ? '' : 'max-w-[1800px] mx-auto'}`}
+        >
           {activeView === 'tasks' && (
             <Suspense fallback={null}>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
