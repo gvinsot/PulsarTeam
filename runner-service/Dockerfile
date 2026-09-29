@@ -50,7 +50,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
 
 # All CLIs below use upstream latest releases. Bump this shared key to refresh
 # every installer, including Claude/OpenClaw/Hermes, on cached image builds.
-ARG RUNNER_CLI_CACHE_BUST=2026-09-10
+ARG RUNNER_CLI_CACHE_BUST=2026-09-29
 
 # Claude Code CLI (Anthropic)
 RUN echo "Agent CLI refresh key: ${RUNNER_CLI_CACHE_BUST}" \

@@ -116,6 +116,10 @@ export interface BudgetByAgentRow {
   total_cost: number | null;
   /** COUNT(*) — never null. The only per-call count the API produces anywhere. */
   request_count: number;
+  /** Display name for the row: the model when known, else the vendor inferred
+   *  from the provider/runner (Anthropic, OpenAI, Copilot…). Added by the route
+   *  (api/src/services/llmVendor.ts); optional for older API builds. */
+  label?: string;
 }
 
 /**

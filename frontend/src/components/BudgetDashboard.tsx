@@ -33,7 +33,7 @@ import {
   selectBudgetView,
   type BudgetFetchers,
 } from './budgetScope';
-import type { Agent, BudgetConfig, BudgetLimits } from '../types';
+import type { Agent, BudgetByAgentRow, BudgetConfig, BudgetLimits } from '../types';
 
 ChartJS.register(
   CategoryScale,
@@ -65,6 +65,14 @@ const COLORS = [
   '#14b8a6',
   '#a855f7',
 ];
+
+/** Slice name in "Cost by LLM": the API's `label` (model, else vendor such as
+ *  Anthropic / OpenAI / Copilot), falling back for older API builds. */
+function llmLabel(a: BudgetByAgentRow): string {
+  if (a.label) return a.label;
+  if (a.model && a.model.toLowerCase() !== 'unknown') return a.model;
+  return a.provider || 'Unknown';
+}
 
 /**
  * `projectId` / `projectName` mirror the Dashboard header's project scope chip.
@@ -268,12 +276,21 @@ export default function BudgetDashboard({
     ],
   };
 
+  // Several (provider, model) rows can share a label — e.g. every model-less
+  // CLI row of the Claude Code runner reads "Anthropic" — so merge them into
+  // one slice, largest first.
+  const costByLabel = new Map<string, number>();
+  for (const a of byAgent) {
+    const label = llmLabel(a);
+    costByLabel.set(label, (costByLabel.get(label) || 0) + (a.total_cost || 0));
+  }
+  const llmSlices = [...costByLabel.entries()].sort((x, y) => y[1] - x[1]);
   const agentCostData = {
-    labels: byAgent.map(a => a.model || a.provider || 'Unknown'),
+    labels: llmSlices.map(([label]) => label),
     datasets: [
       {
-        data: byAgent.map(a => a.total_cost || 0),
-        backgroundColor: byAgent.map((_, i) => COLORS[i % COLORS.length]),
+        data: llmSlices.map(([, cost]) => cost),
+        backgroundColor: llmSlices.map((_, i) => COLORS[i % COLORS.length]),
         borderWidth: 0,
       },
     ],
@@ -461,7 +478,7 @@ export default function BudgetDashboard({
         <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
           <div className="text-xs text-dark-400 uppercase tracking-wider mb-1">Active Agents</div>
           <div className="text-2xl font-bold text-dark-100">{byAgent.length}</div>
-          <div className="text-xs text-dark-400 mt-1">Top: {byAgent[0]?.model || 'N/A'}</div>
+          <div className="text-xs text-dark-400 mt-1">Top: {llmSlices[0]?.[0] || 'N/A'}</div>
         </div>
       </div>
 
