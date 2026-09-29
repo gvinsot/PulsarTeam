@@ -89,7 +89,7 @@ export type TaskSourceType =
  * unknown period.
  */
 export type TaskRecurrencePeriod =
-  'hourly' | 'daily' | 'weekly' | 'monthly' | 'custom' | (string & {});
+  'hourly' | 'every6h' | 'every12h' | 'daily' | 'weekly' | 'monthly' | 'custom' | (string & {});
 
 /**
  * RULE 1 (closed union): `history` is not a field of updateTaskSchema

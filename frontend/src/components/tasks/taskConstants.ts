@@ -311,6 +311,8 @@ export const MODE_LABELS: Record<string, string> = {
 
 export const RECURRENCE_PERIODS = [
   { value: 'hourly', label: 'Every hour', minutes: 60 },
+  { value: 'every6h', label: 'Every 6 hours', minutes: 360 },
+  { value: 'every12h', label: 'Every 12 hours', minutes: 720 },
   { value: 'daily', label: 'Every day', minutes: 1440 },
   { value: 'weekly', label: 'Every week', minutes: 10080 },
   { value: 'monthly', label: 'Every month', minutes: 43200 },
