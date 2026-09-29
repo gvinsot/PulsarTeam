@@ -251,7 +251,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     image: registry.methodinfo.fr/claudecode-service:latest
     networks:
       backend:
@@ -346,7 +346,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     networks:
       backend:
         aliases:
@@ -397,7 +397,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     networks:
       backend:
         aliases:
@@ -469,7 +469,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-latest}
         OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-2026-09-28}
     networks:
@@ -541,7 +541,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
         AIDER_CLI_VERSION: ${AIDER_CLI_VERSION:-latest}
         AIDER_CLI_CACHE_BUST: ${AIDER_CLI_CACHE_BUST:-1}
     networks:
@@ -621,7 +621,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     networks:
       backend:
         aliases:
@@ -694,7 +694,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     networks:
       backend:
         aliases:

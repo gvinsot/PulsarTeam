@@ -159,7 +159,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     environment:
       - RUNNER_TYPE=claude-code
       - TZ=${TZ:-Europe/Paris}
@@ -228,7 +228,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     environment:
       - RUNNER_TYPE=openclaw
       - TZ=${TZ:-Europe/Paris}
@@ -286,7 +286,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-latest}
         OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-2026-09-28}
     environment:
@@ -344,7 +344,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
         AIDER_CLI_VERSION: ${AIDER_CLI_VERSION:-latest}
         AIDER_CLI_CACHE_BUST: ${AIDER_CLI_CACHE_BUST:-1}
     environment:
@@ -413,7 +413,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     environment:
       - RUNNER_TYPE=codex
       - TZ=${TZ:-Europe/Paris}
@@ -477,7 +477,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     environment:
       - RUNNER_TYPE=hermes
       - TZ=${TZ:-Europe/Paris}
@@ -535,7 +535,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     environment:
       - RUNNER_TYPE=sandbox
       - TZ=${TZ:-Europe/Paris}
@@ -579,7 +579,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-29}
     environment:
       - RUNNER_TYPE=mock
       - TZ=${TZ:-Europe/Paris}

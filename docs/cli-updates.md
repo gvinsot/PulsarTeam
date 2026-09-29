@@ -15,6 +15,13 @@ of shipping a stub. `CODEX_CLI_VERSION` and `CODEX_CLI_CACHE_BUST` are no longer
 used: Codex always follows the latest stable release. Rebuild and redeploy the
 image to update running containers.
 
+## Claude Code CLI — 2026-09-29
+
+`RUNNER_CLI_CACHE_BUST` bumped to `2026-09-29` so cached image builds reinstall
+`@anthropic-ai/claude-code@latest` (2.1.284 observed on npm) and expose the
+newest Claude models (e.g. Sonnet 5.5) in the CLI's native model picker. Because
+the Claude install is the first CLI layer, the other CLIs are refreshed too.
+
 ## Other runner CLIs — 2026-09-10
 
 All runner images install the upstream latest CLIs at build time. Docker can
