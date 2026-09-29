@@ -104,6 +104,10 @@ async function bindAgentRunner(manager: any, agent: any): Promise<void> {
   });
 }
 
+// Cadence at which the reminder loop re-checks the task verdict while it waits
+// out a reminder interval (signals are in-memory; the DB read is one row).
+const VERDICT_POLL_SLICE_MS = 3000;
+
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
 const _taskSignals = new Map<string, Record<string, any>>(); // taskId -> { completed, comment, stopped, watching, pendingOnEnter }
@@ -1416,6 +1420,28 @@ export const tasksMethods = {
   },
 
   /**
+   * Sleeps `ms` in short slices, polling the verdict between them. Returns the
+   * first verdict seen (so the caller exits at once), or null once the full
+   * interval elapsed with the task still active on its start column.
+   */
+  async _waitIntervalOrVerdict(
+    this: any,
+    taskId: string,
+    taskText: string,
+    startStatus: string | undefined,
+    ms: number
+  ): Promise<'completed' | 'stopped' | 'moved' | 'deleted' | null> {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+      await new Promise(resolve => setTimeout(resolve, Math.min(VERDICT_POLL_SLICE_MS, remaining)));
+      const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
+      if (verdict) return verdict;
+    }
+  },
+
+  /**
    * Stream-wrapped prompt send shared by the immediate-retry and the reminder
    * loop: agent:stream:start → send → agent:stream:end + agent:updated, with the
    * send failure swallowed (logged) so the wait continues. Uses the CLI
@@ -1557,9 +1583,16 @@ export const tasksMethods = {
 
     try {
       while (reminded < MAX_REMINDERS) {
-        await new Promise(resolve => setTimeout(resolve, REMINDER_INTERVAL_MS));
-
-        const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
+        // Wait one reminder interval, but watch the verdict all along: the agent
+        // usually finishes (update_task → next column) long before the interval
+        // ends, and a blind sleep here kept the decide holding its column lock +
+        // busy flag — the task sat "busy" in verify and never advanced.
+        const verdict = await this._waitIntervalOrVerdict(
+          taskId,
+          taskText,
+          startStatus,
+          REMINDER_INTERVAL_MS
+        );
         if (verdict) {
           console.log(
             `🔔 [Execution] Task ${taskId} verdict "${verdict}" during reminder wait — exiting loop`

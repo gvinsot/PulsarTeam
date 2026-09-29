@@ -92,3 +92,32 @@ test('undefined startStatus never spuriously reports moved for an active task', 
   dbState.task = { id, status: 'execute' };
   assert.equal(await poll(id, undefined), null);
 });
+
+// ── _waitIntervalOrVerdict ────────────────────────────────────────────────────
+// The reminder loop used to sleep the whole interval (10 min) before its first
+// verdict check, so a task the agent had already moved to the next column stayed
+// "busy" (column lock + agent busy flag held) until the sleep ended.
+
+const waitCtx = { ...ctx, _pollTaskVerdict: (tasksMethods as any)._pollTaskVerdict };
+const waitInterval = (taskId: string, startStatus: string | undefined, ms: number) =>
+  (tasksMethods as any)._waitIntervalOrVerdict.call(waitCtx, taskId, 'some task text', startStatus, ms);
+
+test('_waitIntervalOrVerdict returns the verdict long before the interval ends', async () => {
+  const id = 't-wait-early';
+  clearTaskSignals(id);
+  dbState.task = { id, status: 'execute' };
+  setTimeout(() => {
+    dbState.task = { id, status: 'verify' }; // agent moved it mid-wait
+  }, 100);
+  const started = Date.now();
+  const verdict = await waitInterval(id, 'execute', 60_000);
+  assert.equal(verdict, 'moved');
+  assert.ok(Date.now() - started < 10_000, 'exited via the poll slice, not the 60s interval');
+});
+
+test('_waitIntervalOrVerdict returns null once the interval elapses on an unchanged task', async () => {
+  const id = 't-wait-null';
+  clearTaskSignals(id);
+  dbState.task = { id, status: 'execute' };
+  assert.equal(await waitInterval(id, 'execute', 50), null);
+});
