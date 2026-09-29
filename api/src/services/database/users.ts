@@ -92,6 +92,29 @@ export async function createUser(
 }
 
 /**
+ * Pre-create an account that has no credential yet (no password, no provider
+ * id). It cannot sign in by itself; the first OAuth login whose verified email
+ * equals `username` adopts it (see findOrCreateOAuthUser), so anything already
+ * shared with it is there on that first connection.
+ */
+export async function createPendingUser(username: string, role = 'advanced') {
+  const pool = getPool();
+  if (!pool) throw new Error('Database not connected');
+  try {
+    const result = await pool.query(
+      `INSERT INTO users (username, password, role, display_name)
+       VALUES ($1, NULL, $2, $1)
+       RETURNING id, username, role, display_name, created_at, updated_at`,
+      [username, role]
+    );
+    return result.rows[0];
+  } catch (err) {
+    if (errorCode(err) === PG_UNIQUE_VIOLATION) throw new Error('Username already exists');
+    throw err;
+  }
+}
+
+/**
  * Patch an arbitrary set of columns. `fields` is keyed by COLUMN name (not the
  * camelCase API name) because every key is interpolated straight into the SET
  * clause, so the caller is what constrains it — see routes/users.ts, which

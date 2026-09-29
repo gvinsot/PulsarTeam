@@ -1,4 +1,6 @@
 import express from 'express';
+import { createPendingUser } from '../services/database/users.js';
+import { provisionNewUser } from '../services/userProvisioning.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { resolveSessionToken } from '../middleware/session.js';
 import { isInternalServiceSession } from '../lib/agentAccess.js';
@@ -42,6 +44,8 @@ import {
   createShareSchema,
   updateShareSchema,
 } from '../schemas/boards.js';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function boardRoutes(agentManager: AgentManager) {
   const router = express.Router();
@@ -375,8 +379,21 @@ export function boardRoutes(agentManager: AgentManager) {
       let targetUsername = username;
       if (!targetUserId && targetUsername) {
         const users = await getAllUsers();
-        const user = users.find(u => u.username.toLowerCase() === targetUsername.toLowerCase());
-        if (!user) return res.status(404).json({ error: `User "${targetUsername}" not found` });
+        let user: { id: string; username: string } | undefined = users.find(
+          u => u.username.toLowerCase() === targetUsername.toLowerCase()
+        );
+        if (!user) {
+          // Unknown email: pre-create the account so the share is waiting on
+          // the invitee's first login.
+          const email = String(targetUsername).trim().toLowerCase();
+          if (!EMAIL_RE.test(email)) {
+            return res.status(404).json({ error: `User "${targetUsername}" not found` });
+          }
+          user = await createPendingUser(email);
+          await provisionNewUser(user.id).catch(err =>
+            console.error('Provisioning error:', err.message)
+          );
+        }
         targetUserId = user.id;
         targetUsername = user.username;
       }
