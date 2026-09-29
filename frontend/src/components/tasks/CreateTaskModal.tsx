@@ -95,7 +95,8 @@ export default function CreateTaskModal({
     }
   }, [availableStorages, defaultStoragePath, storagePath]);
 
-  // Auto-pick the first enabled agent as container (tasks are no longer agent-specific)
+  // Auto-pick the first enabled agent as container (tasks are no longer agent-specific).
+  // A board with no agent of its own yet gets a board-level task instead.
   const defaultAgentId = (agents || []).find(a => a.enabled !== false)?.id || '';
 
   useEffect(() => {
@@ -113,7 +114,11 @@ export default function CreateTaskModal({
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = text.trim();
-    if (!trimmed || !defaultAgentId) return;
+    if (!trimmed) return;
+    if (!defaultAgentId && !boardId) {
+      setError('Select a board before creating a task.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -129,13 +134,8 @@ export default function CreateTaskModal({
       const storageProvider = storagePath
         ? availableStorages.find(s => s.path === storagePath)?.provider || 'onedrive'
         : 'onedrive';
-      const created = await api.addTask(defaultAgentId, trimmed, {
+      const fields = {
         status,
-        // Same `|| undefined` normalisation as `repoFullName` below: api.addTask
-        // spreads the key only when truthy (`...(boardId && { boardId })`,
-        // api.ts:665), so a null board and an absent one already produced the
-        // very same request body.
-        boardId: boardId || undefined,
         repoFullName: repoFullName || undefined,
         repoProvider: 'github',
         secondaryRepos:
@@ -147,11 +147,17 @@ export default function CreateTaskModal({
         isManual: isManual || undefined,
         storagePath: storagePath || null,
         storageProvider,
-      });
+      };
+      const created = defaultAgentId
+        ? // Same `|| undefined` normalisation as `repoFullName` above: api.addTask
+          // spreads the key only when truthy, so a null board and an absent one
+          // produce the very same request body.
+          await api.addTask(defaultAgentId, trimmed, { ...fields, boardId: boardId || undefined })
+        : await api.addBoardTask(boardId as string, trimmed, fields);
       // Pass the created task so the parent can optimistically insert it
       // before the next loadTasks() fetch (avoids the race where the DB
       // INSERT hasn't committed yet).
-      await onCreated({ ...created, agentId: defaultAgentId });
+      await onCreated({ ...created, agentId: defaultAgentId || null });
       onClose();
     } catch (err) {
       // Keep the modal open so the (possibly long) description isn't lost.

@@ -27,6 +27,7 @@ import {
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
+import { createTaskFromRequest } from './lib/createTask.js';
 import { normalizeWorkflowColumnIds } from '../services/workflow/columnIds.js';
 import { applyColumnRenamesToBoardTasks } from '../services/workflow/renameBoardColumns.js';
 import type { AgentManager } from '../services/agentManager/index.js';
@@ -108,6 +109,25 @@ export function boardRoutes(agentManager: AgentManager) {
         emitTaskUpdated(agentManager, viewedTask, { emitAgent: false });
       }
       res.json({ success: true, viewed: viewedIds.length });
+    })
+  );
+
+  // POST /:id/tasks — create a board-level task (no owner agent). The create
+  // modal's door when the board has no agent of its own yet: agent-less boards
+  // otherwise had no way to receive a task from the UI.
+  router.post(
+    '/:id/tasks',
+    authorizeBoardAccess('edit'),
+    asyncHandler(async (req, res) => {
+      if (!req.body?.text) {
+        return res.status(400).json({ error: 'Text required' });
+      }
+      const task = await createTaskFromRequest(agentManager, req, {
+        agentId: null,
+        boardId: req.params.id as string,
+      });
+      if (!task) return res.status(500).json({ error: 'Failed to create task' });
+      res.status(201).json(task);
     })
   );
 

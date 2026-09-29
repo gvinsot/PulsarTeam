@@ -600,6 +600,46 @@ const jira = integration('jira');
 const wordpress = integration('wordpress');
 const s3 = integration('s3');
 
+export interface NewTaskOptions {
+  status?: TaskStatus;
+  boardId?: string;
+  repoFullName?: string;
+  repoProvider?: string;
+  secondaryRepos?: TaskSecondaryRepoInput[];
+  recurrence?: TaskRecurrenceInput;
+  taskType?: TaskType;
+  isManual?: boolean;
+  storagePath?: string | null;
+  storageProvider?: string;
+}
+
+/** Body shared by both task-creation doors (agent container / board-level). */
+const newTaskBody = (text: string, opts: NewTaskOptions) => {
+  const {
+    status,
+    boardId,
+    repoFullName,
+    secondaryRepos,
+    recurrence,
+    taskType,
+    isManual,
+    repoProvider = 'github',
+    storagePath = null,
+    storageProvider = 'onedrive',
+  } = opts;
+  return {
+    text,
+    ...(status && { status }),
+    ...(boardId && { boardId }),
+    ...(repoFullName && { repoFullName, repoProvider }),
+    ...(secondaryRepos && secondaryRepos.length > 0 && { secondaryRepos }),
+    ...(storagePath && { storagePath, storageProvider }),
+    ...(recurrence && { recurrence }),
+    ...(taskType && { taskType }),
+    ...(isManual && { isManual }),
+  };
+};
+
 export const api = {
   // Health — the public liveness probe (api/src/index.ts:312). The only call that
   // bypasses handleResponse, so the declared return type is what widens
@@ -748,46 +788,16 @@ export const api = {
   // and not even an agentId. TaskCreatedEvent is exactly that object; the extra
   // `taskId?: undefined` records that the `result.taskId` fallback in
   // AllCommitsDiffModal reads a key no producer writes.
-  addTask: (
-    agentId: string,
-    text: string,
-    opts: {
-      status?: TaskStatus;
-      boardId?: string;
-      repoFullName?: string;
-      repoProvider?: string;
-      secondaryRepos?: TaskSecondaryRepoInput[];
-      recurrence?: TaskRecurrenceInput;
-      taskType?: TaskType;
-      isManual?: boolean;
-      storagePath?: string | null;
-      storageProvider?: string;
-    } = {}
-  ) => {
-    const {
-      status,
-      boardId,
-      repoFullName,
-      secondaryRepos,
-      recurrence,
-      taskType,
-      isManual,
-      repoProvider = 'github',
-      storagePath = null,
-      storageProvider = 'onedrive',
-    } = opts;
-    return post<TaskCreatedEvent & { taskId?: undefined }>(`/agents/${agentId}/tasks`, {
-      text,
-      ...(status && { status }),
-      ...(boardId && { boardId }),
-      ...(repoFullName && { repoFullName, repoProvider }),
-      ...(secondaryRepos && secondaryRepos.length > 0 && { secondaryRepos }),
-      ...(storagePath && { storagePath, storageProvider }),
-      ...(recurrence && { recurrence }),
-      ...(taskType && { taskType }),
-      ...(isManual && { isManual }),
-    });
-  },
+  addTask: (agentId: string, text: string, opts: NewTaskOptions = {}) =>
+    post<TaskCreatedEvent & { taskId?: undefined }>(
+      `/agents/${agentId}/tasks`,
+      newTaskBody(text, opts)
+    ),
+
+  // Board-level task (no owner agent): the door for a board with no agent yet.
+  // The board comes from the path; a `boardId` in opts is ignored server-side.
+  addBoardTask: (boardId: string, text: string, opts: Omit<NewTaskOptions, 'boardId'> = {}) =>
+    post<TaskCreatedEvent>(`/boards/${boardId}/tasks`, newTaskBody(text, opts)),
 
   setTaskAssignee: (agentId: string, taskId: string, assigneeId: string | null) =>
     patch<MutatedTask>(`/agents/${agentId}/tasks/${taskId}/assignee`, { assigneeId }),

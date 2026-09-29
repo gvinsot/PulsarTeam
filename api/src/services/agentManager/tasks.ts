@@ -271,9 +271,11 @@ export const tasksMethods = {
     // inserting tasks it hasn't seen before, not just patching existing ones).
     const taskPayload = { ...newTask, agentId };
     this._emit('task:updated', { agentId, task: taskPayload });
-    // Skip auto-refine for unassigned tasks — there's no agent to refine for yet.
-    if (agentId && !skipAutoRefine && !newTask.isManual)
-      this._checkAutoRefine({ ...newTask, agentId });
+    // Column entry fires for a board-level task (agentId null) too:
+    // processColumnEntry takes the owner from the board's workflow, exactly as
+    // for a recurring run (_spawnOccurrence). The MCP/insert creators that must
+    // stay inert on creation opt out with skipAutoRefine.
+    if (!skipAutoRefine && !newTask.isManual) this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
   },
 

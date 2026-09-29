@@ -1446,3 +1446,32 @@ test('setTaskStatus clears startedAt even during workflow transitions', async ()
   assert.equal(task.startedAt, null);
   // processTransition would re-set it when the code on_enter run_agent starts
 });
+
+test('addTask: a board-level task (no agent) enters its column like an owned one', async () => {
+  const mgr = await setup();
+  const entered: any[] = [];
+  mgr._checkAutoRefine = (task: any) => entered.push(task);
+
+  const task = await mgr.addTask(null, 'Board task', { type: 'user' }, 'refine', {
+    boardId: 'board-1',
+  });
+  assert.ok(task, 'created without an agent');
+  assert.equal(rows.get(task.id)?.agentId, null);
+  assert.equal(entered.length, 1);
+  assert.equal(entered[0].id, task.id);
+  assert.equal(entered[0].agentId, null);
+
+  // The MCP / insert creators stay inert on creation, and a manual task never runs.
+  await mgr.addTask(null, 'Inert', { type: 'mcp' }, 'refine', {
+    boardId: 'board-1',
+    skipAutoRefine: true,
+  });
+  await mgr.addTask(null, 'Manual', { type: 'user' }, 'refine', {
+    boardId: 'board-1',
+    isManual: true,
+  });
+  assert.equal(entered.length, 1);
+
+  // Still refused without a board to live on.
+  assert.equal(await mgr.addTask(null, 'Homeless', { type: 'user' }, 'refine', {}), null);
+});
