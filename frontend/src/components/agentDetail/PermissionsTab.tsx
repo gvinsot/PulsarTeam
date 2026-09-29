@@ -15,12 +15,16 @@ import {
   Plus,
   AlertTriangle,
   Ban,
+  ClipboardList,
+  LayoutDashboard,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { api } from '../../api';
 import type {
   Agent,
+  BoardListItem,
+  TaskSocketPayload,
   AgentPermissionsExecution,
   AgentPermissionsFilesystem,
   AgentPermissionsLinuxUser,
@@ -401,7 +405,7 @@ function buildHookRules(agent: Agent) {
   }).concat(existing.filter(r => !BUILTIN_RULE_IDS.has(r.id)));
 }
 
-export default function PermissionsTab({
+function PermissionsSecurityPanel({
   agent,
   onRefresh,
 }: {
@@ -954,6 +958,166 @@ export default function PermissionsTab({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface BoardAssignment {
+  board: BoardListItem;
+  reasons: string[];
+}
+
+/** Boards whose workflow actions reference this agent (by id) or its role. */
+function findBoardAssignments(boards: BoardListItem[], agent: Agent): BoardAssignment[] {
+  const out: BoardAssignment[] = [];
+  for (const board of boards) {
+    const reasons = new Set<string>();
+    for (const t of board.workflow?.transitions || []) {
+      for (const a of t.actions || []) {
+        const col = board.workflow?.columns?.find(c => c.id === t.from)?.label || t.from;
+        if (a.type === 'assign_agent_individual' && a.agentId === agent.id) {
+          reasons.add(`Assigned directly on "${col}"`);
+        } else if (
+          (a.type === 'assign_agent' || a.type === 'run_agent') &&
+          a.role &&
+          a.role === agent.role
+        ) {
+          reasons.add(`Role "${a.role}" (${a.type === 'run_agent' ? 'run' : 'assign'}) on "${col}"`);
+        }
+      }
+    }
+    if (reasons.size > 0) out.push({ board, reasons: [...reasons] });
+  }
+  return out;
+}
+
+function AssignmentsPanel({ agent }: { agent: Agent }) {
+  const [boards, setBoards] = useState<BoardListItem[]>([]);
+  const [tasks, setTasks] = useState<TaskSocketPayload[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    Promise.all([api.getBoards(), api.getAllTasks()])
+      .then(([b, t]) => {
+        if (cancelled) return;
+        setBoards(b);
+        setTasks(t);
+      })
+      .catch(err => {
+        if (!cancelled) setError(err?.message || 'Failed to load assignments');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agent.id]);
+
+  if (loading) return <p className="text-sm text-dark-500">Loading assignments…</p>;
+  if (error) return <p className="text-sm text-red-400">{error}</p>;
+
+  const boardAssignments = findBoardAssignments(boards, agent);
+  const agentTasks = tasks.filter(t => t.agentId === agent.id || t.assignee === agent.id);
+  const boardName = (id?: string | null) => boards.find(b => b.id === id)?.name || 'Unknown board';
+  const statusLabel = (t: TaskSocketPayload) =>
+    boards
+      .find(b => b.id === t.boardId)
+      ?.workflow?.columns?.find(c => c.id === t.status)?.label || t.status;
+
+  return (
+    <div className="space-y-4">
+      <PermissionCard
+        icon={LayoutDashboard}
+        title={`Boards (${boardAssignments.length})`}
+        description={`Boards whose workflow uses this agent or its role "${agent.role || 'general'}".`}
+      >
+        {boardAssignments.length === 0 ? (
+          <p className="text-[11px] text-dark-500">No board uses this agent or its role.</p>
+        ) : (
+          boardAssignments.map(({ board, reasons }) => (
+            <div key={board.id} className="text-sm text-dark-300">
+              <div className="font-medium">{board.name}</div>
+              {reasons.map(r => (
+                <div key={r} className="text-[11px] text-dark-500">
+                  {r}
+                </div>
+              ))}
+            </div>
+          ))
+        )}
+      </PermissionCard>
+
+      <PermissionCard
+        icon={ClipboardList}
+        title={`Tasks (${agentTasks.length})`}
+        description="Tasks assigned to this agent or currently executed by it."
+      >
+        {agentTasks.length === 0 ? (
+          <p className="text-[11px] text-dark-500">No task is assigned to this agent.</p>
+        ) : (
+          agentTasks.map(t => (
+            <div key={t.id} className="flex items-center justify-between gap-3 text-sm">
+              <div className="min-w-0">
+                <div className="text-dark-300 truncate">
+                  {t.title || (t.text || '').slice(0, 80) || t.id}
+                </div>
+                <div className="text-[11px] text-dark-500">
+                  {boardName(t.boardId)}
+                  {t.assignee === agent.id && t.agentId !== agent.id ? ' · executing' : ''}
+                </div>
+              </div>
+              <span className="flex-shrink-0 text-[11px] px-2 py-0.5 rounded bg-dark-700 text-dark-300">
+                {statusLabel(t)}
+              </span>
+            </div>
+          ))
+        )}
+      </PermissionCard>
+    </div>
+  );
+}
+
+export default function PermissionsTab({
+  agent,
+  onRefresh,
+}: {
+  agent: Agent;
+  onRefresh: () => void;
+}) {
+  const [sub, setSub] = useState<'permissions' | 'assignments'>('permissions');
+  const tabs = [
+    { id: 'permissions' as const, label: 'Permissions & Security', icon: Shield },
+    { id: 'assignments' as const, label: 'Assignments', icon: ClipboardList },
+  ];
+  return (
+    <div>
+      <div className="flex gap-1 px-4 pt-3 border-b border-dark-700/50">
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setSub(id)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border-b-2 -mb-px transition-colors ${
+              sub === id
+                ? 'border-indigo-500 text-dark-100'
+                : 'border-transparent text-dark-500 hover:text-dark-300'
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5" /> {label}
+          </button>
+        ))}
+      </div>
+      {sub === 'permissions' ? (
+        <PermissionsSecurityPanel agent={agent} onRefresh={onRefresh} />
+      ) : (
+        <div className="p-4">
+          <AssignmentsPanel agent={agent} />
+        </div>
+      )}
     </div>
   );
 }
