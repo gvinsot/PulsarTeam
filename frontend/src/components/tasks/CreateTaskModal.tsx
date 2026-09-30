@@ -109,6 +109,14 @@ export default function CreateTaskModal({
     textareaRef.current?.focus();
   }, []);
 
+  // Lock background scrolling while the modal is open so touch scrolling on
+  // mobile moves the modal content instead of the page behind it.
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -206,10 +214,10 @@ export default function CreateTaskModal({
   const currentStatus = CREATE_STATUSES.find(s => s.value === status);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-xl bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overscroll-contain">
+      <div className="w-full max-w-xl max-h-[calc(100dvh-2rem)] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
+        <div className="flex shrink-0 items-center justify-between px-5 py-4 border-b border-dark-700">
           <div className="flex items-center gap-2">
             <Plus className="w-4 h-4 text-indigo-400" />
             <span className="text-sm font-semibold text-dark-100">Create Task</span>
@@ -223,7 +231,7 @@ export default function CreateTaskModal({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-4">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-4 min-h-0 overflow-y-auto overscroll-contain">
           {/* Text */}
           <div>
             <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
