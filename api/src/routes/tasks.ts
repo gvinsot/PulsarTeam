@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router, type RequestHandler } from 'express';
 import { errorMessage } from '../lib/errors.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireRole } from '../middleware/auth.js';
@@ -28,8 +28,16 @@ import {
   ASSIGNEE_BOARD_MISMATCH_ERROR,
 } from '../services/taskMutations.js';
 import { normalizeSecondaryRepos, isValidRepoFullName } from '../services/taskRepos.js';
-import { normalizeContextFiles } from '../lib/taskContextFiles.js';
 import { validateBody } from '../lib/validate.js';
+import { MAX_ATTACHMENT_BYTES, sanitizeAttachmentName } from '../lib/taskAttachments.js';
+import {
+  addTaskAttachment,
+  deleteTaskAttachment,
+  getTaskAttachmentData,
+  listTaskAttachments,
+  TaskAttachmentLimitError,
+} from '../services/database/taskAttachments.js';
+import { guessMimeType } from '../services/mcpAttachments.js';
 import { projectObject, projectionIncludesField, type FieldProjection } from '../lib/projection.js';
 import { parseTaskProjection } from '../services/taskProjection.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
@@ -271,7 +279,6 @@ async function applyTaskFieldEdits(
     repoFullName,
     repoProvider,
     secondaryRepos,
-    contextFiles,
     storagePath,
     storageProvider,
     position,
@@ -362,11 +369,6 @@ async function applyTaskFieldEdits(
     const oldValue = JSON.stringify(task.secondaryRepos || []);
     task.secondaryRepos = normalizeSecondaryRepos(secondaryRepos, task.repoFullName || null);
     if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
-  }
-  if (contextFiles !== undefined) {
-    const oldValue = JSON.stringify(task.contextFiles || []);
-    task.contextFiles = normalizeContextFiles(contextFiles);
-    if (JSON.stringify(task.contextFiles) !== oldValue) editedFields.push('contextFiles');
   }
   if (storagePath !== undefined) {
     const value =
@@ -1111,6 +1113,141 @@ router.delete(
     emitTaskUpdated(mgr, updated, { emitAgent: false });
     await auditLog('comment_delete', task.id, req.user.userId, req.user.username, {
       commentId: req.params.commentId,
+    });
+    res.json({ ok: true });
+  })
+);
+
+// ── Attachments — real files stored with the task (lib/taskAttachments.ts) ──
+// GET    /tasks/:id/attachments                    → TaskAttachment[] (no content)
+// POST   /tasks/:id/attachments?filename=<name>    raw file body → TaskAttachment
+// GET    /tasks/:id/attachments/:attachmentId      → the file, as a download
+// DELETE /tasks/:id/attachments/:attachmentId      → { ok: true }
+// The workflow copies them onto the executing runner before each run
+// (services/execution/taskAttachmentDelivery.ts).
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MIME_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
+
+const rawAttachmentParser = express.raw({ type: () => true, limit: MAX_ATTACHMENT_BYTES });
+
+/** The raw body parser, answering an oversize upload with JSON instead of HTML. */
+const attachmentBody: RequestHandler = function attachmentBody(req, res, next) {
+  rawAttachmentParser(req, res, err => {
+    if (!err) return next();
+    const status = (err as { status?: number }).status || 400;
+    res.status(status).json({
+      error:
+        status === 413
+          ? `File too large (max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB)`
+          : 'Could not read the uploaded file',
+    });
+  });
+};
+
+router.get(
+  '/:id/attachments',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(await listTaskAttachments(task.id));
+  })
+);
+
+router.post(
+  '/:id/attachments',
+  attachmentBody,
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const data: unknown = req.body;
+    if (!Buffer.isBuffer(data) || data.length === 0) {
+      return res.status(400).json({ error: 'Empty file' });
+    }
+    const filename = sanitizeAttachmentName(req.query.filename);
+    const declared = String(req.headers['content-type'] || '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    const mimeType =
+      MIME_RE.test(declared) && declared !== 'application/octet-stream'
+        ? declared
+        : guessMimeType(filename);
+    try {
+      const attachment = await addTaskAttachment({
+        taskId: task.id,
+        filename,
+        mimeType,
+        data,
+        uploadedBy: req.user.userId || null,
+        uploadedByName: req.user.username || null,
+      });
+      await auditLog('attachment_add', task.id, req.user.userId, req.user.username, {
+        attachmentId: attachment.id,
+        filename: attachment.filename,
+        size: attachment.size,
+      });
+      res.status(201).json(attachment);
+    } catch (err) {
+      if (err instanceof TaskAttachmentLimitError) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+  })
+);
+
+router.get(
+  '/:id/attachments/:attachmentId',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const attachment = UUID_RE.test(req.params.attachmentId)
+      ? await getTaskAttachmentData(task.id, req.params.attachmentId)
+      : null;
+    if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
+    // Always a download, never rendered: an uploaded HTML or SVG file must not
+    // run in the application's origin.
+    res.setHeader('Content-Type', attachment.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; ` +
+        `filename*=UTF-8''${encodeURIComponent(attachment.filename)}`
+    );
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(attachment.data);
+  })
+);
+
+router.delete(
+  '/:id/attachments/:attachmentId',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const removed =
+      UUID_RE.test(req.params.attachmentId) &&
+      (await deleteTaskAttachment(task.id, req.params.attachmentId));
+    if (!removed) return res.status(404).json({ error: 'Attachment not found' });
+    await auditLog('attachment_delete', task.id, req.user.userId, req.user.username, {
+      attachmentId: req.params.attachmentId,
     });
     res.json({ ok: true });
   })

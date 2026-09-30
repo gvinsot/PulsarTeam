@@ -108,7 +108,6 @@ export const TASK_VIEW_PROPERTIES: Record<(typeof TASK_VIEW_KEYS)[number], JsonO
   repoFullName: nullable('string', 'Target repository, "owner/repo".'),
   repoProvider: nullable('string', 'Repository provider (github…).'),
   secondaryRepos: { type: ['array', 'null'], description: 'Extra repositories cloned alongside.' },
-  contextFiles: { type: ['array', 'null'], description: 'Repo-relative file paths added to the agent context (max 20).' },
   storagePath: nullable('string', 'Target storage location.'),
   storageProvider: nullable('string', 'Storage provider (onedrive…).'),
   createdAt: nullable('string', 'Creation timestamp.'),

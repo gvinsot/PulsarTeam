@@ -7,7 +7,7 @@
 // handled by the runner-service itself; this provider is a thin HTTP shim
 // over /exec-shell, /projects/ensure, ...
 
-import { ExecutionProvider, GitCredentials } from './executionProvider.js';
+import { ExecutionProvider, GitCredentials, type TaskFileRef } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
 import { errorMessage } from '../../lib/errors.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
@@ -519,6 +519,53 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       15
     );
     return matches;
+  }
+
+  // ── Task attachments (runner-service routes_task_files.py) ───────────
+
+  async syncTaskFiles(
+    agentId: string,
+    taskId: string,
+    files: TaskFileRef[]
+  ): Promise<{ dir: string; missing: string[] }> {
+    const res = await this._fetch(`${this.baseUrl}/task-files/${encodeURIComponent(taskId)}/sync`, {
+      method: 'POST',
+      headers: this._headers(agentId),
+      body: JSON.stringify({ files }),
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(
+        `task-files sync failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`
+      );
+    }
+    return (await res.json()) as { dir: string; missing: string[] };
+  }
+
+  async writeTaskFile(
+    agentId: string,
+    taskId: string,
+    name: string,
+    data: Buffer
+  ): Promise<string> {
+    const res = await this._fetch(
+      `${this.baseUrl}/task-files/${encodeURIComponent(taskId)}/${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+        headers: { ...this._headers(agentId), 'Content-Type': 'application/octet-stream' },
+        body: new Uint8Array(data),
+        signal: AbortSignal.timeout(120_000),
+      }
+    );
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(
+        `task-files write failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`
+      );
+    }
+    const out = (await res.json()) as { path: string };
+    return out.path;
   }
 
   // ── Command execution ─────────────────────────────────────────────────

@@ -45,6 +45,7 @@ import {
   type AgentGitCredentials,
 } from '../execution/agentWorkspace.js';
 import { isCliRunner } from '../runners.js';
+import { deliverTaskAttachments } from '../execution/taskAttachmentDelivery.js';
 import { errorMessage } from '../../lib/errors.js';
 import {
   snapshotGitBaseline,
@@ -868,6 +869,14 @@ async function executeRunAgent(
         agentId: task.agentId,
       });
       if (!switched.ok) return switched.result;
+      // Only decide executes the task; the other modes rewrite its card.
+      if (mode === AgentMode.DECIDE) {
+        task.materializedAttachments = await deliverTaskAttachments(
+          agentManager.executionManager,
+          agent.id,
+          task.id
+        );
+      }
       execStartMsgIdx = (agent.conversationHistory || []).length;
       execStartedAt = new Date().toISOString();
 

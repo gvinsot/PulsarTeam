@@ -61,8 +61,10 @@ import {
   getTaskCommitRun,
 } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
-import { normalizeContextFiles } from '../../lib/taskContextFiles.js';
 import { ensureAgentWorkspace, resolveAgentGitCredentials } from '../execution/agentWorkspace.js';
+import { copyTaskAttachments } from '../database/taskAttachments.js';
+import { deliverTaskAttachments } from '../execution/taskAttachmentDelivery.js';
+import { errorMessage } from '../../lib/errors.js';
 import type { Task, TaskWriteInput, TaskRecurrence } from '../database/tasks.js';
 import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
@@ -143,6 +145,17 @@ export function purgeStaleTaskSignals(activeTaskIds: Set<string>): void {
   }
 }
 
+/** A run without the rule's files is better than no run: log and go on. */
+async function copyAttachmentsBestEffort(fromTaskId: string, toTaskId: string) {
+  try {
+    await copyTaskAttachments(fromTaskId, toTaskId);
+  } catch (err) {
+    console.warn(
+      `🔁 [Recurrence] Could not copy attachments ${fromTaskId} → ${toTaskId}: ${errorMessage(err)}`
+    );
+  }
+}
+
 /**
  * The fields a recurring rule and its runs share — everything that describes
  * WHAT to do (text, board, repo, storage, owner), never the state of one
@@ -162,7 +175,6 @@ function pickTemplateFields(task: RecurrenceTask) {
     repoProvider: task.repoProvider || null,
     repoFullName: task.repoFullName || null,
     secondaryRepos: Array.isArray(task.secondaryRepos) ? task.secondaryRepos : [],
-    contextFiles: normalizeContextFiles(task.contextFiles),
     storageProvider: task.storageProvider || null,
     storagePath: task.storagePath || null,
     taskType: task.taskType || null,
@@ -186,7 +198,6 @@ export const tasksMethods = {
       repoFullName,
       repoProvider,
       secondaryRepos,
-      contextFiles,
       storagePath,
       storageProvider,
       skipAutoRefine = false,
@@ -201,7 +212,6 @@ export const tasksMethods = {
       repoFullName?: string | null;
       repoProvider?: string | null;
       secondaryRepos?: any;
-      contextFiles?: unknown;
       storagePath?: string | null;
       storageProvider?: string | null;
       skipAutoRefine?: boolean;
@@ -232,7 +242,6 @@ export const tasksMethods = {
       // Secondary repos cloned alongside the primary; normalized (deduped,
       // primary-excluded, capped) so the stored shape is always clean.
       secondaryRepos: normalizeSecondaryRepos(secondaryRepos, repoFullName || null),
-      contextFiles: normalizeContextFiles(contextFiles),
       storagePath: storagePath || null,
       storageProvider: storagePath ? storageProvider || 'onedrive' : null,
       source: source || null,
@@ -619,6 +628,7 @@ export const tasksMethods = {
     config.occurrenceCount = task.occurrenceSeq || 1;
     config.lastOccurrenceId = task.id;
     await saveTaskToDb(template);
+    await copyAttachmentsBestEffort(task.id, template.id);
 
     // Adopt the card. updateTaskFields writes only these columns, so nothing
     // the agent is doing to the row in parallel is overwritten.
@@ -674,6 +684,7 @@ export const tasksMethods = {
       createdAt: nowIso,
     };
     await saveTaskToDb(occurrence);
+    await copyAttachmentsBestEffort(template.id, occurrence.id);
 
     template.recurrence = {
       ...rec,
@@ -1917,6 +1928,12 @@ export const tasksMethods = {
               this._switchProjectContext?.(executor, executor.project, taskRepo);
               executor.projectChangedAt = new Date().toISOString();
             }
+            // Same container as the prompt: copy the task's files next to it.
+            task.materializedAttachments = await deliverTaskAttachments(
+              this.executionManager,
+              executor.id,
+              task.id
+            );
           } catch (switchErr: any) {
             console.error(
               `🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`

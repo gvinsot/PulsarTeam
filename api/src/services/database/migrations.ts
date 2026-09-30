@@ -298,6 +298,25 @@ const MIGRATIONS: Migration[] = [
       await db.query("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context_files JSONB DEFAULT '[]'");
     },
   },
+
+  // Real files attached to a task (lib/taskAttachments.ts), replacing the
+  // repo-path list above, which is dropped.
+  sqlMigration('202609300002_task_attachments', 'task_attachments table, drop context_files', [
+    `CREATE TABLE IF NOT EXISTS task_attachments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      data BYTEA NOT NULL,
+      uploaded_by UUID,
+      uploaded_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (task_id, filename)
+    )`,
+    'ALTER TABLE tasks DROP COLUMN IF EXISTS context_files',
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

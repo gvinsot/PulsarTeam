@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { FileText, Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucide-react';
-import { api } from '../../api';
+import { Paperclip, Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucide-react';
+import { api, uploadTaskAttachment } from '../../api';
 import { TASK_TYPES, buildRecurrence } from './taskConstants';
 import type { StatusOption } from './taskConstants';
-import ContextFilesEditor, { contextFileBlock } from './ContextFilesEditor';
+import TaskAttachmentsEditor from './TaskAttachmentsEditor';
 import RecurrenceFields from './RecurrenceFields';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
@@ -70,7 +70,11 @@ export default function CreateTaskModal({
   const userTouchedRepo = useRef(false);
   // Extra repos (fullNames) cloned alongside the primary at run time.
   const [secondaryRepos, setSecondaryRepos] = useState<string[]>([]);
-  const [contextFiles, setContextFiles] = useState<string[]>([]);
+  // Files picked before the task exists; uploaded right after it is created.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  // Set once the task exists: a failed upload keeps the modal open, and the
+  // next submit only retries the remaining files instead of creating a twin.
+  const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
   // If the user hasn't touched the picker, fall back to either the explicit
   // default or, when only one repo is available, that single repo.
   useEffect(() => {
@@ -113,10 +117,35 @@ export default function CreateTaskModal({
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  const uploadRemainingFiles = async (taskId: string) => {
+    setSaving(true);
+    setError(null);
+    let remaining = pendingFiles;
+    try {
+      for (const file of pendingFiles) {
+        await uploadTaskAttachment(taskId, file);
+        remaining = remaining.filter(f => f !== file);
+        setPendingFiles(remaining);
+      }
+      onClose();
+    } catch (err) {
+      setError(
+        `Task created, but "${remaining[0]?.name}" could not be attached: ${errorMessage(err)}. ` +
+          'Submit again to retry, or remove the file.'
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (createdTaskId) {
+      await uploadRemainingFiles(createdTaskId);
+      return;
+    }
     if (!defaultAgentId && !boardId) {
       setError('Select a board before creating a task.');
       return;
@@ -144,7 +173,6 @@ export default function CreateTaskModal({
           repoFullName && secondaryRepos.length > 0
             ? secondaryRepos.map(fn => ({ provider: 'github', fullName: fn }))
             : undefined,
-        contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
         recurrence,
         taskType: taskType || undefined,
         isManual: isManual || undefined,
@@ -161,6 +189,11 @@ export default function CreateTaskModal({
       // before the next loadTasks() fetch (avoids the race where the DB
       // INSERT hasn't committed yet).
       await onCreated({ ...created, agentId: defaultAgentId || null });
+      if (pendingFiles.length > 0) {
+        setCreatedTaskId(created.id);
+        await uploadRemainingFiles(created.id);
+        return;
+      }
       onClose();
     } catch (err) {
       // Keep the modal open so the (possibly long) description isn't lost.
@@ -304,17 +337,13 @@ export default function CreateTaskModal({
             </div>
           )}
 
-          {/* Context files — repo paths the agent must read before working */}
+          {/* Attachments — real files, copied onto the agent's machine before it runs */}
           <div>
             <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
-              <FileText className="inline w-3 h-3 mr-1" />
-              Context files
+              <Paperclip className="inline w-3 h-3 mr-1" />
+              Attachments
             </label>
-            <ContextFilesEditor
-              files={contextFiles}
-              onChange={setContextFiles}
-              onAttach={(name, content) => setText(t => t + contextFileBlock(name, content))}
-            />
+            <TaskAttachmentsEditor pending={pendingFiles} onPendingChange={setPendingFiles} />
           </div>
 
           {/* Storage — sourced from the board's OneDrive plugin OAuth */}
@@ -463,7 +492,7 @@ export default function CreateTaskModal({
                 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 rounded-lg transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
-              {saving ? 'Creating…' : 'Create Task'}
+              {saving ? 'Creating…' : createdTaskId ? 'Retry upload' : 'Create Task'}
             </button>
           </div>
         </form>

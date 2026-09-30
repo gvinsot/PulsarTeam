@@ -141,6 +141,26 @@ export type TaskCommentAuthorType = 'agent' | 'user' | 'system';
  * createTaskComment; agents write one through update_task's `comment`, users
  * through POST /api/tasks/:id/comments.
  */
+/**
+ * A file attached to a task (api/src/lib/taskAttachments.ts). Metadata only:
+ * the bytes are fetched through taskAttachmentUrl. Copied onto the runner
+ * before each run and listed in the agent's prompt.
+ */
+export interface TaskAttachment {
+  id: string;
+  taskId: string;
+  /** Sanitized and unique within the task ("a.pdf", "a (2).pdf"). */
+  filename: string;
+  mimeType: string;
+  /** Bytes; at most MAX_ATTACHMENT_BYTES. */
+  size: number;
+  sha256: string;
+  uploadedBy: string | null;
+  uploadedByName: string | null;
+  /** ISO 8601. */
+  createdAt: string | null;
+}
+
 export interface TaskComment {
   id: string;
   /** Agent name or username. */
@@ -385,8 +405,6 @@ export interface Task {
   repoHtmlUrl: string | null;
   /** `Array.isArray(...) ? ... : []` — always an array, never null. */
   secondaryRepos: TaskSecondaryRepo[];
-  /** Repo-relative file paths listed in the agent's prompt (max 20). */
-  contextFiles?: string[];
   /** Open string; 'onedrive' is the only default written. */
   storageProvider: string | null;
   /** Trimmed and capped at 500 chars. */

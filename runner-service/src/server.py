@@ -28,6 +28,7 @@ from backends import BACKEND
 from routes_api import router as api_router
 from routes_auth import router as auth_router
 from routes_terminal import router as terminal_router
+from routes_task_files import router as task_files_router
 import pty_session
 
 
@@ -39,6 +40,7 @@ app = FastAPI(
 
 app.include_router(auth_router)
 app.include_router(api_router)
+app.include_router(task_files_router)
 # Interactive terminal endpoints. Always mounted; the WS handler returns
 # WS_1003_UNSUPPORTED_DATA when the backend doesn't expose a CLI TUI, so
 # the route is harmless on non-CLI runners.

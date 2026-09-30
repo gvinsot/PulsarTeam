@@ -19,6 +19,12 @@ export interface GitCredentials {
   username?: string | null;
 }
 
+/** An attachment as the runner identifies it: on-disk name + content hash. */
+export interface TaskFileRef {
+  name: string;
+  sha256: string;
+}
+
 /**
  * @abstract
  * Base class that defines the contract every execution provider must fulfill.
@@ -48,6 +54,29 @@ export class ExecutionProvider {
     _creds: GitCredentials | null = null
   ): Promise<void> {
     // no-op
+  }
+
+  /**
+   * Make the agent's copy of a task's attachments match `files`: delete the
+   * ones no longer attached and report which still need writeTaskFile (absent
+   * or different content). null = this provider cannot hold task files.
+   */
+  async syncTaskFiles(
+    _agentId: string,
+    _taskId: string,
+    _files: TaskFileRef[]
+  ): Promise<{ dir: string; missing: string[] } | null> {
+    return null;
+  }
+
+  /** Write one attachment for the agent; returns its absolute path. */
+  async writeTaskFile(
+    _agentId: string,
+    _taskId: string,
+    _name: string,
+    _data: Buffer
+  ): Promise<string> {
+    throw new Error('This execution provider cannot hold task files');
   }
 
   /**

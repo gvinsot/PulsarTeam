@@ -71,6 +71,7 @@ import type {
   Settings,
   StoredAgentMode,
   Task,
+  TaskAttachment,
   TaskComment,
   TaskCreatedEvent,
   TaskExecutionStatus,
@@ -231,7 +232,6 @@ export interface TaskUpdateInput {
   repoProvider?: string | null;
   /** The schema accepts a bare 'owner/repo' string as well as the object form. */
   secondaryRepos?: Array<string | TaskSecondaryRepoInput>;
-  contextFiles?: string[];
   storagePath?: string | null;
   storageProvider?: string | null;
 }
@@ -607,7 +607,6 @@ export interface NewTaskOptions {
   repoFullName?: string;
   repoProvider?: string;
   secondaryRepos?: TaskSecondaryRepoInput[];
-  contextFiles?: string[];
   recurrence?: TaskRecurrenceInput;
   taskType?: TaskType;
   isManual?: boolean;
@@ -622,7 +621,6 @@ const newTaskBody = (text: string, opts: NewTaskOptions) => {
     boardId,
     repoFullName,
     secondaryRepos,
-    contextFiles,
     recurrence,
     taskType,
     isManual,
@@ -636,7 +634,6 @@ const newTaskBody = (text: string, opts: NewTaskOptions) => {
     ...(boardId && { boardId }),
     ...(repoFullName && { repoFullName, repoProvider }),
     ...(secondaryRepos && secondaryRepos.length > 0 && { secondaryRepos }),
-    ...(contextFiles && contextFiles.length > 0 && { contextFiles }),
     ...(storagePath && { storagePath, storageProvider }),
     ...(recurrence && { recurrence }),
     ...(taskType && { taskType }),
@@ -1443,6 +1440,27 @@ export const addTaskComment = (taskId: string, text: string) =>
   post<TaskComment>(`/tasks/${taskId}/comments`, { text });
 export const deleteTaskComment = (taskId: string, commentId: string) =>
   del<OkAck>(`/tasks/${taskId}/comments/${commentId}`);
+
+/* ── Task attachments (real files, copied onto the runner before each run) ── */
+export const getTaskAttachments = (taskId: string) =>
+  get<TaskAttachment[]>(`/tasks/${taskId}/attachments`);
+// The file is the raw request body (api/src/routes/tasks.ts attachmentBody), so
+// this cannot go through `post`, which JSON-encodes.
+export const uploadTaskAttachment = (taskId: string, file: File) =>
+  apiFetch(`${API_BASE}/tasks/${taskId}/attachments?filename=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    headers: {
+      ...getHeaders(),
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: file,
+    signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
+  }).then(res => handleResponse<TaskAttachment>(res));
+export const deleteTaskAttachment = (taskId: string, attachmentId: string) =>
+  del<OkAck>(`/tasks/${taskId}/attachments/${attachmentId}`);
+/** Same-origin download link; the session cookie authenticates it. */
+export const taskAttachmentUrl = (taskId: string, attachmentId: string) =>
+  `${API_BASE}/tasks/${taskId}/attachments/${attachmentId}`;
 
 export const clearTaskStopped = (taskId: string) => patch<OkAck>(`/tasks/${taskId}/clear-stopped`);
 

@@ -7,7 +7,7 @@
 // (typically inspecting agent.runner or llmConfig.managesContext).
 
 import { RunnerExecutionProvider } from './runnerExecutionProvider.js';
-import { ExecutionProvider, GitCredentials } from './executionProvider.js';
+import { ExecutionProvider, GitCredentials, type TaskFileRef } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
 import { RUNNER_SERVICES, runnerServiceUrl, type RunnerServiceType } from './runnerRegistry.js';
 
@@ -172,6 +172,14 @@ export class ExecutionManager {
    */
   async installGitCredentials(agentId: string, creds: GitCredentials | null = null): Promise<void> {
     return this._providerFor(agentId).installGitCredentials(agentId, creds);
+  }
+
+  async syncTaskFiles(agentId: string, taskId: string, files: TaskFileRef[]) {
+    return this._providerFor(agentId).syncTaskFiles(agentId, taskId, files);
+  }
+
+  async writeTaskFile(agentId: string, taskId: string, name: string, data: Buffer) {
+    return this._providerFor(agentId).writeTaskFile(agentId, taskId, name, data);
   }
 
   async ensureProject(

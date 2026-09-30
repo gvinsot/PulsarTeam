@@ -76,6 +76,7 @@ export type {
   TaskRecurrencePeriod,
   TaskHistoryEntryType,
   TaskCommit,
+  TaskAttachment,
   TaskComment,
   TaskCommentAuthorType,
   TaskSecondaryRepo,

@@ -476,6 +476,11 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'GET /api/tasks/:id/comments': ['authenticateToken'],
   'POST /api/tasks/:id/comments': ['authenticateToken'],
   'DELETE /api/tasks/:id/comments/:commentId': ['authenticateToken'],
+  // Attachments: requireTaskAccess inline, like the comment routes above.
+  'GET /api/tasks/:id/attachments': ['authenticateToken'],
+  'POST /api/tasks/:id/attachments': ['authenticateToken'],
+  'GET /api/tasks/:id/attachments/:attachmentId': ['authenticateToken'],
+  'DELETE /api/tasks/:id/attachments/:attachmentId': ['authenticateToken'],
   'GET /api/tasks/project-stats': ['authenticateToken'],
   'GET /api/tasks/stats': ['authenticateToken'],
   'GET /api/tasks/audit': ['authenticateToken', 'requireRole(admin)'],

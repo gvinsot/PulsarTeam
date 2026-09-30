@@ -148,7 +148,6 @@ const TABLES = [
       commits JSONB DEFAULT '[]',
       history JSONB DEFAULT '[]',
       comments JSONB DEFAULT '[]',
-      context_files JSONB DEFAULT '[]',
       error TEXT,
       error_from_status TEXT,
       execution_status TEXT,
@@ -183,6 +182,21 @@ const TABLES = [
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       completed_at TIMESTAMPTZ,
       started_at TIMESTAMPTZ
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS task_attachments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      data BYTEA NOT NULL,
+      uploaded_by UUID,
+      uploaded_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (task_id, filename)
     )
   `,
   `

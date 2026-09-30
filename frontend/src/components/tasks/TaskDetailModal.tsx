@@ -20,7 +20,7 @@ import {
   Hand,
   Square,
   Play,
-  FileText,
+  Paperclip,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
@@ -28,7 +28,7 @@ import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
 import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, buildRecurrence } from './taskConstants';
-import ContextFilesEditor, { contextFileBlock } from './ContextFilesEditor';
+import TaskAttachmentsEditor from './TaskAttachmentsEditor';
 import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
@@ -277,28 +277,6 @@ export default function TaskDetailModal({
       await onRefresh();
     } catch (err) {
       setMutationError(errorMessage(err) || 'Failed to change secondary repos');
-      throw err;
-    }
-  };
-
-  const saveContextFiles = async (next: string[]) => {
-    setMutationError(null);
-    try {
-      await updateTaskById(task.id, { contextFiles: next });
-      await onRefresh();
-    } catch (err) {
-      setMutationError(errorMessage(err) || 'Failed to change context files');
-      throw err;
-    }
-  };
-
-  const attachLocalFile = async (name: string, content: string) => {
-    setMutationError(null);
-    try {
-      await updateTaskById(task.id, { description: task.text + contextFileBlock(name, content) });
-      await onRefresh();
-    } catch (err) {
-      setMutationError(errorMessage(err) || 'Failed to attach file');
       throw err;
     }
   };
@@ -1057,18 +1035,14 @@ export default function TaskDetailModal({
                 </div>
               )}
 
-              {/* Context files (editable) — listed in the agent's prompt */}
+              {/* Attachments — copied onto the agent's machine before each run */}
               <div className="flex items-start gap-2">
-                <FileText className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
+                <Paperclip className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-[10px] font-semibold text-dark-500 uppercase tracking-wide mb-1">
-                    Context files
+                    Attachments
                   </div>
-                  <ContextFilesEditor
-                    files={Array.isArray(task.contextFiles) ? task.contextFiles : []}
-                    onChange={next => void saveContextFiles(next)}
-                    onAttach={attachLocalFile}
-                  />
+                  <TaskAttachmentsEditor taskId={task.id} />
                 </div>
               </div>
 
