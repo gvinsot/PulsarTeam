@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Trash2, Edit3, ChevronDown, Plus, KanbanSquare, Users, Share2 } from 'lucide-react';
+import { Trash2, Edit3, ChevronDown, Plus, KanbanSquare, Users, Share2, ArrowLeft, ArrowRight } from 'lucide-react';
 import type { BoardPermission } from '../../types';
 
 /**
@@ -34,6 +34,8 @@ interface BoardTabsProps<B extends BoardTabsBoard> {
   onRename: (boardId: string, name: string) => void;
   onDelete: (boardId: string) => void;
   onShare: (board: B) => void;
+  /** Move a board one position left (-1) or right (1) in the tab list. */
+  onMove?: (boardId: string, dir: -1 | 1) => void;
 }
 
 export default function BoardTabs<B extends BoardTabsBoard>({
@@ -45,6 +47,7 @@ export default function BoardTabs<B extends BoardTabsBoard>({
   onRename,
   onDelete,
   onShare,
+  onMove,
 }: BoardTabsProps<B>) {
   // Both hold the id of the board being renamed / showing its context menu.
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -100,7 +103,7 @@ export default function BoardTabs<B extends BoardTabsBoard>({
 
   return (
     <div className="flex items-center gap-2 px-6 py-3 border-b border-dark-700/50 bg-dark-900/50 overflow-x-auto scrollbar-hide relative z-20">
-      {(boards || []).map(board => (
+      {(boards || []).map((board, index) => (
         <div key={board.id} className="relative flex-shrink-0">
           {renaming === board.id ? (
             <input
@@ -186,6 +189,22 @@ export default function BoardTabs<B extends BoardTabsBoard>({
                 >
                   <Share2 className="w-3 h-3" /> {board.share_permission ? 'Members' : 'Share'}
                 </button>
+                {onMove && index > 0 && (
+                  <button
+                    onClick={() => onMove(board.id, -1)}
+                    className="w-full text-left px-3 py-1.5 text-xs text-dark-200 hover:bg-dark-700 flex items-center gap-2"
+                  >
+                    <ArrowLeft className="w-3 h-3" /> Move left
+                  </button>
+                )}
+                {onMove && index < boards.length - 1 && (
+                  <button
+                    onClick={() => onMove(board.id, 1)}
+                    className="w-full text-left px-3 py-1.5 text-xs text-dark-200 hover:bg-dark-700 flex items-center gap-2"
+                  >
+                    <ArrowRight className="w-3 h-3" /> Move right
+                  </button>
+                )}
                 {boards.length > 1 && !board.share_permission && (
                   <button
                     onClick={() => {

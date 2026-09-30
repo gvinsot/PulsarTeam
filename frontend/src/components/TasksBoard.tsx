@@ -189,11 +189,39 @@ export default function TasksBoard({
     safeSet('tasks_sortBy', sortBy);
   }, [sortBy]);
 
+  // Per-user tab order (boards can be shared, so it is a local preference, not a board column)
+  const [boardOrder, setBoardOrder] = useState<string[]>(() => {
+    try {
+      const v = JSON.parse(safeGet('tasks_boardOrder') || '[]');
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  });
+
   // When a global project filter is set, only show boards attached to that project
   const visibleBoards = useMemo(() => {
-    if (!projectFilter) return boards;
-    return (boards || []).filter(b => b.project_id === projectFilter);
-  }, [boards, projectFilter]);
+    const filtered = projectFilter
+      ? (boards || []).filter(b => b.project_id === projectFilter)
+      : boards || [];
+    const rank = (id: string) => {
+      const i = boardOrder.indexOf(id);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    return [...filtered].sort((a, b) => rank(a.id) - rank(b.id));
+  }, [boards, projectFilter, boardOrder]);
+
+  const handleMoveBoard = (boardId: string, dir: -1 | 1) => {
+    const ids = visibleBoards.map(b => b.id);
+    const i = ids.indexOf(boardId);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    const rest = boardOrder.filter(id => !ids.includes(id));
+    const next = [...ids, ...rest];
+    setBoardOrder(next);
+    safeSet('tasks_boardOrder', JSON.stringify(next));
+  };
 
   // If the currently active board is hidden by the project filter, jump to the
   // first visible board (or clear if none).
@@ -1036,6 +1064,7 @@ export default function TasksBoard({
             onRename={handleRenameBoard}
             onDelete={handleDeleteBoard}
             onShare={setShareBoard}
+            onMove={handleMoveBoard}
           />
         )}
         {projectFilter && visibleBoards.length === 0 && boardsLoaded && (
