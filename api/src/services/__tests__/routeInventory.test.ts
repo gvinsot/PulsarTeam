@@ -307,6 +307,7 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'GET /api/remote-mcp/:id/status': ['authenticateToken'],
   'POST /api/remote-mcp/:id/auth-url': ['authenticateToken'],
   'POST /api/remote-mcp/:id/api-key': ['authenticateToken'],
+  'POST /api/remote-mcp/:id/local-connect': ['authenticateToken'],
   'POST /api/remote-mcp/:id/test': ['authenticateToken'],
   'POST /api/remote-mcp/:id/disconnect': ['authenticateToken'],
   'GET /api/mcp-servers': ['authenticateToken'],
