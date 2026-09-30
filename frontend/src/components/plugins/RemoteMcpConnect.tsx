@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plug, Unplug } from 'lucide-react';
 import { api } from '../../api';
 import type { PluginMcpEntry } from '../../types';
@@ -25,13 +25,28 @@ export default function RemoteMcpConnect({
     (agent?: string, board?: string) => api.getRemoteMcpStatus(mcp.id, agent, board),
     [mcp.id]
   );
-  const { status, fetchStatus, statusError } = useConnectStatus(
+  const { status, loading, fetchStatus, statusError } = useConnectStatus(
     mcp.id,
     getStatus,
     agentId,
     boardId,
     onStatusChange
   );
+  // Built-in local PulsarTeam Admin/Management: no key to paste. Connect on
+  // attach; the server applies the connecting user's own live rights.
+  const isLocal = mcp.id === 'mcp-pulsar-team-admin' || mcp.id === 'mcp-pulsar-team-management';
+  const autoTried = useRef(false);
+  useEffect(() => {
+    if (!isLocal || status.connected || autoTried.current || (!agentId && !boardId)) return;
+    if (loading || statusError) return;
+    autoTried.current = true;
+    setBusy(true);
+    api
+      .connectLocalMcp(mcp.id, agentId, boardId)
+      .then(() => fetchStatus())
+      .catch(err => setError(errorMessage(err)))
+      .finally(() => setBusy(false));
+  }, [isLocal, status.connected, loading, statusError, agentId, boardId, mcp.id, fetchStatus]);
   const config = useMemo(
     () => ({
       name: mcp.name,
@@ -121,6 +136,29 @@ export default function RemoteMcpConnect({
             </details>
           )}
         </>
+      ) : isLocal ? (
+        <div className="flex gap-2 items-center text-xs">
+          <span className={status.connected ? 'text-emerald-400' : 'text-dark-400'}>
+            {status.connected ? 'Connecté (accès local, selon vos droits)' : 'Connexion…'}
+          </span>
+          {!status.connected && !busy && (
+            <button
+              className="text-indigo-400"
+              onClick={() => action(() => api.connectLocalMcp(mcp.id, agentId, boardId))}
+            >
+              Connecter
+            </button>
+          )}
+          {status.connected && (
+            <button
+              disabled={busy}
+              className="text-red-400"
+              onClick={() => action(() => api.disconnectRemoteMcp(mcp.id, agentId, boardId))}
+            >
+              Déconnecter
+            </button>
+          )}
+        </div>
       ) : (
         <>
           <div className="flex gap-2 items-center text-xs">

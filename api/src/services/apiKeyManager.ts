@@ -232,6 +232,54 @@ export async function generateNewApiKey() {
   return { id, key, prefix };
 }
 
+const INTERNAL_TOKEN_PREFIX = 'swarm_int_';
+const INTERNAL_TOKEN_TTL_MS = 5 * 60_000;
+
+function internalSignature(payload: string): string {
+  return crypto
+    .createHmac('sha256', getHmacSecret())
+    .update(`pulsarteam:internal-mcp-token:v1:${payload}`)
+    .digest('base64url');
+}
+
+/**
+ * Short-lived, stateless token letting the server call its own /api/mcp/<scope>
+ * surface on behalf of a user who attached the built-in PulsarTeam plugin, with
+ * no key to paste. It names only the owner and scope; the owner is re-read live
+ * on every request, exactly like a stored scoped key.
+ */
+export function mintInternalMcpToken(userId: string, scope: LadderApiKeyScope): string {
+  const payload = Buffer.from(
+    JSON.stringify({ u: userId, s: scope, e: Date.now() + INTERNAL_TOKEN_TTL_MS })
+  ).toString('base64url');
+  return `${INTERNAL_TOKEN_PREFIX}${payload}.${internalSignature(payload)}`;
+}
+
+function resolveInternalToken(token: string): ResolvedApiKey | null {
+  const [payload, sig, ...rest] = token.slice(INTERNAL_TOKEN_PREFIX.length).split('.');
+  if (!payload || !sig || rest.length) return null;
+  const expected = internalSignature(payload);
+  if (sig.length !== expected.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+    if (typeof data.u !== 'string' || typeof data.e !== 'number' || data.e < Date.now()) {
+      return null;
+    }
+    if (!(LADDER_API_KEY_SCOPES as readonly string[]).includes(data.s)) return null;
+    return {
+      id: 'internal',
+      userId: data.u,
+      scope: data.s,
+      boardId: null,
+      allowedColumns: null,
+      legacy: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolve a presented key to its row, in constant time.
  *
@@ -240,6 +288,9 @@ export async function generateNewApiKey() {
  * the comparison loop itself branches on nothing but the hash.
  */
 export async function resolveApiKey(key: string): Promise<ResolvedApiKey | null> {
+  if (typeof key === 'string' && key.startsWith(INTERNAL_TOKEN_PREFIX)) {
+    return resolveInternalToken(key);
+  }
   const pool = getPool();
   if (!pool) return null;
   if (typeof key !== 'string' || key.length === 0) return null;

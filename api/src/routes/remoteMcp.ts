@@ -16,6 +16,7 @@ import {
   REMOTE_CALLBACK_PATH,
   REMOTE_METADATA_PATH,
   remoteKeyHeaders,
+  localScopeOf,
   useRemoteClient,
 } from '../services/remoteMcp.js';
 import {
@@ -27,6 +28,7 @@ import {
   disconnectRemote,
   type RemoteScope,
 } from '../services/remoteMcpStore.js';
+import { PULSAR_TEAM_MCP_SERVERS } from '../data/pulsarTeamMcp.js';
 import { sendOAuthResult } from './oauthHelper.js';
 
 const scopeSchema = z
@@ -205,6 +207,7 @@ export function remoteMcpRoutes(manager: MCPManager, skills: SkillManager) {
           record &&
           matches &&
           (record.apiKey ||
+            record.localUserId ||
             (record.tokens?.access_token &&
               (!record.expiresAt || record.expiresAt > Date.now() || record.tokens.refresh_token)))
         ),
@@ -253,6 +256,33 @@ export function remoteMcpRoutes(manager: MCPManager, skills: SkillManager) {
         .parse(req.body);
       const record = { ...key, url: server.url, mode: 'api_key' as const };
       remoteKeyHeaders(record);
+      await withRemoteLock(server.id, ctx.scope, () =>
+        writeRemoteCredentials(server.id, ctx.scope, record)
+      );
+      res.json({ success: true });
+    })
+  );
+  // Built-in local PulsarTeam MCPs: no key to paste. The connection records the
+  // user attaching it; their live rights on the resource and instance apply.
+  router.post(
+    '/:id/local-connect',
+    asyncHandler(async (req, res) => {
+      const ctx = await authorize(req, res, req.body, 'edit');
+      if (!ctx) return;
+      const server = manager.getById(req.params.id);
+      const isLocal =
+        server &&
+        localScopeOf(server.id) &&
+        server.remoteAuth === 'api_key' &&
+        server.enabled !== false &&
+        PULSAR_TEAM_MCP_SERVERS.some(s => s.id === server.id && s.url === server.url);
+      if (!server || !isLocal)
+        return res.status(400).json({ error: 'Connexion locale indisponible pour ce MCP' });
+      const record = {
+        url: server.url,
+        mode: 'api_key' as const,
+        localUserId: ctx.user.userId,
+      };
       await withRemoteLock(server.id, ctx.scope, () =>
         writeRemoteCredentials(server.id, ctx.scope, record)
       );

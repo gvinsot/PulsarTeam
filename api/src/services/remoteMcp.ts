@@ -6,6 +6,7 @@ import {
 } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthClientMetadata } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { MCPClient } from './mcpClient.js';
+import { mintInternalMcpToken, type LadderApiKeyScope } from './apiKeyManager.js';
 import { scopedMcpFetch } from './pulsarTeamMcpFetch.js';
 import { remoteMcpFetch, validateRemoteUrl } from './remoteMcpFetch.js';
 import { getAgentById } from './database/agents.js';
@@ -20,6 +21,15 @@ import {
 
 export const REMOTE_CALLBACK_PATH = '/api/remote-mcp/oauth/callback';
 export const REMOTE_METADATA_PATH = '/api/remote-mcp/oauth/client-metadata';
+/** Ladder scope of a built-in local PulsarTeam MCP (admin/management), else null. */
+export function localScopeOf(serverId: string): LadderApiKeyScope | null {
+  return serverId === 'mcp-pulsar-team-admin'
+    ? 'admin'
+    : serverId === 'mcp-pulsar-team-management'
+      ? 'management'
+      : null;
+}
+
 export interface RemoteServer {
   id: string;
   url: string;
@@ -187,6 +197,12 @@ export async function useRemoteClient<T>(
           await auth(provider, { serverUrl: server.url, fetchFn: remoteMcpFetch });
         }
         options.authProvider = provider;
+      } else if (credentials.localUserId) {
+        const localScope = localScopeOf(server.id);
+        if (!localScope) throw new UnauthorizedError('Connexion locale invalide.');
+        options.headers = {
+          Authorization: `Bearer ${mintInternalMcpToken(credentials.localUserId, localScope)}`,
+        };
       } else options.headers = remoteKeyHeaders(credentials);
       await client.connect(server.url, options);
       // No automatic replay of tool calls: a timeout may follow a side effect.

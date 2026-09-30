@@ -16,6 +16,8 @@ export interface RemoteCredentials {
   url: string;
   mode: 'oauth' | 'api_key';
   apiKey?: string;
+  /** Built-in local PulsarTeam MCP: the user whose live rights apply; no key stored. */
+  localUserId?: string;
   headerName?: string;
   prefix?: string;
   redirectUrl?: string;

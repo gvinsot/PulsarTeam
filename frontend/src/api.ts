@@ -917,6 +917,8 @@ export const api = {
     id: string,
     data: { agentId?: string; boardId?: string; apiKey: string; headerName: string; prefix: string }
   ) => post<SuccessAck>(`/remote-mcp/${id}/api-key`, data),
+  connectLocalMcp: (id: string, agentId?: string, boardId?: string) =>
+    post<SuccessAck>(`/remote-mcp/${id}/local-connect`, { agentId, boardId }),
   disconnectRemoteMcp: (id: string, agentId?: string, boardId?: string) =>
     post<SuccessAck>(`/remote-mcp/${id}/disconnect`, { agentId, boardId }),
   testRemoteMcp: (id: string, agentId?: string, boardId?: string) =>
