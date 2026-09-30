@@ -734,6 +734,7 @@ export default function Dashboard({
                 userRole={user?.role}
                 currentUser={user}
                 showToast={showToast}
+                activeProjectId={projectFilter}
               />
             </div>
           )}

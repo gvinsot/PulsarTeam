@@ -72,6 +72,7 @@ export default function SettingsTab({
   agent,
   projects: _projects,
   currentProject,
+  activeProjectId = '',
   onRefresh,
   userRole: _userRole,
   currentUser,
@@ -80,6 +81,8 @@ export default function SettingsTab({
   /** App normalises the repo list client-side before it gets here. */
   projects?: RepoPickerOption[];
   currentProject?: string;
+  /** Active dashboard project; when set, only its boards are offered. */
+  activeProjectId?: string;
   onRefresh: () => void;
   userRole?: UserRole;
   currentUser?: AppUser | null;
@@ -125,13 +128,21 @@ export default function SettingsTab({
       .catch(() => {});
     api
       .getBoards()
-      .then(setBoards)
+      .then(all =>
+        // Keep the agent's current board even if it belongs to another project,
+        // so the select doesn't render blank and silently unassign it on save.
+        setBoards(
+          activeProjectId
+            ? all.filter(b => b.project_id === activeProjectId || b.id === agent.boardId)
+            : all
+        )
+      )
       .catch(() => {});
     api
       .getExternalVoiceServices(agent.id)
       .then(data => setTtsAvailable(!!data?.tts?.available))
       .catch(() => setTtsAvailable(false));
-  }, [agent.id]);
+  }, [agent.id, agent.boardId, activeProjectId]);
 
   // Reset form when switching agents
   useEffect(() => {

@@ -103,6 +103,9 @@ interface AgentDetailProps {
   userRole?: UserRole;
   currentUser?: AppUser | null;
   showToast?: ShowToastFn;
+  /** Active dashboard project; when set, the Settings board picker only
+   *  offers that project's boards. */
+  activeProjectId?: string;
 }
 
 export default function AgentDetail({
@@ -121,6 +124,7 @@ export default function AgentDetail({
   userRole,
   currentUser,
   showToast,
+  activeProjectId = '',
 }: AgentDetailProps) {
   const [fullAgent, setFullAgent] = useState<Agent | null>(null);
   const agent = useMemo(() => {
@@ -651,6 +655,7 @@ export default function AgentDetail({
             agent={agent}
             projects={projects}
             currentProject={currentProject}
+            activeProjectId={activeProjectId}
             onRefresh={onRefresh}
             userRole={userRole}
             currentUser={currentUser}
