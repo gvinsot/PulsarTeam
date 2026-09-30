@@ -49,6 +49,8 @@ interface AddAgentModalProps {
    *  AvailableRepo, and `name` — the <option> key below — only exists here. */
   projects: RepoPickerOption[];
   initialBoardId?: string;
+  /** Selected project; when set, only its boards are offered. */
+  projectId?: string;
   onClose: () => void;
   onCreated: (agent: Agent) => void;
 }
@@ -57,6 +59,7 @@ export default function AddAgentModal({
   templates,
   projects,
   initialBoardId = '',
+  projectId = '',
   onClose,
   onCreated,
 }: AddAgentModalProps) {
@@ -113,7 +116,8 @@ export default function AddAgentModal({
       .catch(() => {});
     api
       .getBoards()
-      .then(b => {
+      .then(all => {
+        const b = projectId ? all.filter(x => x.project_id === projectId) : all;
         setBoards(b);
         const initialBoard =
           initialBoardId && b.some(board => board.id === initialBoardId) ? initialBoardId : '';
@@ -124,7 +128,7 @@ export default function AddAgentModal({
         }
       })
       .catch(() => {});
-  }, [initialBoardId]);
+  }, [initialBoardId, projectId]);
 
   const filteredTemplates = templates.filter(
     t =>
