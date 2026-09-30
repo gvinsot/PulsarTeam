@@ -28,7 +28,7 @@ import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
 import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, buildRecurrence } from './taskConstants';
-import ContextFilesEditor from './ContextFilesEditor';
+import ContextFilesEditor, { contextFileBlock } from './ContextFilesEditor';
 import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
@@ -288,6 +288,17 @@ export default function TaskDetailModal({
       await onRefresh();
     } catch (err) {
       setMutationError(errorMessage(err) || 'Failed to change context files');
+      throw err;
+    }
+  };
+
+  const attachLocalFile = async (name: string, content: string) => {
+    setMutationError(null);
+    try {
+      await updateTaskById(task.id, { description: task.text + contextFileBlock(name, content) });
+      await onRefresh();
+    } catch (err) {
+      setMutationError(errorMessage(err) || 'Failed to attach file');
       throw err;
     }
   };
@@ -1056,6 +1067,7 @@ export default function TaskDetailModal({
                   <ContextFilesEditor
                     files={Array.isArray(task.contextFiles) ? task.contextFiles : []}
                     onChange={next => void saveContextFiles(next)}
+                    onAttach={attachLocalFile}
                   />
                 </div>
               </div>

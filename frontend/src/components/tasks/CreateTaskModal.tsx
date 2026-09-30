@@ -4,7 +4,7 @@ import { FileText, Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucid
 import { api } from '../../api';
 import { TASK_TYPES, buildRecurrence } from './taskConstants';
 import type { StatusOption } from './taskConstants';
-import ContextFilesEditor from './ContextFilesEditor';
+import ContextFilesEditor, { contextFileBlock } from './ContextFilesEditor';
 import RecurrenceFields from './RecurrenceFields';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
@@ -310,7 +310,11 @@ export default function CreateTaskModal({
               <FileText className="inline w-3 h-3 mr-1" />
               Context files
             </label>
-            <ContextFilesEditor files={contextFiles} onChange={setContextFiles} />
+            <ContextFilesEditor
+              files={contextFiles}
+              onChange={setContextFiles}
+              onAttach={(name, content) => setText(t => t + contextFileBlock(name, content))}
+            />
           </div>
 
           {/* Storage — sourced from the board's OneDrive plugin OAuth */}
