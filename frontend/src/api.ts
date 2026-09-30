@@ -231,6 +231,7 @@ export interface TaskUpdateInput {
   repoProvider?: string | null;
   /** The schema accepts a bare 'owner/repo' string as well as the object form. */
   secondaryRepos?: Array<string | TaskSecondaryRepoInput>;
+  contextFiles?: string[];
   storagePath?: string | null;
   storageProvider?: string | null;
 }
@@ -606,6 +607,7 @@ export interface NewTaskOptions {
   repoFullName?: string;
   repoProvider?: string;
   secondaryRepos?: TaskSecondaryRepoInput[];
+  contextFiles?: string[];
   recurrence?: TaskRecurrenceInput;
   taskType?: TaskType;
   isManual?: boolean;
@@ -620,6 +622,7 @@ const newTaskBody = (text: string, opts: NewTaskOptions) => {
     boardId,
     repoFullName,
     secondaryRepos,
+    contextFiles,
     recurrence,
     taskType,
     isManual,
@@ -633,6 +636,7 @@ const newTaskBody = (text: string, opts: NewTaskOptions) => {
     ...(boardId && { boardId }),
     ...(repoFullName && { repoFullName, repoProvider }),
     ...(secondaryRepos && secondaryRepos.length > 0 && { secondaryRepos }),
+    ...(contextFiles && contextFiles.length > 0 && { contextFiles }),
     ...(storagePath && { storagePath, storageProvider }),
     ...(recurrence && { recurrence }),
     ...(taskType && { taskType }),

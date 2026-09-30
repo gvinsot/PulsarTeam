@@ -20,6 +20,7 @@ import {
   Hand,
   Square,
   Play,
+  FileText,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
@@ -27,6 +28,7 @@ import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
 import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, buildRecurrence } from './taskConstants';
+import ContextFilesEditor from './ContextFilesEditor';
 import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
@@ -275,6 +277,17 @@ export default function TaskDetailModal({
       await onRefresh();
     } catch (err) {
       setMutationError(errorMessage(err) || 'Failed to change secondary repos');
+      throw err;
+    }
+  };
+
+  const saveContextFiles = async (next: string[]) => {
+    setMutationError(null);
+    try {
+      await updateTaskById(task.id, { contextFiles: next });
+      await onRefresh();
+    } catch (err) {
+      setMutationError(errorMessage(err) || 'Failed to change context files');
       throw err;
     }
   };
@@ -1032,6 +1045,20 @@ export default function TaskDetailModal({
                   </div>
                 </div>
               )}
+
+              {/* Context files (editable) — listed in the agent's prompt */}
+              <div className="flex items-start gap-2">
+                <FileText className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] font-semibold text-dark-500 uppercase tracking-wide mb-1">
+                    Context files
+                  </div>
+                  <ContextFilesEditor
+                    files={Array.isArray(task.contextFiles) ? task.contextFiles : []}
+                    onChange={next => void saveContextFiles(next)}
+                  />
+                </div>
+              </div>
 
               {/* Storage (editable, scoped to the board's OneDrive plugin) */}
               <EditableSelectRow

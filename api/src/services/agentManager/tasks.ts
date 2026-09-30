@@ -61,6 +61,7 @@ import {
   getTaskCommitRun,
 } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
+import { normalizeContextFiles } from '../../lib/taskContextFiles.js';
 import { ensureAgentWorkspace, resolveAgentGitCredentials } from '../execution/agentWorkspace.js';
 import type { Task, TaskWriteInput, TaskRecurrence } from '../database/tasks.js';
 import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
@@ -161,6 +162,7 @@ function pickTemplateFields(task: RecurrenceTask) {
     repoProvider: task.repoProvider || null,
     repoFullName: task.repoFullName || null,
     secondaryRepos: Array.isArray(task.secondaryRepos) ? task.secondaryRepos : [],
+    contextFiles: normalizeContextFiles(task.contextFiles),
     storageProvider: task.storageProvider || null,
     storagePath: task.storagePath || null,
     taskType: task.taskType || null,
@@ -184,6 +186,7 @@ export const tasksMethods = {
       repoFullName,
       repoProvider,
       secondaryRepos,
+      contextFiles,
       storagePath,
       storageProvider,
       skipAutoRefine = false,
@@ -198,6 +201,7 @@ export const tasksMethods = {
       repoFullName?: string | null;
       repoProvider?: string | null;
       secondaryRepos?: any;
+      contextFiles?: unknown;
       storagePath?: string | null;
       storageProvider?: string | null;
       skipAutoRefine?: boolean;
@@ -228,6 +232,7 @@ export const tasksMethods = {
       // Secondary repos cloned alongside the primary; normalized (deduped,
       // primary-excluded, capped) so the stored shape is always clean.
       secondaryRepos: normalizeSecondaryRepos(secondaryRepos, repoFullName || null),
+      contextFiles: normalizeContextFiles(contextFiles),
       storagePath: storagePath || null,
       storageProvider: storagePath ? storageProvider || 'onedrive' : null,
       source: source || null,

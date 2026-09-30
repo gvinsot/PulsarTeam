@@ -324,6 +324,7 @@ export interface AgentManager {
       repoFullName?: string | null;
       repoProvider?: string | null;
       secondaryRepos?: any;
+      contextFiles?: unknown;
       storagePath?: string | null;
       storageProvider?: string | null;
       skipAutoRefine?: boolean;

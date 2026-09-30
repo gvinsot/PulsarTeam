@@ -288,6 +288,16 @@ const MIGRATIONS: Migration[] = [
       await backfillTaskComments(db);
     },
   },
+
+  // Repo-relative files attached to a task, added to the executing agent's context.
+  {
+    id: '202609300001_task_context_files',
+    name: 'task context_files column',
+    fingerprint: "ALTER TABLE tasks ADD COLUMN context_files JSONB DEFAULT '[]'",
+    up: async db => {
+      await db.query("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context_files JSONB DEFAULT '[]'");
+    },
+  },
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

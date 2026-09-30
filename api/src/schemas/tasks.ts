@@ -37,6 +37,7 @@ export const updateTaskSchema = z.object({
     )
     .max(10)
     .optional(),
+  contextFiles: z.array(z.string().max(500)).max(20).optional(),
   storagePath: optionalString(500),
   storageProvider: optionalString(50),
 });

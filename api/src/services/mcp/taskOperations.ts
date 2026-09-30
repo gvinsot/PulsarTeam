@@ -46,6 +46,7 @@ export const TASK_VIEW_KEYS = [
   'repoFullName',
   'repoProvider',
   'secondaryRepos',
+  'contextFiles',
   'storagePath',
   'storageProvider',
   'createdAt',

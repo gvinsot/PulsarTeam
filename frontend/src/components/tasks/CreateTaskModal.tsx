@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucide-react';
+import { FileText, Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucide-react';
 import { api } from '../../api';
 import { TASK_TYPES, buildRecurrence } from './taskConstants';
 import type { StatusOption } from './taskConstants';
+import ContextFilesEditor from './ContextFilesEditor';
 import RecurrenceFields from './RecurrenceFields';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
@@ -69,6 +70,7 @@ export default function CreateTaskModal({
   const userTouchedRepo = useRef(false);
   // Extra repos (fullNames) cloned alongside the primary at run time.
   const [secondaryRepos, setSecondaryRepos] = useState<string[]>([]);
+  const [contextFiles, setContextFiles] = useState<string[]>([]);
   // If the user hasn't touched the picker, fall back to either the explicit
   // default or, when only one repo is available, that single repo.
   useEffect(() => {
@@ -142,6 +144,7 @@ export default function CreateTaskModal({
           repoFullName && secondaryRepos.length > 0
             ? secondaryRepos.map(fn => ({ provider: 'github', fullName: fn }))
             : undefined,
+        contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
         recurrence,
         taskType: taskType || undefined,
         isManual: isManual || undefined,
@@ -300,6 +303,15 @@ export default function CreateTaskModal({
               )}
             </div>
           )}
+
+          {/* Context files — repo paths the agent must read before working */}
+          <div>
+            <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
+              <FileText className="inline w-3 h-3 mr-1" />
+              Context files
+            </label>
+            <ContextFilesEditor files={contextFiles} onChange={setContextFiles} />
+          </div>
 
           {/* Storage — sourced from the board's OneDrive plugin OAuth */}
           <div>

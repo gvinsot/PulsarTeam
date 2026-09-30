@@ -28,6 +28,7 @@ import {
   ASSIGNEE_BOARD_MISMATCH_ERROR,
 } from '../services/taskMutations.js';
 import { normalizeSecondaryRepos, isValidRepoFullName } from '../services/taskRepos.js';
+import { normalizeContextFiles } from '../lib/taskContextFiles.js';
 import { validateBody } from '../lib/validate.js';
 import { projectObject, projectionIncludesField, type FieldProjection } from '../lib/projection.js';
 import { parseTaskProjection } from '../services/taskProjection.js';
@@ -270,6 +271,7 @@ async function applyTaskFieldEdits(
     repoFullName,
     repoProvider,
     secondaryRepos,
+    contextFiles,
     storagePath,
     storageProvider,
     position,
@@ -360,6 +362,11 @@ async function applyTaskFieldEdits(
     const oldValue = JSON.stringify(task.secondaryRepos || []);
     task.secondaryRepos = normalizeSecondaryRepos(secondaryRepos, task.repoFullName || null);
     if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
+  }
+  if (contextFiles !== undefined) {
+    const oldValue = JSON.stringify(task.contextFiles || []);
+    task.contextFiles = normalizeContextFiles(contextFiles);
+    if (JSON.stringify(task.contextFiles) !== oldValue) editedFields.push('contextFiles');
   }
   if (storagePath !== undefined) {
     const value =

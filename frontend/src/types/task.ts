@@ -385,6 +385,8 @@ export interface Task {
   repoHtmlUrl: string | null;
   /** `Array.isArray(...) ? ... : []` — always an array, never null. */
   secondaryRepos: TaskSecondaryRepo[];
+  /** Repo-relative file paths listed in the agent's prompt (max 20). */
+  contextFiles?: string[];
   /** Open string; 'onedrive' is the only default written. */
   storageProvider: string | null;
   /** Trimmed and capped at 500 chars. */

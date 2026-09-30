@@ -20,6 +20,7 @@
 //      text to a model as delimited DATA (`wrapUntrusted`).
 
 import crypto from 'crypto';
+import { contextFilesForPrompt } from './taskContextFiles.js';
 import { normalizeComments, type TaskComment } from './taskComments.js';
 
 export type TaskTrustLevel = 'untrusted' | 'approved';
@@ -228,7 +229,11 @@ export function wrapUntrusted(content: string, label: string, external = false):
  * embeds a task's text goes through here, so the delimiting is uniform.
  */
 export function taskContentForPrompt(
-  task: TrustCarrier & { text?: string | null; comments?: TaskComment[] | null },
+  task: TrustCarrier & {
+    text?: string | null;
+    comments?: TaskComment[] | null;
+    contextFiles?: string[] | null;
+  },
   maxLen?: number
 ): string {
   const text = String(task.text || '');
@@ -236,7 +241,8 @@ export function taskContentForPrompt(
   const external = isExternalTask(task);
   const description = wrapUntrusted(body, 'task_content', external);
   const comments = commentsForPrompt(task.comments, external);
-  return comments ? `${description}\n\n${comments}` : description;
+  const files = contextFilesForPrompt(task.contextFiles);
+  return [description, files, comments].filter(Boolean).join('\n\n');
 }
 
 /**

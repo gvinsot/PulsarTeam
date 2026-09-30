@@ -31,6 +31,7 @@ export async function createTaskFromRequest(
     repoFullName,
     repoProvider,
     secondaryRepos,
+    contextFiles,
     storageProvider,
     storagePath,
     recurrence,
@@ -82,6 +83,7 @@ export async function createTaskFromRequest(
     repoProvider: resolvedRepoProvider,
     // Validated + deduped + primary-excluded inside addTask (normalizeSecondaryRepos)
     secondaryRepos: secondaryRepos,
+    contextFiles,
     storagePath: resolvedStoragePath,
     storageProvider: resolvedStorageProvider,
     recurrence: recurrence || undefined,

@@ -148,6 +148,7 @@ const TABLES = [
       commits JSONB DEFAULT '[]',
       history JSONB DEFAULT '[]',
       comments JSONB DEFAULT '[]',
+      context_files JSONB DEFAULT '[]',
       error TEXT,
       error_from_status TEXT,
       execution_status TEXT,
