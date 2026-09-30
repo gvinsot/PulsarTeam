@@ -379,18 +379,22 @@ export function boardRoutes(agentManager: AgentManager) {
       let targetUsername = username;
       if (!targetUserId && targetUsername) {
         const users = await getAllUsers();
-        let user: { id: string; username: string } | undefined = users.find(
+        const found: { id: string; username: string } | undefined = users.find(
           u => u.username.toLowerCase() === targetUsername.toLowerCase()
         );
-        if (!user) {
+        let user: { id: string; username: string };
+        if (found) {
+          user = found;
+        } else {
           // Unknown email: pre-create the account so the share is waiting on
           // the invitee's first login.
           const email = String(targetUsername).trim().toLowerCase();
           if (!EMAIL_RE.test(email)) {
             return res.status(404).json({ error: `User "${targetUsername}" not found` });
           }
-          user = await createPendingUser(email);
-          await provisionNewUser(user.id).catch(err =>
+          const created: { id: string; username: string } = await createPendingUser(email);
+          user = created;
+          await provisionNewUser(created.id).catch(err =>
             console.error('Provisioning error:', err.message)
           );
         }
