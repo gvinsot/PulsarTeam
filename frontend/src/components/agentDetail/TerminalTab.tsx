@@ -52,12 +52,17 @@ import {
   ZoomOut,
   Maximize2,
   ChevronsDown,
+  ExternalLink,
+  Copy,
+  Check,
+  X,
 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
-  CLAUDE_OAUTH_PREFIXES,
+  isCliOAuthUrl,
   openExternalLink,
   createClaudeOAuthLinkProvider,
+  findLatestOAuthUrlInBuffer,
   reconstructClaudeOAuthUrlFromBuffer,
 } from './claudeOAuthLinks';
 import { extractLoopbackOAuthCallback } from './cliOAuthCallback';
@@ -125,6 +130,8 @@ const DEFAULT_FONT_DESKTOP = 13;
 const DEFAULT_FONT_TOUCH = 11;
 const FONT_STORAGE_KEY = 'pulsar.terminal.fontSize';
 const CLAIM_DEBOUNCE_MS = 150;
+// Delay before re-scanning the buffer for a CLI sign-in URL after output.
+const LOGIN_URL_SCAN_DEBOUNCE_MS = 250;
 const SCROLLBACK_LINES = 10_000;
 
 const isCoarsePointer = () =>
@@ -220,6 +227,13 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
   const [scrolledUp, setScrolledUp] = useState(false);
   const [oauthNotice, setOauthNotice] = useState<OAuthRelayNotice | null>(null);
   const oauthNoticeTimerRef = useRef<number | null>(null);
+  // Complete CLI sign-in URL currently on screen (see findLatestOAuthUrlInBuffer),
+  // offered as a real link + copy button: on a phone, tapping or copying the
+  // URL hard-wrapped across the terminal yields a broken fragment.
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [loginUrlCopied, setLoginUrlCopied] = useState(false);
+  const dismissedLoginUrlRef = useRef<string | null>(null);
+  const loginScanTimerRef = useRef<number | null>(null);
   const [fontPref, setFontPref] = useState<number>(
     () => readStoredFont() ?? (isCoarsePointer() ? DEFAULT_FONT_TOUCH : DEFAULT_FONT_DESKTOP)
   );
@@ -294,7 +308,10 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
   const relayOAuthCallback = (url: string) => {
     const ws = wsOpen();
     if (!ws) {
-      showOauthNotice({ kind: 'error', text: 'Terminal disconnected — paste the URL again once reconnected.' });
+      showOauthNotice({
+        kind: 'error',
+        text: 'Terminal disconnected — paste the URL again once reconnected.',
+      });
       return;
     }
     ws.send(JSON.stringify({ type: 'oauth_callback', url }));
@@ -515,13 +532,23 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       rightClickSelectsWord: true,
       scrollOnUserInput: true,
       theme: getTerminalTheme(theme),
+      // OSC 8 hyperlinks: Claude Code wraps every printed fragment of its
+      // /login URL in one carrying the FULL URL. xterm's default handler asks
+      // confirm() first and then window.open()s, which mobile browsers block
+      // as no longer user-initiated — open directly instead.
+      linkHandler: {
+        activate: (event, uri) => {
+          event.preventDefault();
+          openExternalLink(uri);
+        },
+      },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     const claudeOAuthLinkProvider = term.registerLinkProvider(createClaudeOAuthLinkProvider(term));
     term.loadAddon(
       new WebLinksAddon((event, uri) => {
-        if (CLAUDE_OAUTH_PREFIXES.some(p => uri.startsWith(p))) {
+        if (isCliOAuthUrl(uri)) {
           event.preventDefault();
           openExternalLink(reconstructClaudeOAuthUrlFromBuffer(term, uri));
           return;
@@ -612,6 +639,20 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
     // active one: take the grid first (immediately, not debounced) so the
     // TUI answers at a size this screen can show. When the session has
     // ended, any keypress relaunches it instead of being dropped.
+    const scanLoginUrl = () => {
+      loginScanTimerRef.current = null;
+      const url = findLatestOAuthUrlInBuffer(term);
+      if (url && url === dismissedLoginUrlRef.current) return;
+      setLoginUrl(prev => {
+        if (prev !== url) setLoginUrlCopied(false);
+        return url;
+      });
+    };
+    const writeSub = term.onWriteParsed(() => {
+      if (loginScanTimerRef.current !== null) return;
+      loginScanTimerRef.current = window.setTimeout(scanLoginUrl, LOGIN_URL_SCAN_DEBOUNCE_MS);
+    });
+
     const dataSub = term.onData(data => {
       if (exitedRef.current) {
         relaunch();
@@ -640,7 +681,12 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       pointerMq?.removeEventListener?.('change', onPointerMq);
       viewportEl?.removeEventListener('scroll', updateScrolled);
       scrollSub.dispose();
+      writeSub.dispose();
       dataSub.dispose();
+      if (loginScanTimerRef.current !== null) {
+        window.clearTimeout(loginScanTimerRef.current);
+        loginScanTimerRef.current = null;
+      }
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -735,6 +781,7 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
           if (ctrl?.type === 'reset') {
             t.reset();
             t.clear();
+            setLoginUrl(null);
             setTerminalActive(false);
             setScrolledUp(false);
           } else if (ctrl?.type === 'size') {
@@ -853,6 +900,39 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
   // that would close the soft keyboard at every tap.
   const keepFocus = (e: ReactMouseEvent) => e.preventDefault();
 
+  const copyLoginUrl = async () => {
+    if (!loginUrl) return;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(loginUrl);
+      ok = true;
+    } catch {
+      // Clipboard API unavailable (insecure context, old WebView): fall back
+      // to a transient textarea + execCommand.
+      const ta = document.createElement('textarea');
+      ta.value = loginUrl;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        ok = document.execCommand('copy');
+      } catch {
+        ok = false;
+      }
+      ta.remove();
+    }
+    setLoginUrlCopied(ok);
+    if (!ok)
+      showOauthNotice({ kind: 'error', text: 'Could not copy — use the Open button instead.' });
+  };
+
+  const dismissLoginUrl = () => {
+    dismissedLoginUrlRef.current = loginUrl;
+    setLoginUrl(null);
+  };
+
   return (
     <div className={`flex flex-col h-full min-h-0 ${shellClass}`}>
       <div className={`flex items-center gap-2 px-3 py-1.5 border-b text-xs ${headerClass}`}>
@@ -965,6 +1045,51 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
           style={{ touchAction: 'manipulation', overscrollBehavior: 'contain' }}
           onClick={() => termRef.current?.focus()}
         />
+        {loginUrl && (
+          <div
+            role="status"
+            className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5 max-w-[calc(100%-6rem)] pl-3 pr-1 py-1 rounded-md border border-indigo-500/50 bg-indigo-600/95 text-white shadow-lg text-[11px] font-medium"
+          >
+            <span className="truncate">Sign-in link</span>
+            {/* A real anchor: opened by the browser itself, so mobile popup
+                blockers and the terminal's wrapped text play no part. */}
+            <a
+              href={loginUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onMouseDown={keepFocus}
+              title={loginUrl}
+              className="shrink-0 flex items-center gap-1 px-2 h-7 rounded bg-white/15 hover:bg-white/25"
+            >
+              <ExternalLink className="w-3.5 h-3.5" /> Open
+            </a>
+            <button
+              type="button"
+              onMouseDown={keepFocus}
+              onClick={copyLoginUrl}
+              title="Copy the full sign-in URL"
+              aria-label="Copy sign-in link"
+              className="shrink-0 flex items-center gap-1 px-2 h-7 rounded bg-white/15 hover:bg-white/25"
+            >
+              {loginUrlCopied ? (
+                <Check className="w-3.5 h-3.5" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              {loginUrlCopied ? 'Copied' : 'Copy'}
+            </button>
+            <button
+              type="button"
+              onMouseDown={keepFocus}
+              onClick={dismissLoginUrl}
+              title="Dismiss"
+              aria-label="Dismiss sign-in link"
+              className="shrink-0 flex items-center justify-center w-7 h-7 rounded hover:bg-white/20"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {oauthNotice && (
           <button
             type="button"

@@ -6,8 +6,9 @@
  * Two deliberately separate flavors live here side by side:
  *
  *   • xterm-buffer flavor (createClaudeOAuthLinkProvider /
- *     reconstructClaudeOAuthUrlFromBuffer): gates on the https-only
- *     CLAUDE_OAUTH_PREFIX and caps continuation at
+ *     reconstructClaudeOAuthUrlFromBuffer): gates lines on the short
+ *     https-only CLI_OAUTH_MARKERS, requires the joined URL to start with one
+ *     of CLAUDE_OAUTH_PREFIXES and caps continuation at
  *     CLAUDE_OAUTH_MAX_CONTINUATION_LINES.
  *
  *   • plain-text flavor (reconstructWrappedOAuthUrlsInText, used by
@@ -34,17 +35,27 @@ export const CLAUDE_OAUTH_PREFIXES = [
   'https://claude.ai/oauth/authorize?',
   CODEX_OAUTH_PREFIX,
 ];
+// What a buffer line must contain to start a wrapped sign-in URL. Kept short
+// on purpose: on a narrow (phone, 40-column) grid the first line is cut inside
+// the full prefix — `…/oauth/authorize?c` + `ode=true&…` on the next line — so
+// gating on CLAUDE_OAUTH_PREFIXES missed it and the generic linkifier opened
+// the bare first-line fragment. The full prefix is checked on the joined URL.
+const CLI_OAUTH_MARKERS = [
+  'https://claude.com/cai/oauth',
+  'https://claude.ai/oauth',
+  'https://auth.openai.com/oauth',
+];
 // Start of any authorize-URL flavor (http or https) plus its non-whitespace
 // remainder — used to grab the first wrapped fragment off the buffer line.
 const CLAUDE_OAUTH_URL_RE =
-  /^https?:\/\/(?:claude\.com\/cai\/oauth\/authorize\?code=|claude\.ai\/oauth\/authorize\?|auth\.openai\.com\/oauth\/authorize\?)\S*/;
+  /^https?:\/\/(?:claude\.com\/cai\/oauth|claude\.ai\/oauth|auth\.openai\.com\/oauth)\S*/;
 const CLAUDE_OAUTH_MAX_CONTINUATION_LINES = 32;
 const CLAUDE_OAUTH_FALLBACK_SEARCH_LINES = 500;
 
-// Index of the earliest OAuth marker (either flavor) on a line, or -1.
+// Index of the earliest OAuth marker (any flavor) on a line, or -1.
 function oauthMarkerIndex(line: string): number {
   let best = -1;
-  for (const prefix of CLAUDE_OAUTH_PREFIXES) {
+  for (const prefix of CLI_OAUTH_MARKERS) {
     const idx = line.indexOf(prefix);
     if (idx >= 0 && (best < 0 || idx < best)) best = idx;
   }
@@ -105,6 +116,7 @@ function buildClaudeOAuthLink(
     endLine = y;
     endColumn = textStart + trimmed.length;
   }
+  if (!CLAUDE_OAUTH_PREFIXES.some(p => url.startsWith(p))) return undefined;
 
   return {
     range: {
@@ -119,20 +131,68 @@ function buildClaudeOAuthLink(
   };
 }
 
+/**
+ * True when `uri` is (the possibly line-cut start of) a CLI sign-in URL whose
+ * full form must be rebuilt from the buffer before opening.
+ */
+export function isCliOAuthUrl(uri: string): boolean {
+  return typeof uri === 'string' && CLI_OAUTH_MARKERS.some(p => uri.startsWith(p));
+}
+
+// The wrapped OAuth link covering buffer line `y` (0-based), if any. xterm only
+// asks a provider about the line under the pointer: a mouse crosses the URL's
+// first line (and xterm caches the multi-line link), but a tap on a phone lands
+// straight on a continuation line — so walk up to the marker line.
+function oauthLinkCoveringLine(term: XTerminal, y: number): ILink | undefined {
+  const line = getTerminalLine(term, y);
+  if (oauthMarkerIndex(line) >= 0) return buildClaudeOAuthLink(term, y, line);
+  const trimmed = line.trim();
+  if (!trimmed || /\s/.test(trimmed)) return undefined;
+  for (
+    let start = y - 1;
+    start >= 0 && y - start <= CLAUDE_OAUTH_MAX_CONTINUATION_LINES;
+    start -= 1
+  ) {
+    const candidate = getTerminalLine(term, start);
+    if (oauthMarkerIndex(candidate) >= 0) {
+      const link = buildClaudeOAuthLink(term, start, candidate);
+      return link && link.range.end.y >= y + 1 ? link : undefined;
+    }
+    const t = candidate.trim();
+    if (!t || /\s/.test(t)) return undefined;
+  }
+  return undefined;
+}
+
 export function createClaudeOAuthLinkProvider(term: XTerminal): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const startLine = bufferLineNumber - 1;
-      const line = getTerminalLine(term, startLine);
-      const link =
-        oauthMarkerIndex(line) >= 0 ? buildClaudeOAuthLink(term, startLine, line) : undefined;
+      const link = oauthLinkCoveringLine(term, bufferLineNumber - 1);
       callback(link ? [link] : undefined);
     },
   };
 }
 
+/**
+ * The most recent (bottom-most) complete sign-in URL in the terminal buffer,
+ * or null. Drives the "open / copy sign-in link" banner, which phones need:
+ * tapping or long-press-copying a URL hard-wrapped over a dozen lines yields
+ * a fragment or a URL with line breaks in it.
+ */
+export function findLatestOAuthUrlInBuffer(term: XTerminal): string | null {
+  const buffer = term.buffer.active;
+  const earliestLine = Math.max(0, buffer.length - CLAUDE_OAUTH_FALLBACK_SEARCH_LINES);
+  for (let y = buffer.length - 1; y >= earliestLine; y -= 1) {
+    const line = getTerminalLine(term, y);
+    if (oauthMarkerIndex(line) < 0) continue;
+    const link = buildClaudeOAuthLink(term, y, line);
+    if (link) return link.text;
+  }
+  return null;
+}
+
 export function reconstructClaudeOAuthUrlFromBuffer(term: XTerminal, uri: string) {
-  if (!CLAUDE_OAUTH_PREFIXES.some(p => uri.startsWith(p))) return uri;
+  if (!isCliOAuthUrl(uri)) return uri;
   const buffer = term.buffer.active;
   const earliestLine = Math.max(0, buffer.length - CLAUDE_OAUTH_FALLBACK_SEARCH_LINES);
   for (let y = buffer.length - 1; y >= earliestLine; y -= 1) {

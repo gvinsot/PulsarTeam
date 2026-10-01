@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   createClaudeOAuthLinkProvider,
+  findLatestOAuthUrlInBuffer,
   reconstructClaudeOAuthUrlFromBuffer,
 } from '../claudeOAuthLinks.ts';
 import { extractLoopbackOAuthCallback } from '../cliOAuthCallback.ts';
@@ -61,7 +62,10 @@ test('a clicked codex fragment resolves to the full URL', () => {
 
 test('claude.ai authorize URLs still rebuild until the blank line', async () => {
   const url = 'https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz';
-  const link = await linkAt(['Browser did not open?', url.slice(0, 40), url.slice(40), '', 'Paste code'], 2);
+  const link = await linkAt(
+    ['Browser did not open?', url.slice(0, 40), url.slice(40), '', 'Paste code'],
+    2
+  );
   assert.equal(link.text, url);
 });
 
@@ -86,4 +90,35 @@ test('anything else stays a keystroke', () => {
   ]) {
     assert.equal(extractLoopbackOAuthCallback(data), null, JSON.stringify(data));
   }
+});
+
+// Claude Code /login on a 40-column phone grid: the URL hard-wrapped over
+// many lines. A tap lands on any of them, not necessarily the first.
+const CLAUDE_URL =
+  'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e' +
+  '&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback' +
+  '&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=xhHKbY2M35wA7b&state=_IukpxHGE05hpL9';
+const chunk = (s: string, n: number) => s.match(new RegExp(`.{1,${n}}`, 'g')) as string[];
+const PHONE_SCREEN = [
+  "Browser didn't open? Use the url below",
+  ...chunk(CLAUDE_URL, 40),
+  '',
+  'Paste code here if prompted >',
+];
+
+test('claude: a tap on any continuation line yields the full URL', async () => {
+  const urlLines = chunk(CLAUDE_URL, 40).length;
+  for (let i = 0; i < urlLines; i += 1) {
+    const link = await linkAt(PHONE_SCREEN, i + 2);
+    assert.equal(link?.text, CLAUDE_URL, `line ${i}`);
+    assert.equal(link.range.start.y, 2);
+  }
+  assert.equal(await linkAt(PHONE_SCREEN, urlLines + 3), undefined);
+  assert.equal(await linkAt(PHONE_SCREEN, 1), undefined);
+});
+
+test('findLatestOAuthUrlInBuffer returns the bottom-most complete URL', () => {
+  assert.equal(findLatestOAuthUrlInBuffer(fakeTerm(PHONE_SCREEN)), CLAUDE_URL);
+  assert.equal(findLatestOAuthUrlInBuffer(fakeTerm(CODEX_SCREEN)), CODEX_URL);
+  assert.equal(findLatestOAuthUrlInBuffer(fakeTerm(['$ ls', 'README.md'])), null);
 });
