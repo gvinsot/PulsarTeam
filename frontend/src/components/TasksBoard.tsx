@@ -19,6 +19,7 @@ import {
   updateTask as updateTaskById,
   reorderTasks,
   clearTaskStopped,
+  retryTask,
 } from '../api';
 import type {
   Agent,
@@ -664,6 +665,18 @@ export default function TasksBoard({
     await clearTaskStopped(task.id);
   }, []);
 
+  const handleRetryTask = useCallback(
+    async (task: TaskSocketPayload) => {
+      try {
+        await retryTask(task.id);
+      } catch (e) {
+        alert(`Retry failed: ${errorMessage(e)}`);
+      }
+      refreshAll();
+    },
+    [refreshAll]
+  );
+
   // Helper: reorder tasks in a column after a drop, updating positions via API
   const reorderColumnTasks = useCallback(
     async (colId: string, draggedTaskId: string, dropIdx: number) => {
@@ -1274,6 +1287,7 @@ export default function TasksBoard({
               onStop={handleStopAction}
               onResume={handleResumeTask}
               onClearStopped={handleClearStopped}
+              onRetry={isReadOnly ? undefined : handleRetryTask}
               onDrop={handleDrop}
               onOpen={setSelectedTask}
               onAddTask={
@@ -1372,6 +1386,7 @@ export default function TasksBoard({
           onStop={handleStopAction}
           onResume={handleResumeTask}
           onClearStopped={handleClearStopped}
+          onRetry={isReadOnly ? undefined : handleRetryTask}
           onNavigateToAgent={onNavigateToAgent}
           boards={boards}
           activeBoardId={activeBoardId}

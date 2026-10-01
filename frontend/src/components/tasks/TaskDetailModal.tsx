@@ -21,6 +21,7 @@ import {
   Square,
   Play,
   Paperclip,
+  RotateCcw,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
@@ -55,6 +56,8 @@ interface TaskDetailModalProps {
   onStop?: (task: TaskSocketPayload) => void | Promise<void>;
   onResume?: (task: TaskSocketPayload) => void;
   onClearStopped?: (task: TaskSocketPayload) => void | Promise<void>;
+  /** Re-enter the column an errored task failed in (POST /tasks/:id/retry). */
+  onRetry?: (task: TaskSocketPayload) => void | Promise<void>;
   /** The board's columns as status choices (buildStatusOptions). */
   statusOptions: StatusOption[];
   onNavigateToAgent?: (agentId: string) => void;
@@ -74,6 +77,7 @@ export default function TaskDetailModal({
   onStop,
   onResume,
   onClearStopped,
+  onRetry,
   statusOptions,
   onNavigateToAgent,
   boards,
@@ -389,6 +393,11 @@ export default function TaskDetailModal({
     onResume(task);
   };
 
+  const handleRetry = async () => {
+    if (!onRetry) return;
+    await onRetry(task);
+  };
+
   const handleClearStopped = async () => {
     if (!onClearStopped) return;
     await onClearStopped(task);
@@ -469,7 +478,19 @@ export default function TaskDetailModal({
                   Stop
                 </button>
               )}
-              {!task.actionRunning && task.assignee && onResume && (
+              {!task.actionRunning && isError && onRetry && (
+                <button
+                  onClick={handleRetry}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                  text-red-300 bg-red-500/15 hover:bg-red-500/25 border border-red-500/40
+                  hover:border-red-500/60 transition-colors"
+                  title="Re-enter the column this task failed in and replay its workflow"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Retry
+                </button>
+              )}
+              {!task.actionRunning && task.assignee && onResume && !(isError && onRetry) && (
                 <button
                   onClick={handleResume}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold

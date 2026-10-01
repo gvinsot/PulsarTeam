@@ -24,6 +24,7 @@ import {
   emitTaskUpdated,
   addTaskComment,
   applyTaskMove,
+  clearExecutionOnMove,
   isAssigneeOffBoard,
   ASSIGNEE_BOARD_MISMATCH_ERROR,
 } from '../services/taskMutations.js';
@@ -960,6 +961,53 @@ router.patch(
 
     mgr._emit('task:updated', { agentId: task.agentId, task: { ...task, agentId: task.agentId } });
     res.json({ ok: true });
+  })
+);
+
+// ── POST /tasks/:id/retry — re-enter the column an errored task failed in ───
+// Simulates the task (re)entering its originating column: the error is cleared,
+// the on_enter chain is reset, and the shared move core fires auto-refine so the
+// column's workflow actions run again from scratch.
+router.post(
+  '/:id/retry',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const username = req.user?.username || 'user';
+    const task = await mgr.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (task.status !== 'error') {
+      return res.status(409).json({ error: 'Only tasks in error can be retried' });
+    }
+
+    // errorFromStatus is the column the task failed in; fall back to the board's
+    // first column when it is missing or no longer exists in the workflow.
+    const board = task.boardId ? await getBoardById(task.boardId) : null;
+    const targetColumn = board
+      ? validateColumn(board, task.errorFromStatus || undefined)
+      : task.errorFromStatus;
+    if (!targetColumn) {
+      return res.status(409).json({ error: 'Cannot determine the column to retry in' });
+    }
+
+    task.error = null;
+    task.errorFromStatus = null;
+    // Fresh-start semantics: a retry must replay the whole on_enter chain.
+    clearExecutionOnMove(task, { toStatus: targetColumn, full: true });
+    clearTaskSignal(task.id, 'pendingOnEnter');
+    mgr._taskResumeFailures?.delete(task.id);
+    mgr._decideNoDecisionCounts?.delete(task.id);
+
+    await applyTaskMove(mgr, task, { targetColumn, username, setTaskSignal });
+    emitTaskUpdated(mgr, task);
+
+    await auditLog('retry', req.params.id, req.user.userId, username, {
+      column: targetColumn,
+    });
+
+    res.json(task);
   })
 );
 

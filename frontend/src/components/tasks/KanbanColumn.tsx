@@ -19,6 +19,7 @@ interface KanbanColumnProps {
   onStop: (task: TaskSocketPayload) => void;
   onResume?: (task: TaskSocketPayload) => void;
   onClearStopped?: (task: TaskSocketPayload) => void;
+  onRetry?: (task: TaskSocketPayload) => void;
   /** Receives this column back so the board can read its `dropStatus`. */
   onDrop: (e: DragEvent<HTMLDivElement>, col: BoardColumnView, dropIdx: number) => void;
   onOpen: (task: TaskSocketPayload) => void;
@@ -64,6 +65,7 @@ export default function KanbanColumn({
   onStop,
   onResume,
   onClearStopped,
+  onRetry,
   onDrop,
   onOpen,
   onAddTask,
@@ -372,6 +374,7 @@ export default function KanbanColumn({
               onStop={onStop}
               onResume={onResume}
               onClearStopped={onClearStopped}
+              onRetry={onRetry}
               onOpen={onOpen}
               showAgent={showAgent}
               showCreator={showCreator}

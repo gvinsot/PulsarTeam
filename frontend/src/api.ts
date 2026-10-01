@@ -1464,6 +1464,9 @@ export const taskAttachmentUrl = (taskId: string, attachmentId: string) =>
 
 export const clearTaskStopped = (taskId: string) => patch<OkAck>(`/tasks/${taskId}/clear-stopped`);
 
+/** Re-enter the column an errored task failed in, replaying its on_enter workflow. */
+export const retryTask = (taskId: string) => post<MutatedTask>(`/tasks/${taskId}/retry`);
+
 /* ── Reorder tasks within a column ──────────────────────────────────── */
 export const reorderTasks = (orderedIds: string[]) =>
   put<OkAck & { count: number }>('/tasks/reorder', { orderedIds });

@@ -468,6 +468,7 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   // Human-only: the handler also refuses the internal service session by name.
   'POST /api/tasks/:id/approve': ['authenticateToken'],
   'PATCH /api/tasks/:id/clear-stopped': ['authenticateToken'],
+  'POST /api/tasks/:id/retry': ['authenticateToken'],
   'DELETE /api/tasks/:id': ['authenticateToken'],
   'GET /api/tasks/deleted': ['authenticateToken', 'requireRole(admin)'],
   'POST /api/tasks/:id/restore': ['authenticateToken', 'requireRole(admin)'],

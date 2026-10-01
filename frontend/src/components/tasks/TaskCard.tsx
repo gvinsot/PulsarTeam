@@ -17,6 +17,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Eye,
+  RotateCcw,
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 import type { TaskSocketPayload } from '../../types';
@@ -30,6 +31,8 @@ interface TaskCardProps {
   onStop: (task: TaskSocketPayload) => void;
   onResume?: (task: TaskSocketPayload) => void;
   onClearStopped?: (task: TaskSocketPayload) => void;
+  /** Re-enter the column an errored task failed in (POST /tasks/:id/retry). */
+  onRetry?: (task: TaskSocketPayload) => void;
   onOpen: (task: TaskSocketPayload) => void;
   showAgent?: boolean;
   showCreator?: boolean;
@@ -66,6 +69,7 @@ export default function TaskCard({
   onStop,
   onResume,
   onClearStopped,
+  onRetry,
   onOpen,
   showAgent,
   showCreator,
@@ -642,6 +646,18 @@ export default function TaskCard({
               </button>
             ) : (
               <>
+                {isError && onRetry && (
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      onRetry(task);
+                    }}
+                    className="p-1.5 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
+                    title="Retry: re-enter the column and replay its workflow"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 {isStopped && !task.assignee && onClearStopped && (
                   <button
                     onClick={e => {
@@ -654,7 +670,7 @@ export default function TaskCard({
                     <Play className="w-3.5 h-3.5" />
                   </button>
                 )}
-                {task.assignee && onResume && (
+                {task.assignee && onResume && !(isError && onRetry) && (
                   <button
                     onClick={e => {
                       e.stopPropagation();

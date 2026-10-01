@@ -225,6 +225,7 @@ test('ownerless agent cannot stop, resume, inspect commits or bulk-move a foreig
   const original = structuredClone(task);
   await assertDenied(await harness().post('/task/stop'));
   await assertDenied(await harness().patch('/task/clear-stopped'));
+  await assertDenied(await harness().post('/task/retry'));
   await assertDenied(await harness().get('/task/commits/abcdef0/diff'));
   assert.deepEqual(rows.get('task'), original);
   assert.equal(manager._emit.mock.callCount(), 0);
