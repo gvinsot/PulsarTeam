@@ -18,6 +18,8 @@ import {
   Sun,
   Moon,
   FolderGit2,
+  Search,
+  X,
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../api';
@@ -26,6 +28,7 @@ import { safeGet, safeSet, safeRemove } from '../lib/safeStorage';
 import { WsEvents } from '../socketEvents';
 import AgentCard from './AgentCard';
 import { sortAgents, type AgentSortMode } from './agentSort';
+import { filterAgents } from './agentSearch';
 import BatchAgentCard from './BatchAgentCard';
 import AgentDetail, { CLI_RUNNERS } from './AgentDetail';
 import SwarmOverview from './SwarmOverview';
@@ -158,6 +161,7 @@ export default function Dashboard({
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [boards, setBoards] = useState<BoardListItem[]>([]);
+  const [agentSearch, setAgentSearch] = useState('');
   const [boardFilter, setBoardFilterRaw] = useState(() => safeGet('activeBoardId') || '');
   const setBoardFilter = useCallback((val: string) => {
     setBoardFilterRaw(val);
@@ -303,8 +307,8 @@ export default function Dashboard({
     const scoped = boardFilter
       ? projectScopedAgents.filter(a => a.boardId === boardFilter)
       : projectScopedAgents;
-    return sortAgents(scoped, agentSort, thinkingMap);
-  }, [projectScopedAgents, boardFilter, agentSort, thinkingMap]);
+    return sortAgents(filterAgents(scoped, agentSearch), agentSort, thinkingMap);
+  }, [projectScopedAgents, boardFilter, agentSearch, agentSort, thinkingMap]);
 
   const selectedAgentData = sortedAgents.find(a => a.id === selectedAgent);
 
@@ -581,7 +585,7 @@ export default function Dashboard({
                     Agents
                     <span className="ml-2 text-sm font-normal text-dark-400">
                       ({filteredAgents.length}
-                      {boardFilter ? `/${sortedAgents.length}` : ''})
+                      {boardFilter || agentSearch.trim() ? `/${sortedAgents.length}` : ''})
                     </span>
                   </h2>
                   {scopedBoards.length > 1 && (
@@ -599,6 +603,31 @@ export default function Dashboard({
                       ))}
                     </select>
                   )}
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500 pointer-events-none" />
+                    <input
+                      type="search"
+                      value={agentSearch}
+                      onChange={e => setAgentSearch(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') setAgentSearch('');
+                      }}
+                      placeholder="Search agents…"
+                      aria-label="Search agents"
+                      className="h-9 w-36 sm:w-56 pl-8 pr-7 text-sm bg-dark-800 border border-dark-700 rounded-lg text-dark-200 placeholder-dark-500 focus:outline-none focus:border-indigo-500 [&::-webkit-search-cancel-button]:hidden"
+                    />
+                    {agentSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setAgentSearch('')}
+                        title="Clear search"
+                        aria-label="Clear search"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-500 hover:text-dark-200"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <select
@@ -649,16 +678,22 @@ export default function Dashboard({
                     <MessageSquare className="w-8 h-8 text-dark-500" />
                   </div>
                   <h3 className="text-dark-300 font-medium mb-1">
-                    {boardFilter ? 'No agents in this board' : 'No agents yet'}
+                    {agentSearch.trim()
+                      ? 'No agents match your search'
+                      : boardFilter
+                        ? 'No agents in this board'
+                        : 'No agents yet'}
                   </h3>
                   <p className="text-dark-500 text-sm mb-4">
-                    {boardFilter
-                      ? 'Try selecting a different board'
-                      : isBasic
-                        ? 'No agents are available for you'
-                        : 'Create your first agent to get started'}
+                    {agentSearch.trim()
+                      ? 'Try a different search term'
+                      : boardFilter
+                        ? 'Try selecting a different board'
+                        : isBasic
+                          ? 'No agents are available for you'
+                          : 'Create your first agent to get started'}
                   </p>
-                  {!isBasic && !boardFilter && (
+                  {!isBasic && !boardFilter && !agentSearch.trim() && (
                     <button
                       onClick={() => {
                         loadTemplates();
