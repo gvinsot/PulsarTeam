@@ -60,6 +60,7 @@ import {
   createClaudeOAuthLinkProvider,
   reconstructClaudeOAuthUrlFromBuffer,
 } from './claudeOAuthLinks';
+import { extractLoopbackOAuthCallback } from './cliOAuthCallback';
 import type { Agent } from '../../types';
 
 /**
@@ -67,7 +68,7 @@ import type { Agent } from '../../types';
  * frames are raw PTY output). Every field is optional: the frame is parsed
  * before its `type` is known, and each variant only fills its own keys —
  * 'reset' carries none, 'size' carries cols/rows, 'exit' carries code/tail,
- * 'error' carries message.
+ * 'error' carries message, 'oauth_callback_result' carries ok/message.
  */
 interface TerminalControlFrame {
   type?: string;
@@ -78,8 +79,16 @@ interface TerminalControlFrame {
   code?: number | null;
   /** 'exit' only: the last lines the runner printed before dying. */
   tail?: string;
-  /** 'error' only. */
+  /** 'error' and 'oauth_callback_result'. */
   message?: string;
+  /** 'oauth_callback_result' only: whether the CLI accepted the callback. */
+  ok?: boolean;
+}
+
+/** Outcome of a pasted CLI sign-in callback (see cliOAuthCallback.ts). */
+interface OAuthRelayNotice {
+  kind: 'pending' | 'ok' | 'error';
+  text: string;
 }
 
 interface TerminalTabProps {
@@ -209,6 +218,8 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
   // what this one would pick — surfaces the "fit to this screen" button.
   const [foreignGrid, setForeignGrid] = useState(false);
   const [scrolledUp, setScrolledUp] = useState(false);
+  const [oauthNotice, setOauthNotice] = useState<OAuthRelayNotice | null>(null);
+  const oauthNoticeTimerRef = useRef<number | null>(null);
   const [fontPref, setFontPref] = useState<number>(
     () => readStoredFont() ?? (isCoarsePointer() ? DEFAULT_FONT_TOUCH : DEFAULT_FONT_DESKTOP)
   );
@@ -258,6 +269,36 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
     if (!ws) return false;
     ws.send(encoderRef.current.encode(data));
     return true;
+  };
+
+  // `null` clears; a settled notice fades on its own (errors stay longer).
+  const showOauthNotice = (notice: OAuthRelayNotice | null) => {
+    if (oauthNoticeTimerRef.current !== null) {
+      window.clearTimeout(oauthNoticeTimerRef.current);
+      oauthNoticeTimerRef.current = null;
+    }
+    setOauthNotice(notice);
+    if (notice && notice.kind !== 'pending') {
+      oauthNoticeTimerRef.current = window.setTimeout(
+        () => {
+          oauthNoticeTimerRef.current = null;
+          setOauthNotice(null);
+        },
+        notice.kind === 'ok' ? 6000 : 20000
+      );
+    }
+  };
+
+  // A pasted CLI sign-in callback (the dead 127.0.0.1:1455 page) goes to the
+  // runner as a control frame, which replays it into the CLI's login server.
+  const relayOAuthCallback = (url: string) => {
+    const ws = wsOpen();
+    if (!ws) {
+      showOauthNotice({ kind: 'error', text: 'Terminal disconnected — paste the URL again once reconnected.' });
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'oauth_callback', url }));
+    showOauthNotice({ kind: 'pending', text: 'Completing sign-in…' });
   };
 
   // ── Geometry ──────────────────────────────────────────────────────────
@@ -576,6 +617,11 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
         relaunch();
         return;
       }
+      const callback = extractLoopbackOAuthCallback(data);
+      if (callback) {
+        relayOAuthCallback(callback);
+        return;
+      }
       const preferred = preferredRef.current;
       if (preferred && !sameGrid(ptySizeRef.current, preferred)) claimNow(true);
       sendToRunner(data);
@@ -606,6 +652,10 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       if (claimTimerRef.current !== null) {
         window.clearTimeout(claimTimerRef.current);
         claimTimerRef.current = null;
+      }
+      if (oauthNoticeTimerRef.current !== null) {
+        window.clearTimeout(oauthNoticeTimerRef.current);
+        oauthNoticeTimerRef.current = null;
       }
       try {
         wsRef.current?.close();
@@ -720,6 +770,13 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
             t.writeln('\x1b[2m[press Enter or click Relaunch to start a new session]\x1b[0m');
           } else if (ctrl?.type === 'error') {
             t.writeln(`\r\n\x1b[31m[error: ${ctrl.message || 'unknown'}]\x1b[0m`);
+          } else if (ctrl?.type === 'oauth_callback_result') {
+            // Shown outside the xterm: writing into the TUI's screen would
+            // be overdrawn (or leave debris) on its next repaint.
+            showOauthNotice({
+              kind: ctrl.ok ? 'ok' : 'error',
+              text: ctrl.message || (ctrl.ok ? 'Signed in.' : 'Sign-in failed.'),
+            });
           }
           return;
         }
@@ -908,6 +965,24 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
           style={{ touchAction: 'manipulation', overscrollBehavior: 'contain' }}
           onClick={() => termRef.current?.focus()}
         />
+        {oauthNotice && (
+          <button
+            type="button"
+            onMouseDown={keepFocus}
+            onClick={() => showOauthNotice(null)}
+            title="Dismiss"
+            role="status"
+            className={`absolute top-2 left-1/2 -translate-x-1/2 z-10 max-w-[calc(100%-2rem)] px-3 py-1.5 rounded-md border shadow-lg text-[11px] font-medium text-left ${
+              oauthNotice.kind === 'ok'
+                ? 'border-emerald-500/50 bg-emerald-600/90 text-white'
+                : oauthNotice.kind === 'error'
+                  ? 'border-red-500/50 bg-red-600/90 text-white'
+                  : 'border-indigo-500/50 bg-indigo-600/90 text-white animate-pulse'
+            }`}
+          >
+            {oauthNotice.text}
+          </button>
+        )}
         {scrolledUp && (
           <button
             type="button"

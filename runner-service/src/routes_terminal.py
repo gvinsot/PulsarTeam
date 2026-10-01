@@ -22,9 +22,12 @@ The WS protocol is bidirectional binary + small JSON control frames:
                       OR text frames: {type: "reset"} | {type: "size", cols,
                       rows} (the authoritative shared grid, sent on attach and
                       after every resize) | {type: "exit"|"error", ...}
+                      | {type: "oauth_callback_result", ok, message}
     client → server : binary frames (raw keystrokes to write into the PTY)
                       OR text frames carrying JSON {type: "resize", cols, rows}
                       (a claim: latest wins) | {type: "refresh"}
+                      | {type: "oauth_callback", url} (a pasted loopback
+                      sign-in callback, see oauth_callback_relay)
 
 Authentication mirrors the rest of the service: the caller (team-api proxy)
 supplies the shared `CODER_API_KEY` via the `Authorization: Bearer …` header.
@@ -48,6 +51,7 @@ from pydantic import BaseModel, Field
 
 from config import API_KEY, logger
 from backends import BACKEND
+import oauth_callback_relay
 import pty_session
 
 
@@ -253,6 +257,35 @@ async def send_terminal_input(
     return JSONResponse({"status": "success", "alive": session.is_alive()})
 
 
+# Strong refs to in-flight OAuth callback relays (asyncio only keeps weak
+# ones). Module-level so a relay outlives the WebSocket that started it: the
+# login completes either way, only the result frame is lost.
+_relay_tasks: set[asyncio.Task] = set()
+
+
+async def _relay_oauth_callback(agent_id: str, owner_id: Optional[str], url, push) -> None:
+    """Replay a pasted OAuth callback URL into the CLI's loopback listener and
+    report the outcome to the viewer that pasted it."""
+    result = await oauth_callback_relay.relay_callback(url if isinstance(url, str) else "")
+    if result["ok"]:
+        logger.info(f"[Terminal] Relayed an OAuth callback into the CLI for agent {agent_id}")
+        # The user just signed in on purpose: let the backend store the fresh
+        # credentials as authoritative (the creds watcher only ever moves the
+        # store forward, which a re-login after a revocation may not be).
+        hook = getattr(BACKEND, "after_terminal_login", None)
+        if hook is not None:
+            try:
+                await hook(agent_id, owner_id)
+            except Exception as e:
+                logger.warning(f"[Terminal] after_terminal_login failed for agent {agent_id}: {e}")
+    else:
+        logger.warning(f"[Terminal] OAuth callback relay failed for agent {agent_id}: {result['message']}")
+    try:
+        await push({"type": "oauth_callback_result", **result})
+    except Exception:
+        pass  # viewer gone; the login itself is unaffected
+
+
 @router.websocket("/ws/terminal/{agent_id}")
 async def ws_terminal(
     websocket: WebSocket,
@@ -393,6 +426,16 @@ async def ws_terminal(
                     # (e.g. it just attached and wants live state now, not on the
                     # next output). tmux re-emits the authoritative screen.
                     await session.request_repaint()
+                elif ctype == "oauth_callback":
+                    # The user pasted the dead 127.0.0.1:1455 page their browser
+                    # landed on after signing in (see oauth_callback_relay). Off
+                    # the loop: the CLI's code exchange can take seconds, and
+                    # keystrokes must keep flowing meanwhile.
+                    task = asyncio.create_task(_relay_oauth_callback(
+                        agent_id, owner_id, ctrl.get("url"), push_control_to_client,
+                    ))
+                    _relay_tasks.add(task)
+                    task.add_done_callback(_relay_tasks.discard)
                 # Unknown control frames are ignored on purpose — keeps the
                 # protocol forward-compatible.
     except WebSocketDisconnect:

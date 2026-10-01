@@ -1,7 +1,7 @@
 /**
- * Claude Code CLI OAuth link reconstruction.
+ * Claude Code (and codex) CLI OAuth link reconstruction.
  *
- * The CLI prints its /login authorization URL wrapped across multiple
+ * The CLIs print their sign-in authorization URL wrapped across multiple
  * terminal lines, so a naive linkifier only captures the first fragment.
  * Two deliberately separate flavors live here side by side:
  *
@@ -19,15 +19,25 @@
 import type { Terminal as XTerminal, ILink, ILinkProvider } from '@xterm/xterm';
 
 export const CLAUDE_OAUTH_PREFIX = 'https://claude.com/cai/oauth/authorize?code=';
+// The `codex` TUI's "Sign in with ChatGPT" prints an auth.openai.com authorize
+// URL, hard-wrapped the same way. Its redirect_uri is the CLI's loopback
+// listener inside the runner — see cliOAuthCallback.ts for how the browser's
+// dead callback page gets back to it.
+export const CODEX_OAUTH_PREFIX = 'https://auth.openai.com/oauth/authorize?';
 // The interactive `claude` CLI prints a *claude.ai* authorize URL (different
-// host + query shape than the claude.com/cai variant above). Both wrap across
-// terminal lines and need reconstruction, so gate the buffer-flavor helpers on
-// either marker. CLAUDE_OAUTH_PREFIX stays the canonical https-only constant.
-export const CLAUDE_OAUTH_PREFIXES = [CLAUDE_OAUTH_PREFIX, 'https://claude.ai/oauth/authorize?'];
-// Start of either authorize-URL flavor (http or https) plus its non-whitespace
+// host + query shape than the claude.com/cai variant above). All of them wrap
+// across terminal lines and need reconstruction, so gate the buffer-flavor
+// helpers on any marker. CLAUDE_OAUTH_PREFIX stays the canonical https-only
+// constant.
+export const CLAUDE_OAUTH_PREFIXES = [
+  CLAUDE_OAUTH_PREFIX,
+  'https://claude.ai/oauth/authorize?',
+  CODEX_OAUTH_PREFIX,
+];
+// Start of any authorize-URL flavor (http or https) plus its non-whitespace
 // remainder — used to grab the first wrapped fragment off the buffer line.
 const CLAUDE_OAUTH_URL_RE =
-  /^https?:\/\/(?:claude\.com\/cai\/oauth\/authorize\?code=|claude\.ai\/oauth\/authorize\?)\S*/;
+  /^https?:\/\/(?:claude\.com\/cai\/oauth\/authorize\?code=|claude\.ai\/oauth\/authorize\?|auth\.openai\.com\/oauth\/authorize\?)\S*/;
 const CLAUDE_OAUTH_MAX_CONTINUATION_LINES = 32;
 const CLAUDE_OAUTH_FALLBACK_SEARCH_LINES = 500;
 
@@ -86,6 +96,10 @@ function buildClaudeOAuthLink(
     const line = getTerminalLine(term, y);
     const trimmed = line.trim();
     if (!trimmed) break;
+    // A URL fragment never contains a space: a line that does is the CLI's
+    // next sentence (codex prints its hint right under the link, with no
+    // blank line in between), not more of the URL.
+    if (/\s/.test(trimmed)) break;
     const textStart = firstNonWhitespaceIndex(line);
     url += trimmed;
     endLine = y;

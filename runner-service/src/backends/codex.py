@@ -468,6 +468,30 @@ class CodexBackend(CliBackend):
         except Exception as e:
             logger.warning(f"[Codex Auth] push-back failed for owner {owner_id}: {e}")
 
+    async def after_terminal_login(self, agent_id: Optional[str], owner_id: Optional[str]) -> None:
+        """The user just completed the TUI's browser sign-in (callback relayed
+        by oauth_callback_relay): store the auth.json the CLI wrote as the
+        owner's credentials.
+
+        Unconditional on purpose. The creds watcher only ever moves the store
+        forward (save_owner_blob_if_newer), but a re-login after a revoked
+        refresh token is exactly the case where the stored — dead — copy can
+        look fresher. A deliberate login is an explicit user action, like the
+        OAuth exchange routes, so it may replace it."""
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        owner_id = self._resolve_owner_id(owner_id, agent_user)
+        if not owner_id:
+            return
+        blob, _ = read_local_auth(agent_user)
+        if not isinstance(blob, dict) or auth_method_for_blob(blob) != "oauth":
+            logger.warning(
+                f"[Codex Auth] Terminal sign-in relayed for agent {agent_id} but no OAuth "
+                "auth.json was found — leaving the stored credentials untouched"
+            )
+            return
+        if await run_blocking(save_owner_blob, owner_id, blob):
+            logger.info(f"[Codex Auth] Stored the terminal sign-in of {blob_account_email(blob) or 'unknown account'} for owner {owner_id}")
+
     # ── Command builder ───────────────────────────────────────────────────
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):
