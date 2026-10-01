@@ -25,6 +25,7 @@ import { useClickOutside } from '../hooks/useDismiss';
 import { safeGet, safeSet, safeRemove } from '../lib/safeStorage';
 import { WsEvents } from '../socketEvents';
 import AgentCard from './AgentCard';
+import { sortAgents, type AgentSortMode } from './agentSort';
 import BatchAgentCard from './BatchAgentCard';
 import AgentDetail, { CLI_RUNNERS } from './AgentDetail';
 import SwarmOverview from './SwarmOverview';
@@ -131,6 +132,16 @@ export default function Dashboard({
   const [showAddModal, setShowAddModal] = useState(false);
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [viewMode, setViewMode] = useState('grid'); // grid | list
+  // Order of the Agents view: 'default' (leaders first, server order),
+  // 'activity' (most recently active first) or 'name' (alphabetical).
+  const [agentSort, setAgentSortRaw] = useState<AgentSortMode>(() => {
+    const saved = safeGet('agentSort');
+    return saved === 'activity' || saved === 'name' ? saved : 'default';
+  });
+  const setAgentSort = useCallback((val: AgentSortMode) => {
+    setAgentSortRaw(val);
+    safeSet('agentSort', val);
+  }, []);
   const [activeView, setActiveViewRaw] = useState(() => {
     const hash = viewFromHash();
     return VALID_VIEWS.includes(hash) ? hash : 'tasks';
@@ -288,9 +299,12 @@ export default function Dashboard({
     return sortedAgents.filter(a => a.boardId && boardProjectMap.get(a.boardId) === projectFilter);
   }, [sortedAgents, projectFilter, boardProjectMap]);
 
-  const filteredAgents = boardFilter
-    ? projectScopedAgents.filter(a => a.boardId === boardFilter)
-    : projectScopedAgents;
+  const filteredAgents = useMemo(() => {
+    const scoped = boardFilter
+      ? projectScopedAgents.filter(a => a.boardId === boardFilter)
+      : projectScopedAgents;
+    return sortAgents(scoped, agentSort, thinkingMap);
+  }, [projectScopedAgents, boardFilter, agentSort, thinkingMap]);
 
   const selectedAgentData = sortedAgents.find(a => a.id === selectedAgent);
 
@@ -587,6 +601,18 @@ export default function Dashboard({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <select
+                    value={agentSort}
+                    onChange={e => setAgentSort(e.target.value as AgentSortMode)}
+                    title="Sort agents"
+                    aria-label="Sort agents"
+                    className="h-9 px-2 pr-7 text-sm bg-dark-800 border border-dark-700 rounded-lg text-dark-200 focus:outline-none focus:border-indigo-500 appearance-none"
+                    style={{ backgroundImage: 'none' }}
+                  >
+                    <option value="default">Sort: Default</option>
+                    <option value="activity">Sort: Last activity</option>
+                    <option value="name">Sort: Name</option>
+                  </select>
                   <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden">
                     <button
                       onClick={() => setViewMode('grid')}
