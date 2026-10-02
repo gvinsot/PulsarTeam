@@ -1,5 +1,10 @@
 import { waitForProjectSwitch } from './crud.js';
 import { isAgentBusy, isTaskRunning, reserveAgentForTask } from '../workflow/agentSelector.js';
+import {
+  claimRun,
+  releaseRun as releaseRunClaim,
+  refreshClaimedAgents,
+} from '../workflow/runClaims.js';
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
 import { enterRunProfileForTask } from '../security/externalRunProfile.js';
@@ -29,6 +34,8 @@ import {
   updateTaskFields,
   getBoardById,
   clearAllStaleActionRunning,
+  mutateTaskCommits,
+  transferTaskOwner,
 } from '../database.js';
 import {
   buildRecurrenceConfig,
@@ -42,7 +49,6 @@ import {
   isActiveStatus,
   getWorkflowManagedStatuses,
   getReassigningStatuses,
-  markTaskError,
   isUserStopError,
   reArmInterruptedChains,
 } from '../workflow/index.js';
@@ -51,14 +57,14 @@ import {
   enrichAssignee,
   emitTaskUpdated,
   isAssigneeOffBoard,
+  persistTaskError,
   ASSIGNEE_BOARD_MISMATCH_ERROR,
 } from '../taskMutations.js';
 import {
-  snapshotGitBaseline,
   reconcileTaskCommits,
-  beginTaskCommitRun,
-  endTaskCommitRun,
   getTaskCommitRun,
+  startTaskCommitRun,
+  finishTaskCommitRun,
 } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
 import { ensureAgentWorkspace, resolveAgentGitCredentials } from '../execution/agentWorkspace.js';
@@ -67,9 +73,9 @@ import { deliverTaskAttachments } from '../execution/taskAttachmentDelivery.js';
 import { errorMessage } from '../../lib/errors.js';
 import type { Task, TaskWriteInput, TaskRecurrence } from '../database/tasks.js';
 import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
-import { getCurrentEnvironment } from '../../lib/environment.js';
+import { getCurrentEnvironment, isEnvironmentLocked } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
-import { watchCliActivity, isCliRecentlyActive } from './cliActivity.js';
+import { watchCliActivity, isCliRecentlyActive, noteCliActivity } from './cliActivity.js';
 import { checkBoardAccess } from '../../middleware/authz.js';
 import { checkAgentAccess, type AgentAccessSubject } from '../../lib/agentAccess.js';
 import type { SessionClaims } from '../../middleware/session.js';
@@ -111,6 +117,29 @@ async function bindAgentRunner(manager: any, agent: any): Promise<void> {
 // out a reminder interval (signals are in-memory; the DB read is one row).
 const VERDICT_POLL_SLICE_MS = 3000;
 
+/** The per-board status sets kept by _refreshWorkflowManagedStatuses. */
+interface StatusSetsHolder {
+  _workflowManagedByBoard?: Map<string, Set<string>>;
+  _workflowManagedStatuses?: Set<string>;
+  _reassigningByBoard?: Map<string, Set<string>>;
+  _reassigningStatuses?: Set<string>;
+}
+
+function envInt(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+// A CLI whose PTY printed nothing for this long is waiting at its prompt.
+const CLI_QUIET_SECONDS = envInt('CLI_QUIET_SECONDS', 6);
+// How long a finished terminal run may hold its agent while the CLI wraps up.
+const CLI_DRAIN_MAX_MS = envInt('CLI_DRAIN_MAX_MS', 10 * 60_000);
+// After a Stop: re-interrupt a CLI still printing after this, give up after that.
+const CLI_DRAIN_REINTERRUPT_MS = 20_000;
+const CLI_DRAIN_STOP_MAX_MS = 60_000;
+const CLI_DRAIN_POLL_MS = 2_000;
+// Terminal-independent commit sweep cadence while a CLI run is watched.
+const COMMIT_SWEEP_INTERVAL_MS = envInt('COMMIT_SWEEP_INTERVAL_MS', 60_000);
+
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
 const _taskSignals = new Map<string, Record<string, any>>(); // taskId -> { completed, comment, stopped, watching, pendingOnEnter }
@@ -134,6 +163,29 @@ export function clearTaskSignal(taskId: string, key: string): void {
 
 export function clearTaskSignals(taskId: string): void {
   _taskSignals.delete(taskId);
+}
+
+// Tasks whose execution wait accepts an agent's completion signal right now.
+// recordTaskCompletion only raises 'completed' for these: a completion recorded
+// while nothing waits (a manager's update_task, an agent's follow-up comment
+// after its run ended) used to stay latched and end the NEXT run of the task the
+// moment its prompt was pasted — freeing the agent while its CLI worked on.
+const _awaitingCompletion = new Set<string>();
+
+export function setAwaitingCompletion(taskId: string, waiting: boolean): void {
+  if (waiting) _awaitingCompletion.add(taskId);
+  else _awaitingCompletion.delete(taskId);
+}
+
+export function isAwaitingCompletion(taskId: string): boolean {
+  return _awaitingCompletion.has(taskId);
+}
+
+/** Drop the run-scoped signals of a previous lifecycle (Stop, completion). */
+export function clearRunSignals(taskId: string): void {
+  clearTaskSignal(taskId, 'stopped');
+  clearTaskSignal(taskId, 'completed');
+  clearTaskSignal(taskId, 'comment');
 }
 
 /** Purge signals for task IDs that no longer exist in the active task set */
@@ -304,21 +356,24 @@ export const tasksMethods = {
     if (!task) return null;
     const prevStatus = task.status;
     const previousAssignee = task.assignee || null;
-    task.status = prevStatus === 'done' ? 'backlog' : 'done';
-    if (previousAssignee) task.assignee = null;
-    if (task.status === 'done') task.completedAt = new Date().toISOString();
+    const status = prevStatus === 'done' ? 'backlog' : 'done';
     const now = new Date().toISOString();
-    if (!task.history) task.history = [];
-    task.history.push({
-      from: prevStatus,
-      status: task.status,
-      at: now,
-      by: 'user',
-      ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+    const updated = await updateTaskFields(taskId, {
+      status,
+      ...(previousAssignee ? { assignee: null } : {}),
+      ...(status === 'done' ? { completedAt: now } : {}),
+      historyAppend: [
+        {
+          from: prevStatus,
+          status,
+          at: now,
+          by: 'user',
+          ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+        },
+      ],
     });
-    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    return updated || task;
   },
 
   async setTaskStatus(
@@ -328,14 +383,15 @@ export const tasksMethods = {
     status: string,
     { skipAutoRefine = false, by = null }: { skipAutoRefine?: boolean; by?: string | null } = {}
   ): Promise<any> {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
+    // The task is addressed by id; `agentId` only names who asked. A task whose
+    // owner agent was deleted must still be movable — refusing it stranded the
+    // workflow's change_status action in an endless 'guard-blocked' retry.
+    const agent = agentId ? this.agents.get(agentId) : null;
     const task = await getTaskById(taskId);
     if (!task) return null;
     const prevStatus = task.status;
     if (prevStatus === status) return task;
     const previousAssignee = task.assignee || null;
-    task.status = status;
     // Clear the assignee on column entry ONLY when the destination column is
     // going to reassign it (a run_agent/assign_agent action, or a non-first/last
     // autoAssignRole — see getReassigningStatuses). Otherwise keep it so the
@@ -343,55 +399,50 @@ export const tasksMethods = {
     // unconditionally was invisible while the assignee equalled the task owner
     // (e.g. a batch's member #1) but, for any other member, wiped the worker so
     // the board showed nobody had picked the task up.
-    const clearAssignee = !!previousAssignee && (this._reassigningStatuses?.has(status) ?? false);
-    if (clearAssignee) task.assignee = null;
+    const clearAssignee =
+      !!previousAssignee && this._isReassigningStatus(task.boardId || null, status);
     // Clear pending on enter signal
     clearTaskSignal(taskId, 'pendingOnEnter');
-    delete task._pendingOnEnter;
-    // Clear chain resume state so a new on_enter chain starts fresh.
-    // Without this, a stale completedActionIdx from a previous chain
-    // (e.g. refine) could cause the new chain (e.g. code) to skip actions.
-    task.completedActionIdx = null;
+    // A completion recorded for the previous column must not end the next
+    // column's run (see setAwaitingCompletion).
+    clearTaskSignal(taskId, 'completed');
+    clearTaskSignal(taskId, 'comment');
     // A column move starts a fresh chain — drop the decide no-decision counter
     // so a later re-entry into a decide column isn't penalised by stale attempts.
     this._decideNoDecisionCounts?.delete(taskId);
-    // Clear execution state — processTransition will re-set startedAt when
-    // a workflow action genuinely starts execution. Without this, stale
-    // startedAt from a previous execution causes the task loop to resume
-    // tasks that were manually moved (e.g. done → nextsprint).
-    task.startedAt = null;
-    task.executionStatus = null;
     const now = new Date().toISOString();
-    if (status === 'done') task.completedAt = now;
-    if (status === 'error') {
-      task.errorFromStatus = prevStatus;
-      // An errored task is not running anymore — clear actionRunning so the
-      // UI can show recovery actions (Resume / Clear-stopped) instead of the
-      // Stop button. Without this, the task gets stuck: Stop appears but
-      // does nothing visible (the executor may already be idle), and no
-      // recovery button shows up.
-      task.actionRunning = false;
-      task.actionRunningAgentId = null;
-      task.actionRunningMode = null;
-    }
-    if (prevStatus === 'error' && status !== 'error') {
-      task.errorFromStatus = null;
-      task.error = null;
-    }
-    if (!task.history) task.history = [];
-    task.history.push({
-      from: prevStatus,
+    // A TARGETED write of exactly what a move changes. The full-row save it
+    // replaces wrote a snapshot read before the move, reverting whatever another
+    // writer committed meanwhile (a linked commit, an assignment, a comment).
+    const fields: Record<string, unknown> = {
       status,
-      at: now,
-      by: by || 'user',
-      ...(clearAssignee ? { assignee: null, previousAssignee } : {}),
-    });
-    // Stamp updatedAt so the frontend can detect stale loadTasks() responses.
-    // The DB sets its own updated_at = NOW() inside saveTaskToDb, but a SELECT
-    // on a parallel pool connection may run before that UPDATE commits and
-    // return a stale row. By including this client-side timestamp in the
-    // task:updated payload, the frontend can compare and reject stale data.
-    task.updatedAt = now;
+      // Chain resume state belongs to the previous column: the new column's
+      // on_enter chain starts fresh (a stale completedActionIdx would skip actions).
+      pendingOnEnter: null,
+      completedActionIdx: null,
+      resumeTransitionIdx: null,
+      // Execution state of the previous column: without this, a stale startedAt
+      // makes the task loop resume a task that was moved (e.g. done → nextsprint).
+      // The run claim itself is released by the run, never by a move.
+      startedAt: null,
+      executionStatus: null,
+    };
+    if (clearAssignee) fields.assignee = null;
+    if (status === 'done') fields.completedAt = now;
+    if (status === 'error') fields.errorFromStatus = prevStatus;
+    if (prevStatus === 'error' && status !== 'error') {
+      fields.errorFromStatus = null;
+      fields.error = null;
+    }
+    fields.historyAppend = [
+      {
+        from: prevStatus,
+        status,
+        at: now,
+        by: by || 'user',
+        ...(clearAssignee ? { assignee: null, previousAssignee } : {}),
+      },
+    ];
     // Persist under the task's OWN owner (task.agentId is authoritative) — never
     // reassign ownership to the caller's agentId, which for delegated executions
     // (rate-limit handler, cross-agent assignee) is the executor, not the owner.
@@ -399,16 +450,19 @@ export const tasksMethods = {
     // loadTasks() re-fetch, so emitting after the write commits guarantees that
     // fetch — and the task:updated payload — reflect the persisted row.
     const ownerId = task.agentId ?? null;
-    await saveTaskToDb(task).catch(() => {});
+    const updated = await updateTaskFields(taskId, fields);
+    if (!updated) return null;
+    // Stamp updatedAt so the frontend can detect stale loadTasks() responses.
+    updated.updatedAt = now;
     const ownerAgent = ownerId ? this.agents.get(ownerId) : agent;
     if (ownerAgent) this._emit('agent:updated', this._sanitize(ownerAgent));
     // Emit task:updated so the TasksBoard UI updates in real-time
     // (agent:updated alone is not enough — the board listens on task:updated).
-    const taskPayload = enrichAssignee(this, { ...task, agentId: ownerId });
+    const taskPayload = enrichAssignee(this, { ...updated, agentId: ownerId });
     this._emit('task:updated', { agentId: ownerId, task: taskPayload });
-    if (!skipAutoRefine && status !== 'error' && !task.isManual)
-      this._checkAutoRefine({ ...task, agentId: ownerId }, { by: by || 'user' });
-    return task;
+    if (!skipAutoRefine && status !== 'error' && !updated.isManual)
+      this._checkAutoRefine({ ...updated, agentId: ownerId }, { by: by || 'user' });
+    return updated;
   },
 
   /** Shared field-edit helper for the simple updateTaskX methods: capture the
@@ -424,26 +478,41 @@ export const tasksMethods = {
     value: Task[K],
     { by = 'user', applyExtra }: { by?: string; applyExtra?: (task: Task) => void } = {}
   ): Promise<Task | null> {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
+    // A board-level task (agentId null) has no owner to check; an id naming an
+    // agent that does not exist is still refused (agent-scoped routes).
+    const agent = agentId ? this.agents.get(agentId) : null;
+    if (agentId && !agent) return null;
     const task = await getTaskById(taskId);
     if (!task) return null;
+    const before: Record<string, unknown> = { ...task };
     const oldValue = task[field] || null;
     task[field] = value;
     applyExtra?.(task);
-    if (!task.history) task.history = [];
-    task.history.push({
-      status: task.status,
-      at: new Date().toISOString(),
-      by,
-      type: 'edit',
-      field,
-      oldValue,
-      newValue: value ?? null,
-    });
-    await saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    // Write ONLY what this edit changed (+ an atomic history append): a full-row
+    // save of the snapshot read above reverted concurrent writes — and, from a
+    // run_agent action, resurrected the run claim the action had just released.
+    const fields: Record<string, unknown> = { [field]: value ?? null };
+    for (const [key, next] of Object.entries(task)) {
+      if (key !== 'history' && JSON.stringify(next) !== JSON.stringify(before[key])) {
+        fields[key] = next ?? null;
+      }
+    }
+    fields.historyAppend = [
+      {
+        status: task.status,
+        at: new Date().toISOString(),
+        by,
+        type: 'edit',
+        field,
+        oldValue,
+        newValue: value ?? null,
+      },
+    ];
+    const updated = await updateTaskFields(taskId, fields);
+    if (!updated) return null;
+    if (agent) this._emit('agent:updated', this._sanitize(agent));
+    emitTaskUpdated(this, { ...updated }, { emitAgent: false });
+    return updated;
   },
 
   updateTaskTitle(this: any, agentId: string, taskId: string, title: string): any {
@@ -484,20 +553,22 @@ export const tasksMethods = {
     if (!task) return null;
     const oldValue = task.secondaryRepos || [];
     const newValue = normalizeSecondaryRepos(secondaryRepos, task.repoFullName);
-    task.secondaryRepos = newValue;
-    if (!task.history) task.history = [];
-    task.history.push({
-      status: task.status,
-      at: new Date().toISOString(),
-      by: 'user',
-      type: 'edit',
-      field: 'secondaryRepos',
-      oldValue,
-      newValue,
+    const updated = await updateTaskFields(taskId, {
+      secondaryRepos: newValue,
+      historyAppend: [
+        {
+          status: task.status,
+          at: new Date().toISOString(),
+          by: 'user',
+          type: 'edit',
+          field: 'secondaryRepos',
+          oldValue,
+          newValue,
+        },
+      ],
     });
-    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    return updated || task;
   },
 
   updateTaskStorage(
@@ -733,51 +804,58 @@ export const tasksMethods = {
     taskId: string,
     hash: string,
     message: string,
-    meta: { pushed?: boolean } = {}
+    meta: { pushed?: boolean; repo?: string | null } = {}
   ): Promise<any> {
-    const task: any = await getTaskById(taskId);
-    if (!task) return null;
-    const ownerAgentId: string = task.agentId;
-    if (!task.commits) task.commits = [];
-    // Prefix-aware dedup: treat short and full hashes of the same commit as equal.
-    // If a full hash is provided and a short hash already exists, upgrade it.
-    const existingIdx = task.commits.findIndex(
-      (c: any) => c.hash === hash || c.hash.startsWith(hash) || hash.startsWith(c.hash)
-    );
-    if (existingIdx !== -1) {
-      const existing = task.commits[existingIdx];
-      let mutated = false;
-      // Upgrade: if the new hash is longer (full), replace the short one
-      if (hash.length > existing.hash.length) {
-        existing.hash = hash;
-        if (message && !existing.message) existing.message = message;
-        mutated = true;
+    // Read-modify-write under a row lock (mutateTaskCommits): concurrent linkers
+    // — the mid-run sweep, update_task, the end-of-run reconcile — each used to
+    // save the whole row from its own snapshot, so one link could erase another.
+    let added = false;
+    const result = await mutateTaskCommits(taskId, commits => {
+      // Prefix-aware dedup: treat short and full hashes of the same commit as equal.
+      // If a full hash is provided and a short hash already exists, upgrade it.
+      const existing = commits.find(
+        (c: any) => c.hash === hash || c.hash.startsWith(hash) || hash.startsWith(c.hash)
+      );
+      if (existing) {
+        let mutated = false;
+        // Upgrade: if the new hash is longer (full), replace the short one
+        if (hash.length > existing.hash.length) {
+          existing.hash = hash;
+          if (message && !existing.message) existing.message = message;
+          mutated = true;
+        }
+        // Refresh the pushed flag on re-link (a mid-run sweep links the commit as
+        // unpushed; the end-of-run reconcile upgrades it once the CLI pushed it).
+        if (meta.pushed !== undefined && existing.pushed !== meta.pushed) {
+          existing.pushed = meta.pushed;
+          mutated = true;
+        }
+        // A secondary-repo commit first linked by hash alone (update_task's
+        // explicit list) learns its repo here — the diff view needs it.
+        if (meta.repo && !existing.repo) {
+          existing.repo = meta.repo;
+          mutated = true;
+        }
+        return mutated ? commits : null;
       }
-      // Refresh the pushed flag on re-link (a mid-run sweep links the commit as
-      // unpushed; the end-of-run reconcile upgrades it once the CLI pushed it).
-      if (meta.pushed !== undefined && existing.pushed !== meta.pushed) {
-        existing.pushed = meta.pushed;
-        mutated = true;
-      }
-      if (mutated) {
-        await saveTaskToDb({ ...task, agentId: ownerAgentId });
-        emitTaskUpdated(
-          this,
-          { ...task, agentId: ownerAgentId },
-          { emitAgent: false, stampUpdatedAt: true }
-        );
-      }
-      return task;
-    }
-    task.commits.push({
-      hash,
-      message: message || '',
-      date: new Date().toISOString(),
-      ...(meta.pushed !== undefined ? { pushed: meta.pushed } : {}),
+      added = true;
+      commits.push({
+        hash,
+        message: message || '',
+        date: new Date().toISOString(),
+        ...(meta.pushed !== undefined ? { pushed: meta.pushed } : {}),
+        ...(meta.repo ? { repo: meta.repo } : {}),
+      });
+      return commits;
     });
-    await saveTaskToDb({ ...task, agentId: ownerAgentId });
-    const agent = ownerAgentId ? this.agents.get(ownerAgentId) : null;
-    if (agent) this._emit('agent:updated', this._sanitize(agent));
+    if (!result) return null;
+    const { task, changed } = result;
+    if (!changed) return task;
+    const ownerAgentId: string | null = task.agentId ?? null;
+    if (added) {
+      const agent = ownerAgentId ? this.agents.get(ownerAgentId) : null;
+      if (agent) this._emit('agent:updated', this._sanitize(agent));
+    }
     // Also emit the task itself so the kanban card shows the commit live —
     // commits linked by the terminal-independent reconcile have no other
     // event to piggyback on (no run_command result, no status move).
@@ -790,17 +868,15 @@ export const tasksMethods = {
   },
 
   async removeTaskCommit(this: any, _agentId: string, taskId: string, hash: string): Promise<any> {
-    const task: any = await getTaskById(taskId);
-    if (!task) return null;
-    const ownerAgentId: string = task.agentId;
-    if (!task.commits) return null;
-    const before = task.commits.length;
-    task.commits = task.commits.filter((c: any) => c.hash !== hash);
-    if (task.commits.length === before) return null;
-    await saveTaskToDb({ ...task, agentId: ownerAgentId });
+    const result = await mutateTaskCommits(taskId, commits => {
+      const kept = commits.filter((c: any) => c.hash !== hash);
+      return kept.length === commits.length ? null : kept;
+    });
+    if (!result || !result.changed) return null;
+    const ownerAgentId: string | null = result.task.agentId ?? null;
     const agent = ownerAgentId ? this.agents.get(ownerAgentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    return result.task;
   },
 
   async setTaskAssignee(
@@ -817,19 +893,21 @@ export const tasksMethods = {
     if (assigneeId && isAssigneeOffBoard(this.agents.get(assigneeId), task.boardId)) {
       throw new Error(ASSIGNEE_BOARD_MISMATCH_ERROR);
     }
-    task.assignee = assigneeId;
-    if (!task.history) task.history = [];
-    task.history.push({
-      status: task.status,
-      at: new Date().toISOString(),
-      by: 'user',
-      type: 'reassign',
+    const updated = await updateTaskFields(taskId, {
       assignee: assigneeId,
+      historyAppend: [
+        {
+          status: task.status,
+          at: new Date().toISOString(),
+          by: 'user',
+          type: 'reassign',
+          assignee: assigneeId,
+        },
+      ],
     });
-    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     this._recheckConditionalTransitions();
-    return task;
+    return updated || task;
   },
 
   async deleteTask(this: any, agentId: string | null, taskId: string): Promise<boolean> {
@@ -848,17 +926,15 @@ export const tasksMethods = {
   async restoreTask(this: any, taskId: string): Promise<any> {
     const restored = await restoreTaskFromDb(taskId);
     if (!restored) return null;
-    if (!restored.history) restored.history = [];
-    restored.history.push({
-      status: restored.status,
-      at: new Date().toISOString(),
-      by: 'user',
-      type: 'restored',
-    });
-    await saveTaskToDb({ ...restored, agentId: restored.agentId });
-    const agent = restored.agentId ? this.agents.get(restored.agentId) : null;
+    const updated =
+      (await updateTaskFields(taskId, {
+        historyAppend: [
+          { status: restored.status, at: new Date().toISOString(), by: 'user', type: 'restored' },
+        ],
+      })) || restored;
+    const agent = updated.agentId ? this.agents.get(updated.agentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
-    return restored;
+    return updated;
   },
 
   async hardDeleteTask(this: any, taskId: string): Promise<any> {
@@ -890,36 +966,30 @@ export const tasksMethods = {
     if (!fromAgent || !toAgent) return null;
     const taskToTransfer = await getTaskById(taskId);
     if (!taskToTransfer) return null;
-    // Checked BEFORE the delete below so a refused transfer never loses the task.
     if (isAssigneeOffBoard(toAgent, taskToTransfer.boardId)) {
       throw new Error(ASSIGNEE_BOARD_MISMATCH_ERROR);
     }
-    const prevStatus = taskToTransfer.status;
-    await deleteTaskFromDb(taskId);
-    this._emit('agent:updated', this._sanitize(fromAgent));
-    const newTask = await this.addTask(
-      toAgentId,
-      taskToTransfer.text,
-      { type: 'transfer', name: fromAgent.name, id: fromAgent.id },
-      prevStatus,
-      {
-        boardId: taskToTransfer.boardId,
-        repoFullName: taskToTransfer.repoFullName,
-        repoProvider: taskToTransfer.repoProvider,
-        storagePath: taskToTransfer.storagePath,
-        storageProvider: taskToTransfer.storageProvider,
-        // A transfer re-creates the row: without this, handing an external task
-        // to another agent would launder it into a tenant task.
-        trustLevel: taskToTransfer.trustLevel,
-        securityFlags: taskToTransfer.securityFlags,
-      }
-    );
-    if (newTask) {
-      newTask.assignee = toAgentId;
-      await saveTaskToDb({ ...newTask, agentId: toAgentId });
-      this._checkAutoRefine({ ...newTask, assignee: toAgentId, agentId: toAgentId });
+    // A task being worked on is not handed over under the running agent's feet:
+    // its commits would be linked to a task nobody runs anymore.
+    if (isTaskRunning(taskId) || taskToTransfer.actionRunning) {
+      throw new Error('Task is being executed — stop it before transferring it');
     }
-    return newTask;
+    // In place: the task keeps its id, commits, history, comments, attachments and
+    // provenance (re-creating the row dropped all of them).
+    const moved = await transferTaskOwner(taskId, toAgentId, {
+      status: taskToTransfer.status,
+      at: new Date().toISOString(),
+      by: fromAgent.name,
+      type: 'transfer',
+      from: fromAgentId,
+      to: toAgentId,
+    });
+    if (!moved) return null;
+    this._emit('agent:updated', this._sanitize(fromAgent));
+    this._emit('agent:updated', this._sanitize(toAgent));
+    emitTaskUpdated(this, { ...moved }, { emitAgent: false });
+    this._checkAutoRefine({ ...moved, agentId: toAgentId });
+    return moved;
   },
 
   async executeTask(
@@ -944,9 +1014,20 @@ export const tasksMethods = {
     // (POST /api/tasks/:id/approve), so a click on "run" cannot skip reading
     // what an outsider wrote.
     if (needsApproval(task)) throw new Error(APPROVAL_REQUIRED_MESSAGE);
+    // Stacks sharing the database each run their own environment's tasks; the
+    // other stack's engine would run this one concurrently (and its runners hold
+    // the task's working copy).
+    const taskEnv = task.environment || 'prod';
+    if (taskEnv !== getCurrentEnvironment()) {
+      throw new Error(`Task belongs to the "${taskEnv}" environment — run it from there`);
+    }
+    if (task.actionRunning) {
+      throw new Error('Task is already being executed — stop it first');
+    }
 
     // Check before clearing Stop/watching signals: a rejected resume must not
     // disturb the workflow already owning this task or executor.
+    await refreshClaimedAgents();
     const requestedExecutorId = options.executorId || task.assignee || agentId;
     const requestedExecutor = this.agents.get(requestedExecutorId);
     if (!requestedExecutor || !(await checkAgentAccess(requestedExecutor, user, 'edit')).ok) {
@@ -960,6 +1041,18 @@ export const tasksMethods = {
     if (requestedExecutor.enabled === false) throw new Error('Executor is disabled');
     if (isTaskRunning(task.id) || isAgentBusy(requestedExecutorId)) {
       throw new Error('Agent or task is already processing another execution');
+    }
+    // The run would decline a CLI still printing (_resumeActiveTask's pre-flight)
+    // AFTER this request was accepted — and the explicit start leaves no retry
+    // marker behind. Refuse it now, before touching the task.
+    if (
+      isCliRunner(requestedExecutor) &&
+      this.executionManager?.sendTerminalInput &&
+      !(await this._isCliQuiet(requestedExecutorId))
+    ) {
+      throw new Error(
+        `Agent "${requestedExecutor.name}"'s terminal is still active — retry once it is idle`
+      );
     }
 
     let explicitReservation: (() => void) | null = null;
@@ -988,11 +1081,8 @@ export const tasksMethods = {
           errorFromStatus: null,
           pendingOnEnter: null,
           completedActionIdx: null,
-          actionRunning: false,
-          actionRunningAgentId: null,
-          actionRunningMode: null,
-          history: [
-            ...(task.history || []),
+          resumeTransitionIdx: null,
+          historyAppend: [
             {
               at: new Date().toISOString(),
               by: user.username || user.userId,
@@ -1147,6 +1237,18 @@ export const tasksMethods = {
         // Statuses whose entry will reassign the task — drives whether
         // setTaskStatus clears the assignee on a column move (see setTaskStatus).
         this._reassigningStatuses = getReassigningStatuses(boardWorkflows);
+        // Column ids are unique only WITHIN a board ('review', 'todo' exist on
+        // many): a column that runs actions on board B says nothing about the
+        // same-named column of board A. Keep a set per board; the global sets
+        // above only serve tasks with no board.
+        const managedByBoard = new Map<string, Set<string>>();
+        const reassigningByBoard = new Map<string, Set<string>>();
+        for (const bw of boardWorkflows) {
+          managedByBoard.set(bw.boardId, getWorkflowManagedStatuses([bw]));
+          reassigningByBoard.set(bw.boardId, getReassigningStatuses([bw]));
+        }
+        this._workflowManagedByBoard = managedByBoard;
+        this._reassigningByBoard = reassigningByBoard;
         // Log only when the managed-status set actually changes — this runs every
         // 30s, and re-printing the (long, static) list each time drowned the logs.
         const nextKey = [...next].sort().join(',');
@@ -1160,6 +1262,25 @@ export const tasksMethods = {
         }
       })
       .catch(() => {});
+  },
+
+  /** Whether entering `status` on `boardId` runs actions the task loop must not
+   *  duplicate (per board — see _refreshWorkflowManagedStatuses). */
+  _isWorkflowManagedStatus(
+    this: StatusSetsHolder,
+    boardId: string | null,
+    status: string
+  ): boolean {
+    const perBoard = this._workflowManagedByBoard;
+    if (boardId && perBoard?.has(boardId)) return perBoard.get(boardId)!.has(status);
+    return this._workflowManagedStatuses?.has(status) ?? false;
+  },
+
+  /** Whether entering `status` on `boardId` will (re)assign the task. */
+  _isReassigningStatus(this: StatusSetsHolder, boardId: string | null, status: string): boolean {
+    const perBoard = this._reassigningByBoard;
+    if (boardId && perBoard?.has(boardId)) return perBoard.get(boardId)!.has(status);
+    return this._reassigningStatuses?.has(status) ?? false;
   },
 
   stopTaskLoop(this: any): void {
@@ -1186,6 +1307,10 @@ export const tasksMethods = {
    * needs to be careful about stealing a task from the agent working it.
    */
   async _processRecurringTasks(this: any): Promise<void> {
+    // Until the instance knows its environment, getCurrentEnvironment() answers
+    // the 'prod' default: a QA replica would spawn prod's runs (see
+    // _processNextPendingTasks).
+    if (!isEnvironmentLocked()) return;
     const now = Date.now();
     const ownEnv = getCurrentEnvironment();
     const templates = await getRecurringTasks();
@@ -1250,24 +1375,35 @@ export const tasksMethods = {
   },
 
   _processNextPendingTasks(this: any): void {
-    // One-shot startup cleanup of stale action_running flags. Deferred until
-    // here so the instance's environment is known (locked by the first HTTP
-    // request, or set via APP_ENVIRONMENT) and we don't clear a sibling
-    // replica's locks when several deployments share the database.
+    // Nothing runs until the instance knows its environment. Before the lock
+    // (APP_ENVIRONMENT unset and no public request seen yet) getCurrentEnvironment()
+    // answers the 'prod' default, and a QA replica sharing the database used to
+    // re-arm, clear and EXECUTE prod's tasks — on prod's agents, in QA's runners —
+    // for every boot until someone opened the QA site.
+    if (!isEnvironmentLocked()) {
+      if (!this._envLockWarned) {
+        this._envLockWarned = true;
+        console.warn(
+          '⚠️  [TaskLoop] Environment not known yet (APP_ENVIRONMENT unset): the workflow engine waits for the first public request to lock it. Set APP_ENVIRONMENT to run it from boot.'
+        );
+      }
+      return;
+    }
+    // One-shot startup cleanup, now that the environment is known: re-arm the
+    // chains a previous process left mid-way, then drop the markers that died
+    // with it. Claims still heartbeating (the previous replica of a start-first
+    // update is still running them) are left alone — the stale-claim healer
+    // takes them over once their heartbeat stops.
     if (!this._staleActionCleanupDone) {
       this._staleActionCleanupDone = true;
       const env = getCurrentEnvironment();
-      // Re-arm interrupted chains BEFORE clearing stale action_running — the
-      // re-arm relies on that flag to detect a crash mid-run. It persists a
-      // durable pending_on_enter, so after the clear the task becomes visible to
-      // getActiveWorkflowTasks and recheckPendingTransitions resumes it.
       reArmInterruptedChains(this, env)
         .catch((err: any) => console.error('[TaskLoop] chain re-arm failed:', err.message))
         .finally(() => {
           clearAllStaleActionRunning(env)
             .then((cleared: number) => {
               if (cleared > 0)
-                console.log(`🔄 Cleared ${cleared} stale action_running flags for env="${env}"`);
+                console.log(`🔄 Cleared ${cleared} stale execution markers for env="${env}"`);
             })
             .catch((err: any) =>
               console.error('[TaskLoop] stale action cleanup failed:', err.message)
@@ -1291,6 +1427,7 @@ export const tasksMethods = {
     // so a sibling replica sharing the DB doesn't steal each other's tasks.
     getTasksForResume(getCurrentEnvironment())
       .then(async (dbTasks: any[]) => {
+        if (dbTasks.length > 0) await refreshClaimedAgents();
         for (const dbTask of dbTasks) {
           const executorId = dbTask.assignee || dbTask.agentId;
           const executor = this.agents.get(executorId);
@@ -1304,7 +1441,7 @@ export const tasksMethods = {
             continue;
           if (!this._isActiveTaskStatus(dbTask.status)) continue;
 
-          if (this._workflowManagedStatuses?.has(dbTask.status)) continue;
+          if (this._isWorkflowManagedStatus(dbTask.boardId || null, dbTask.status)) continue;
 
           if (dbTask.executionStatus === 'stopped' || getTaskSignal(dbTask.id, 'stopped')) {
             continue;
@@ -1397,6 +1534,109 @@ export const tasksMethods = {
     clearTaskSignal(taskId, 'stopped');
   },
 
+  /** Drop every run-scoped signal (stopped, completed, comment) left by a prior
+   *  lifecycle — called when a fresh run starts. See clearRunSignals. */
+  _clearRunSignals(this: unknown, taskId: string): void {
+    clearRunSignals(taskId);
+  },
+
+  /** Seconds since the executor's PTY last printed: Infinity when it has no
+   *  session (nothing can be running), null when the runner cannot tell. */
+  async _cliIdleSeconds(
+    this: { executionManager?: { getTerminalSession?: (id: string) => Promise<unknown> } },
+    executorId: string
+  ): Promise<number | null> {
+    if (!this.executionManager?.getTerminalSession) return Number.POSITIVE_INFINITY;
+    let session: { alive?: boolean; idle_seconds?: unknown } | null;
+    try {
+      session = (await this.executionManager.getTerminalSession(executorId)) as typeof session;
+    } catch {
+      return null;
+    }
+    if (!session || session.alive === false) return Number.POSITIVE_INFINITY;
+    const idle = session.idle_seconds;
+    if (idle === null || idle === undefined) return Number.POSITIVE_INFINITY; // never printed
+    return typeof idle === 'number' && Number.isFinite(idle) ? idle : null;
+  },
+
+  /**
+   * Whether a CLI executor's terminal is quiet: no PTY output for CLI_QUIET_SECONDS.
+   * The CLI TUIs redraw continuously while they think or run a tool (spinner,
+   * elapsed timer), so silence means the CLI waits at its prompt. An unreachable
+   * runner counts as quiet — the paste would fail anyway.
+   */
+  async _isCliQuiet(
+    this: { _cliIdleSeconds(id: string): Promise<number | null> },
+    executorId: string
+  ): Promise<boolean> {
+    const idle = await this._cliIdleSeconds(executorId);
+    return idle === null || idle >= CLI_QUIET_SECONDS;
+  },
+
+  /**
+   * Hold a terminal-driven run until the CLI is really done.
+   *
+   * The execution wait ends on a VERDICT — the agent moved the card, recorded
+   * its completion, the user pressed Stop — which comes before the CLI finishes
+   * its turn: it still writes its summary, pushes, sometimes commits again.
+   * Releasing the agent at the verdict let the next task be pasted into a busy
+   * TUI (two tasks at once), and closed the commit window early: the tail
+   * commits were lost, or linked to the next task. So the run is released only
+   * once the PTY has been quiet for CLI_QUIET_SECONDS. After a Stop the CLI is
+   * re-interrupted if it keeps going; either way the wait is bounded.
+   */
+  async _drainCliRun(
+    this: any,
+    executorId: string,
+    executorName: string,
+    taskId: string,
+    { stopped = false }: { stopped?: boolean } = {}
+  ): Promise<void> {
+    const started = Date.now();
+    let interruptAt = stopped ? started + CLI_DRAIN_REINTERRUPT_MS : Number.POSITIVE_INFINITY;
+    let deadline = started + (stopped ? CLI_DRAIN_STOP_MAX_MS : CLI_DRAIN_MAX_MS);
+    let logged = false;
+    for (;;) {
+      if (await this._isCliQuiet(executorId)) {
+        if (logged) {
+          console.log(
+            `🧘 [Execution] "${executorName}" is quiet after ${Math.round((Date.now() - started) / 1000)}s — releasing task ${taskId}`
+          );
+        }
+        return;
+      }
+      const now = Date.now();
+      // A Stop arriving while we drain switches to the (shorter) stop budget.
+      if (!stopped && getTaskSignal(taskId, 'stopped')) {
+        stopped = true;
+        interruptAt = now;
+        deadline = Math.min(deadline, now + CLI_DRAIN_STOP_MAX_MS);
+      }
+      if (now >= interruptAt) {
+        interruptAt = Number.POSITIVE_INFINITY;
+        const interrupt =
+          this.executionManager?.interruptCliTerminalSessions ||
+          this.executionManager?.interruptTerminalSession;
+        if (interrupt) {
+          Promise.resolve(interrupt.call(this.executionManager, executorId)).catch(() => {});
+        }
+      }
+      if (now >= deadline) {
+        console.warn(
+          `⚠️ [Execution] "${executorName}" still active ${Math.round((now - started) / 1000)}s after task ${taskId} ended — releasing it anyway; nothing new is injected until its terminal is quiet`
+        );
+        return;
+      }
+      if (!logged) {
+        logged = true;
+        console.log(
+          `⏳ [Execution] "${executorName}" is still working after the verdict on task ${taskId} — waiting for its terminal to go quiet`
+        );
+      }
+      await new Promise(resolve => setTimeout(resolve, CLI_DRAIN_POLL_MS));
+    }
+  },
+
   /**
    * The ONE canonical "is this wait finished?" check, used at every poll site in
    * the execution wait. Returns the verdict in a FIXED priority order —
@@ -1411,16 +1651,28 @@ export const tasksMethods = {
     this: any,
     taskId: string,
     taskText: string,
-    startStatus: string | undefined
+    startStatus: string | undefined,
+    // Only a wait registered with setAwaitingCompletion (a resume run) ends on
+    // the agent's completion signal; workflow actions end on the status move.
+    { acceptCompletion = isAwaitingCompletion(taskId) }: { acceptCompletion?: boolean } = {}
   ): Promise<'completed' | 'stopped' | 'moved' | 'deleted' | null> {
     if (getTaskSignal(taskId, 'completed')) {
       const comment = getTaskSignal(taskId, 'comment') || '';
       clearTaskSignal(taskId, 'completed');
       clearTaskSignal(taskId, 'comment');
-      console.log(
-        `✅ [Execution] update_task completed "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`
+      if (acceptCompletion) {
+        console.log(
+          `✅ [Execution] update_task completed "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`
+        );
+        return 'completed';
+      }
+      // A workflow action finishes on the status move; its own agent cannot raise
+      // this signal (no signal while an action mode runs), so one seen here is a
+      // leftover of a previous lifecycle — ending the run on it freed the agent
+      // the moment its prompt was pasted.
+      console.warn(
+        `[Execution] Ignoring a stale completion signal for task ${taskId} "${taskText.slice(0, 60)}"`
       );
-      return 'completed';
     }
     if (getTaskSignal(taskId, 'stopped')) {
       clearTaskSignal(taskId, 'stopped');
@@ -1428,11 +1680,14 @@ export const tasksMethods = {
     }
     const task = await getTaskById(taskId);
     if (!task) return 'deleted';
+    // A Stop persisted by another process (the sibling stack, the next replica
+    // of a rolling update) raises no signal here: the row is the only trace.
+    if (task.executionStatus === 'stopped') return 'stopped';
     const status = (task as any).status;
-    const movedAway =
-      typeof status === 'string' && startStatus !== undefined && status !== startStatus;
-    if (!this._isActiveTaskStatus(status) || movedAway) return 'moved';
-    return null;
+    // Off the column the wait started on — the only "moved". A run started in an
+    // inactive column (an on_enter on backlog) is not done just because it is there.
+    if (startStatus !== undefined) return status !== startStatus ? 'moved' : null;
+    return this._isActiveTaskStatus(status) ? null : 'moved';
   },
 
   /**
@@ -1445,7 +1700,8 @@ export const tasksMethods = {
     taskId: string,
     taskText: string,
     startStatus: string | undefined,
-    ms: number
+    ms: number,
+    onSlice: (() => Promise<void>) | null = null
   ): Promise<'completed' | 'stopped' | 'moved' | 'deleted' | null> {
     const deadline = Date.now() + ms;
     for (;;) {
@@ -1454,6 +1710,7 @@ export const tasksMethods = {
       await new Promise(resolve => setTimeout(resolve, Math.min(VERDICT_POLL_SLICE_MS, remaining)));
       const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
       if (verdict) return verdict;
+      if (onSlice) await onSlice().catch(() => {});
     }
   },
 
@@ -1475,6 +1732,7 @@ export const tasksMethods = {
       if (terminalDriven && isCliRunner(executor) && this.executionManager?.sendTerminalInput) {
         await bindAgentRunner(this, executor);
         await this.executionManager.sendTerminalInput(executorId, prompt, { submit: true });
+        noteCliActivity(this, executorId, 'CLI prompt injected');
       } else {
         await this.sendMessage(executorId, prompt, (chunk: any) => {
           this._emit('agent:stream:chunk', { agentId: executorId, chunk });
@@ -1569,9 +1827,11 @@ export const tasksMethods = {
 
   /**
    * Reminder-loop phase: periodically nudge the executor until it completes,
-   * moves, or the reminder budget is exhausted. Owns the 'watching' lifecycle
-   * finally (set by the caller) — always clears the flag and, unless the task
-   * was explicitly stopped, resets executionStatus so the task loop can resume.
+   * moves, or the reminder budget is exhausted. The budget is checked AFTER a
+   * full wait, so the agent gets a whole interval to react to the last reminder
+   * (ending the run right after sending it closed the commit window on the
+   * very work the reminder asked for). While it waits, CLI runs get a
+   * terminal-independent commit sweep every COMMIT_SWEEP_INTERVAL_MS.
    */
   async _reminderLoop(
     this: any,
@@ -1597,42 +1857,61 @@ export const tasksMethods = {
     let reminded = 0;
     let lastReminderSentAt = 0;
 
-    try {
-      while (reminded < MAX_REMINDERS) {
-        // Wait one reminder interval, but watch the verdict all along: the agent
-        // usually finishes (update_task → next column) long before the interval
-        // ends, and a blind sleep here kept the decide holding its column lock +
-        // busy flag — the task sat "busy" in verify and never advanced.
-        const verdict = await this._waitIntervalOrVerdict(
-          taskId,
-          taskText,
-          startStatus,
-          REMINDER_INTERVAL_MS
+    // Terminal-independent commit sweep for CLI runners: a runner commits
+    // silently inside its PTY (nothing parseable ever reaches the terminal), so
+    // poll the repo itself and link what appeared since the run's baseline —
+    // often enough that an API restart loses at most a minute of links.
+    let lastSweepAt = Date.now();
+    const sweep = terminalDriven
+      ? async () => {
+          if (Date.now() - lastSweepAt < COMMIT_SWEEP_INTERVAL_MS) return;
+          lastSweepAt = Date.now();
+          const run = getTaskCommitRun(this, executorId);
+          if (run?.taskId !== taskId) return;
+          await reconcileTaskCommits(this, executorId, taskId, {
+            ...run,
+            baselineHead: run.baselineHead ?? gitBaselineHead,
+            label: 'MidRunSweep',
+          });
+        }
+      : null;
+
+    for (;;) {
+      // Wait one reminder interval, but watch the verdict all along: the agent
+      // usually finishes (update_task → next column) long before the interval
+      // ends, and a blind sleep here kept the decide holding its column lock +
+      // busy flag — the task sat "busy" in verify and never advanced.
+      const verdict = await this._waitIntervalOrVerdict(
+        taskId,
+        taskText,
+        startStatus,
+        REMINDER_INTERVAL_MS,
+        sweep
+      );
+      if (verdict) {
+        console.log(
+          `🔔 [Execution] Task ${taskId} verdict "${verdict}" during reminder wait — exiting loop`
         );
-        if (verdict) {
-          console.log(
-            `🔔 [Execution] Task ${taskId} verdict "${verdict}" during reminder wait — exiting loop`
+        return verdict;
+      }
+
+      if (reminded >= MAX_REMINDERS) {
+        const finalTask = await getTaskById(taskId);
+        if (finalTask && this._isActiveTaskStatus((finalTask as any).status)) {
+          console.warn(
+            `⚠️ [Execution] Max reminders (${MAX_REMINDERS}) reached for "${taskText.slice(0, 60)}" — task remains active (${(finalTask as any).status})`
           );
-          return verdict;
+          this.addActionLog(
+            executorId,
+            'warning',
+            `Task reminder limit reached — task remains active`,
+            taskText.slice(0, 200)
+          );
         }
+        return 'timeout';
+      }
 
-        // Terminal-independent commit sweep for CLI runners: a runner commits
-        // silently inside its PTY (nothing parseable ever reaches the terminal),
-        // so poll the repo itself and link what appeared since the baseline.
-        // The active run supplies the local creation time boundary.
-        if (terminalDriven && gitBaselineHead) {
-          try {
-            await reconcileTaskCommits(this, executorId, taskId, {
-              baselineHead: gitBaselineHead,
-              startedAt: getTaskCommitRun(this, executorId)?.startedAt,
-              label: 'MidRunSweep',
-            });
-          } catch {
-            /* best-effort — the end-of-run reconcile catches up */
-          }
-        }
-
-        const currentExecutor = this.agents.get(executorId);
+      const currentExecutor = this.agents.get(executorId);
         if (
           !currentExecutor ||
           currentExecutor.status === 'busy' ||
@@ -1683,42 +1962,8 @@ export const tasksMethods = {
           label: 'Reminder',
         });
 
-        const afterResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
-        if (afterResult) return afterResult;
-      }
-
-      if (reminded >= MAX_REMINDERS) {
-        const finalTask = await getTaskById(taskId);
-        if (
-          finalTask &&
-          this._isActiveTaskStatus((finalTask as any).status) &&
-          !getTaskSignal(taskId, 'completed')
-        ) {
-          console.warn(
-            `⚠️ [Execution] Max reminders (${MAX_REMINDERS}) reached for "${taskText.slice(0, 60)}" — task remains active (${(finalTask as any).status})`
-          );
-          this.addActionLog(
-            executorId,
-            'warning',
-            `Task reminder limit reached — task remains active`,
-            taskText.slice(0, 200)
-          );
-        }
-        return 'timeout';
-      }
-
-      return 'unknown';
-    } finally {
-      // Always clear the watching flag so the task loop can resume if needed.
-      clearTaskSignal(taskId, 'watching');
-      // Don't clobber an executionStatus that was set to 'stopped' by stopAgent
-      // (or by the catch in _resumeActiveTask) — leaving it as 'stopped' is
-      // what keeps the next task-loop tick from picking the task up again.
-      // Only clear to NULL when the task is in some other transient state.
-      const finalTask = await getTaskById(taskId);
-      if (finalTask?.executionStatus !== 'stopped') {
-        updateTaskExecutionStatus(taskId, null);
-      }
+      const afterResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
+      if (afterResult) return afterResult;
     }
   },
 
@@ -1735,6 +1980,52 @@ export const tasksMethods = {
     // HEAD snapshot taken by executeRunAgent before the run started — anchors
     // the terminal-independent commit sweep in the reminder loop (gitReconcile.ts).
     const gitBaselineHead: string | null = options.gitBaselineHead || null;
+    // The prompt was just pasted: the CLI is working NOW, whatever the wait below
+    // concludes. Without this an early exit (task already moved, Stop during the
+    // injection) left the agent "idle" — selectable — while its CLI worked.
+    if (terminalDriven) noteCliActivity(this, executorId, 'CLI task injected');
+    let verdict: string;
+    try {
+      verdict = await this._awaitExecutionVerdict(
+        creatorAgentId,
+        taskId,
+        executorId,
+        executorName,
+        taskText,
+        { terminalDriven, gitBaselineHead }
+      );
+    } finally {
+      // The 'watching' marker only lives as long as this wait, whichever phase
+      // ended it (it used to survive an early verdict and hide the task from the
+      // task loop and the workflow recheck). A Stop recorded meanwhile wins: the
+      // reset only applies while the row still says 'watching'.
+      if (getTaskSignal(taskId, 'watching')) {
+        clearTaskSignal(taskId, 'watching');
+        await updateTaskFields(
+          taskId,
+          { executionStatus: null },
+          { expect: { executionStatus: 'watching' } }
+        );
+      }
+    }
+    if (terminalDriven) {
+      await this._drainCliRun(executorId, executorName, taskId, {
+        stopped: verdict === 'stopped',
+      });
+    }
+    return verdict;
+  },
+
+  /** The verdict part of _waitForExecutionComplete (see there). */
+  async _awaitExecutionVerdict(
+    this: any,
+    creatorAgentId: string,
+    taskId: string,
+    executorId: string,
+    executorName: string,
+    taskText: string,
+    { terminalDriven, gitBaselineHead }: { terminalDriven: boolean; gitBaselineHead: string | null }
+  ): Promise<string> {
     const freshTask = await getTaskById(taskId);
     // The column this wait started on. A workflow transition is finished as soon
     // as the agent moves the task OFF this column — even to another ACTIVE column
@@ -1778,10 +2069,14 @@ export const tasksMethods = {
     }
 
     // Mark task as watching so the task loop doesn't re-send. Cleared by
-    // _reminderLoop's finally (early returns from the probe/retry phases below
-    // exit before that, matching the prior behavior).
+    // _waitForExecutionComplete's finally, whichever phase ends the wait; never
+    // over a Stop persisted in the meantime.
     setTaskSignal(taskId, 'watching', true);
-    updateTaskExecutionStatus(taskId, 'watching');
+    await updateTaskFields(
+      taskId,
+      { executionStatus: 'watching' },
+      { expect: { executionStatus: null } }
+    );
 
     // Keep the executor's busy/idle status in step with the CLI's real activity
     // for the whole wait (it never goes through sendMessage, which is what
@@ -1864,7 +2159,44 @@ export const tasksMethods = {
       throw new Error(`Agent or task already reserved: agent="${executorId}" task="${task.id}"`);
     }
 
+    // CLI runners always resume through their interactive PTY (not headless
+    // sendMessage), regardless of the transient agent.status.
+    const terminalDriven = !!(isCliRunner(executor) && this.executionManager?.sendTerminalInput);
+    // A task the loop resumes was started earlier and stays "started" after this
+    // run (the loop keeps nudging it until it leaves the column); an explicit run
+    // of a never-started task leaves no start stamp behind.
+    let keepStartedAt = !!task.startedAt;
+    let claim: Awaited<ReturnType<typeof claimRun>> | null = null;
     try {
+      // Never paste a task into a CLI that is still busy — after an API restart
+      // its previous turn may still be running in the runner's PTY, and the
+      // runner pastes anyway once its readiness wait times out.
+      if (terminalDriven && !(await this._isCliQuiet(executorId))) {
+        console.log(
+          `⏸️ [TaskLoop] "${executor.name}"'s terminal is still active — not resuming task ${task.id} yet`
+        );
+        // Busy until its CLI goes quiet: nothing else is pasted into it meanwhile.
+        noteCliActivity(this, executorId, 'CLI still active');
+        return;
+      }
+      // The durable claim: makes the run visible (spinner, Stop, the move/delete
+      // guards, update_task's current-task resolution) and exclusive across the
+      // stacks and replicas sharing the database — and only while the task is
+      // still in the column this resume was decided for.
+      claim = await claimRun(task.id, executorId, 'resume', {
+        expectStatus: task.status,
+        onLost: () => setTaskSignal(task.id, 'stopped', true),
+      });
+      if (!claim.ok) {
+        if (reserved) {
+          console.warn(
+            `⚠️ [Resume] explicit run of task ${task.id} declined (${claim.reason}) — nothing was started`
+          );
+        }
+        return;
+      }
+      emitTaskUpdated(this, { ...claim.task }, { emitAgent: false, stampUpdatedAt: true });
+
       // Confine (or release) the executor BEFORE anything below reads its history
       // or sends it the task — see security/externalRunProfile.ts.
       await enterRunProfileForTask(this, executor, task);
@@ -1881,7 +2213,7 @@ export const tasksMethods = {
 
       let startMsgIdx = executor.conversationHistory.length;
       let executionStartedAt = new Date().toISOString();
-      let gitBaselineHead: string | null = null;
+      let commitRunStarted = false;
       // Prompt pasted into a CLI runner's terminal. Hoisted so BOTH the success
       // and the error path can hand it to _saveExecutionLog — a terminal-driven
       // run leaves no conversation history, so this is the only record of what
@@ -1889,7 +2221,7 @@ export const tasksMethods = {
       let injectedPrompt: string | null = null;
       // Ensure startedAt is set for managesContext history scoping
       if (!task.startedAt) {
-        task.startedAt = executionStartedAt;
+        task.startedAt = claim.task.startedAt || executionStartedAt;
       }
 
       try {
@@ -1972,25 +2304,22 @@ export const tasksMethods = {
           ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n${taskContentForPrompt(task, 300)}\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
           : `Task ID: ${task.id}\n\n${taskContentForPrompt(task)}`;
 
-        // CLI runners always resume through their interactive PTY (not headless
-        // sendMessage), regardless of the transient agent.status — the runner
-        // gates the inject on the TUI being input-ready (PTY-is-free).
-        const terminalDriven = isCliRunner(executor) && this.executionManager?.sendTerminalInput;
-
-        // Snapshot the repo HEAD before the run: the wait-loop sweep and the
-        // finally reconcile below diff baseline..HEAD to link every commit the
-        // executor makes — the only detection that works for CLI runners, whose
-        // git activity happens silently inside their PTY.
-        gitBaselineHead = await snapshotGitBaseline(this.executionManager, executorId);
-        beginTaskCommitRun(this, executorId, {
-          taskId: task.id,
-          baselineHead: gitBaselineHead,
-          startedAt: executionStartedAt,
-        });
+        // Snapshot the repo HEAD(s) before the run: the wait-loop sweep and the
+        // finally reconcile below link every commit the executor makes — the only
+        // detection that works for CLI runners, whose git activity happens
+        // silently inside their PTY.
+        await startTaskCommitRun(this, executorId, task, executionStartedAt);
+        commitRunStarted = true;
 
         // A Stop received during workspace preparation cancels prompt injection.
-        if (getTaskSignal(task.id, 'stopped')) return;
+        if (getTaskSignal(task.id, 'stopped')) {
+          keepStartedAt = false;
+          return;
+        }
 
+        // From here the agent's completion signal (update_task with a summary)
+        // ends this wait — and only this wait (see setAwaitingCompletion).
+        setAwaitingCompletion(task.id, true);
         if (terminalDriven) {
           injectedPrompt = messageToSend;
           await bindAgentRunner(this, executor);
@@ -2024,9 +2353,12 @@ export const tasksMethods = {
           task.text,
           {
             terminalDriven,
-            gitBaselineHead,
+            gitBaselineHead: getTaskCommitRun(this, executorId)?.baselineHead ?? null,
           }
         );
+        if (waitResult === 'stopped' || waitResult === 'moved' || waitResult === 'deleted') {
+          keepStartedAt = false;
+        }
 
         // A detected CLI auth failure (or other hard error) must fail the task
         // rather than silently complete. Throw so the catch below runs the
@@ -2050,6 +2382,7 @@ export const tasksMethods = {
         );
       } catch (err: any) {
         const isUserStop = isUserStopError(err);
+        keepStartedAt = false;
         console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
         this._emit('agent:stream:error', { agentId: executorId, error: err.message });
 
@@ -2068,59 +2401,25 @@ export const tasksMethods = {
         const errorTimestamp = new Date().toISOString();
 
         if (isUserStop) {
-          // User manually stopped — mark as stopped, keep in current column
+          // User manually stopped — mark as stopped, keep in current column.
+          // Targeted write: a full save of a re-read snapshot reverted whatever
+          // landed in between (the claim release, a linked commit).
+          const stoppedTask = await updateTaskFields(task.id, {
+            executionStatus: 'stopped',
+            historyAppend: [
+              { status: task.status, at: errorTimestamp, by: 'user', type: 'stopped' },
+            ],
+          });
           setTaskSignal(task.id, 'stopped', true);
-          await updateTaskExecutionStatus(task.id, 'stopped');
-          // Add stopped entry to history
-          const stoppedTask = await getTaskById(task.id);
-          if (stoppedTask) {
-            if (!stoppedTask.history) stoppedTask.history = [];
-            stoppedTask.history.push({
-              status: stoppedTask.status,
-              at: errorTimestamp,
-              by: 'user',
-              type: 'stopped',
-            });
-            stoppedTask.startedAt = null;
-            stoppedTask.actionRunning = false;
-            delete stoppedTask.actionRunningAgentId;
-            delete stoppedTask.actionRunningMode;
-            await saveTaskToDb({ ...stoppedTask, agentId });
-            this._emit('task:updated', { agentId, task: { ...stoppedTask, agentId } });
-          }
+          if (stoppedTask) emitTaskUpdated(this, { ...stoppedTask }, { emitAgent: false });
         } else {
           // Real error — keep task in its originating column via errorFromStatus.
-          // markTaskError guards against the disappearance bug (errorFromStatus
-          // clobbered to 'error' when the task was already errored, or set to a
-          // status that no longer exists in the workflow).
-          const errorTask = await getTaskById(task.id);
-          if (errorTask) {
-            // Load the workflow so markTaskError can validate the fallback column.
-            // Best-effort: if it fails the helper still works (just no validation).
-            let wf: any = null;
-            if (errorTask.boardId) {
-              try {
-                wf = await getWorkflowForBoard(errorTask.boardId);
-              } catch {
-                /* ignore */
-              }
-            }
-            const mutated = markTaskError(errorTask, err.message, {
-              by: executor.name,
-              agentName: executor.name,
-              workflow: wf,
-            });
-            if (mutated) {
-              await saveTaskToDb({ ...errorTask, agentId });
-              this._emit('task:updated', { agentId, task: { ...errorTask, agentId } });
-            }
-          } else {
-            await this.setTaskStatus(agentId, task.id, 'error', {
-              skipAutoRefine: true,
-              by: executor.name,
-            });
-            await updateTaskFields(task.id, { error: err.message });
-          }
+          // persistTaskError (markTaskError) guards against the disappearance bug
+          // (errorFromStatus clobbered to 'error', or set to a deleted column).
+          await persistTaskError(this, task.id, err.message, {
+            by: executor.name,
+            agentName: executor.name,
+          });
           this._emit('agent:error:report', {
             agentId: executorId,
             agentName: executor.name,
@@ -2135,28 +2434,21 @@ export const tasksMethods = {
           this.setStatus(executorId, 'idle', 'Auto-recovered after resume error');
         }
       } finally {
+        setAwaitingCompletion(task.id, false);
         // End-of-run commit/push reconcile — mirrors executeRunAgent's finally.
-        // Catches commits a CLI runner made silently in its PTY regardless of
-        // how the run ended (completion, move, stop, error, timeout). Idempotent.
-        try {
-          // Time-window fallback uses THIS run's start (not task.startedAt, which
-          // can be days old and would sweep in other agents' commits that the
-          // ensure's fetch+reset pulled into the clone's history).
-          await reconcileTaskCommits(this, executorId, task.id, {
-            baselineHead: gitBaselineHead,
-            startedAt: executionStartedAt,
-            label: 'ResumeEndReconcile',
-          });
-        } catch (reconcileErr: any) {
-          console.warn(
-            `🔗 [TaskLoop] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr?.message}`
-          );
-        }
-        endTaskCommitRun(this, executorId, task.id);
+        // Runs after the CLI went quiet (_waitForExecutionComplete drains it), so
+        // the run's last commits land on THIS task, not on the next one the agent
+        // gets. Idempotent.
+        if (commitRunStarted) await finishTaskCommitRun(this, executorId, task.id, 'ResumeEndReconcile');
         this._emit('agent:stream:end', { agentId: executorId });
         this._emit('agent:updated', this._sanitize(executor));
       }
     } finally {
+      if (claim?.ok) {
+        claim.stopHeartbeat();
+        const released = await releaseRunClaim(task.id, executorId, { keepStartedAt });
+        if (released) emitTaskUpdated(this, { ...released }, { emitAgent: false, stampUpdatedAt: true });
+      }
       releaseRun();
     }
   },

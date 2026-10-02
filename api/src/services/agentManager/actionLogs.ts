@@ -167,19 +167,22 @@ export const actionLogsMethods = {
     task = await getTaskById(taskId);
     if (!task) return;
 
-    if (!task.history) task.history = [];
-    task.history.push({
-      type: 'execution',
-      mode: actionMode,
-      at: new Date().toISOString(),
-      by: executor.name,
-      startedAt,
-      success,
-      messages: executionMessages,
-      ...(terminalOutput ? { terminalOutput } : {}),
+    // Appended atomically: rewriting the array from the read above dropped the
+    // entries written while the terminal request ran.
+    const updated = await updateTaskFields(taskId, {
+      historyAppend: [
+        {
+          type: 'execution',
+          mode: actionMode,
+          at: new Date().toISOString(),
+          by: executor.name,
+          startedAt,
+          success,
+          messages: executionMessages,
+          ...(terminalOutput ? { terminalOutput } : {}),
+        },
+      ],
     });
-
-    const updated = await updateTaskFields(taskId, { history: task.history });
     if (!updated) return;
     this._emit('task:updated', {
       agentId: updated.agentId,

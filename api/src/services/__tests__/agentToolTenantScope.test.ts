@@ -33,6 +33,7 @@ mock.module('../database.js', {
     getTasksByAgent: async () => [],
     getTaskByIdPrefix: async () => null,
     saveTaskToDb: async () => {},
+    updateTaskFields: async () => null,
     saveAgent: async () => {},
     searchAgentSkills: async () => [],
     getAgentSkillById: async () => null,

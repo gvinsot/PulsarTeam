@@ -68,7 +68,8 @@ function makeManager() {
     saveTaskDirectly: (task: any) => taskDb.saveTaskToDb(task),
     setTaskAssignee: tasksMethods.setTaskAssignee,
     transferTask: tasksMethods.transferTask,
-    // transferTask re-creates the row through addTask; a minimal stand-in.
+    // Not called by transferTask anymore (it transfers in place); kept so a
+    // regression back to re-creating the row shows up as a 'task-new' row.
     addTask: async (agentId: string, text: string, _src: any, status: string, extra: any) => {
       const task = { id: 'task-new', text, status, agentId, ...extra };
       rows.set(task.id, task);
@@ -158,9 +159,14 @@ test('transfer to a same-board agent still works', async () => {
     targetAgentId: AGENT_A2,
   });
   assert.equal(res.status, 201);
-  const moved = rows.get('task-new');
+  // In place: same row (same id, commits, history), new owner and assignee.
+  const moved = rows.get('task');
+  assert.equal(moved.deletedAt, undefined);
   assert.equal(moved.boardId, BOARD_A);
+  assert.equal(moved.agentId, AGENT_A2);
   assert.equal(moved.assignee, AGENT_A2);
+  assert.equal(moved.history.at(-1).type, 'transfer');
+  assert.equal(rows.has('task-new'), false);
 });
 
 // ── 3. Board move without a column change ───────────────────────────────────

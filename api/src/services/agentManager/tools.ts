@@ -2,17 +2,9 @@
 import { executeTool } from '../agentTools.js';
 import { toExecutionToolCall, type NativeToolCall } from '../nativeTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
-import {
-  saveAgent,
-  updateTaskFields,
-  appendTaskComment,
-  getTaskByIdPrefix,
-  getTaskByActionRunningAgent,
-  getTasksByAssignee,
-  getActiveTasksByAgent,
-  getAllTasks,
-} from '../database.js';
-import { setTaskSignal } from './tasks.js';
+import { saveAgent, updateTaskFields, appendTaskComment, getTaskByIdPrefix } from '../database.js';
+import { setTaskSignal, isAwaitingCompletion } from './tasks.js';
+import { resolveAgentCurrentTask } from './currentTask.js';
 import { checkToolHooks } from '../toolHooks.js';
 import { restrictedToolRefusal } from '../security/externalRunProfile.js';
 import { getTaskCommitRun, reconcileTaskCommits } from './tools/gitReconcile.js';
@@ -43,11 +35,7 @@ export const toolsMethods = {
     }
 
     let inProgressTask: any = null;
-    // Track the owning agent of inProgressTask as we resolve it, so we don't
-    // have to re-scan _tasks for the owner later (the previous includes() pass).
-    // Nullable because a board-level task carries `agent_id = NULL`: resolving
-    // one through getTaskByIdPrefix / getTaskByActionRunningAgent genuinely
-    // yields a null owner, which the reads below already have to survive.
+    // Nullable because a board-level task carries `agent_id = NULL`.
     let ownerAgentId: string | null = agentId;
 
     // If explicit taskId provided, look it up directly (DB, by id or unique prefix)
@@ -64,59 +52,35 @@ export const toolsMethods = {
       }
     }
 
-    // Auto-detect: Priority 1: Task actively running via this agent (set by processTransition)
+    // Auto-detect: the task this agent is running — or, outside a run, the ONE
+    // active task assigned to it (see agentManager/currentTask.ts). Guessing
+    // among several put summaries and commits on the wrong card.
     if (!inProgressTask) {
-      const found = await getTaskByActionRunningAgent(agentId);
-      if (found && this._isActiveTaskStatus(found.status)) {
-        inProgressTask = found;
-        ownerAgentId = found.agentId;
-      }
-    }
-    // Auto-detect: Priority 2/3: Active task this agent executes (assignee, or its
-    // own unassigned task — getTasksByAssignee is exactly that set).
-    if (!inProgressTask) {
-      const found = (await getTasksByAssignee(agentId)).find((t: any) =>
-        this._isActiveTaskStatus(t.status)
-      );
+      const found = await resolveAgentCurrentTask(this, agentId);
       if (found) {
         inProgressTask = found;
         ownerAgentId = found.agentId;
-      }
-    }
-    // Auto-detect: Priority 3b: Agent's own active task assigned to someone else (rare).
-    if (!inProgressTask) {
-      const found = (await getActiveTasksByAgent(agentId)).find((t: any) =>
-        this._isActiveTaskStatus(t.status)
-      );
-      if (found) {
-        inProgressTask = found;
-        ownerAgentId = agentId;
       }
     }
 
     if (!inProgressTask) {
-      // Log diagnostic info to help debug why no task was found
-      const allActiveTasks = (await getAllTasks())
-        .filter((t: any) => this._isActiveTaskStatus(t.status))
-        .map((t: any) => ({
-          id: t.id,
-          status: t.status,
-          assignee: t.assignee,
-          actionRunningAgentId: t.actionRunningAgentId,
-          ownerId: t.agentId,
-        }));
       console.log(
-        `⚠️ [UpdateTask] Agent "${agent.name}" (${agentId}) requested completion but no active task was found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`
+        `⚠️ [UpdateTask] Agent "${agent.name}" (${agentId}) requested completion but its current task is unknown or ambiguous — nothing recorded`
       );
-      return { success: true, result: 'No action needed (no active task).', isTerminal: true };
+      return {
+        success: false,
+        result:
+          'Could not tell which task to complete (no task running for you, and not exactly one active task assigned to you). Pass the task id explicitly.',
+      };
     }
 
-    // The completion signal consumed by _waitForExecutionComplete only makes
-    // sense outside a workflow action mode: decide/refine waits advance on the
-    // status move, and a stray signal there could be consumed elsewhere. Fire the
-    // signal only when no action mode is running. Commit linking and the summary
-    // append happen in EVERY mode (see below) — they are not gated by fireSignal.
-    const fireSignal = !inProgressTask.actionRunningMode;
+    // The completion signal ends an execution wait. Only a wait registered for
+    // it (a resume run — setAwaitingCompletion) consumes it: workflow actions end
+    // on the status move, and a completion recorded while NOTHING waits (a
+    // manager's update_task, an agent's follow-up after its run) used to stay
+    // latched and end the next run of the task the moment its prompt was pasted.
+    // Commit linking and the summary append happen in EVERY case (see below).
+    const fireSignal = isAwaitingCompletion(inProgressTask.id);
 
     if (fireSignal) {
       setTaskSignal(inProgressTask.id, 'completed', true);
@@ -127,10 +91,12 @@ export const toolsMethods = {
     // from the description). This makes the agent's summary visible on the
     // task itself instead of being only relayed to the leader.
     // stampUpdatedAt=true: no setTaskStatus follows here (unlike update_task).
+    const historyBefore = (inProgressTask.history || []).length;
     const newComment =
       comment && comment.trim()
         ? appendTaskNote(inProgressTask, agent.name, comment, true, { authorId: agentId })
         : null;
+    const newHistoryEntries = (inProgressTask.history || []).slice(historyBefore);
 
     // ownerAgentId was captured while resolving inProgressTask above.
 
@@ -154,14 +120,29 @@ export const toolsMethods = {
       }
     }
 
-    // All automatic attribution uses the same evidence and the exact run/task.
-    // Explicit links remain available when no execution context survived (e.g.
-    // after a restart), or when work was committed in a secondary repository.
+    // All automatic attribution uses the same evidence and the exact run/task:
+    // the run this process tracks, or — after a restart lost it — the run
+    // context persisted on the task, when it is this agent's LIVE run (still
+    // claimed by it, and not superseded here by a run on another task: an old
+    // record's window would sweep in that other task's commits).
     const commitRun = getTaskCommitRun(this, agentId);
-    if (commitRun?.taskId === inProgressTask.id) {
+    const persistedRun = inProgressTask.commitRun;
+    const runContext =
+      commitRun?.taskId === inProgressTask.id
+        ? commitRun
+        : !commitRun &&
+            persistedRun?.executorId === agentId &&
+            !persistedRun.endedAt &&
+            inProgressTask.actionRunning === true &&
+            inProgressTask.actionRunningAgentId === agentId
+          ? persistedRun
+          : null;
+    if (runContext) {
       try {
         await reconcileTaskCommits(this, agentId, inProgressTask.id, {
-          ...commitRun,
+          baselineHead: runContext.baselineHead,
+          startedAt: runContext.startedAt,
+          secondaryBaselines: runContext.secondaryBaselines || {},
           label: 'UpdateTask',
         });
       } catch (error: any) {
@@ -183,8 +164,11 @@ export const toolsMethods = {
         // predates commit linking, so saving it wholesale would erase the newly
         // linked commits. The comment is appended atomically.
         await appendTaskComment(inProgressTask.id, newComment);
+        // Append only this note's history entries (atomically): rewriting the
+        // whole array from the snapshot read above dropped the entries written
+        // meanwhile (execution log, linked commits' moves, a stop).
         const updated = await updateTaskFields(inProgressTask.id, {
-          history: inProgressTask.history,
+          historyAppend: newHistoryEntries,
         });
         if (updated) inProgressTask = updated;
       } catch (err: any) {

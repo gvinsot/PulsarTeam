@@ -36,6 +36,7 @@ mock.module('../database.js', {
     getAllBoards: async () => Object.values(BOARDS),
     searchTasks: async () => ({ total: 0, returned: 0, tasks: [] }),
     // resolveCurrentTaskId reads these from database.js
+    getTaskById: taskDbFake.getTaskById,
     getTaskByActionRunningAgent: taskDbFake.getTaskByActionRunningAgent,
     getTasksByAssignee: taskDbFake.getTasksByAssignee,
     getActiveTasksByAgent: taskDbFake.getActiveTasksByAgent,

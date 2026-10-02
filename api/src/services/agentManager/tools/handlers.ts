@@ -18,7 +18,7 @@ import {
   getAllBoards,
   getBoardById,
   getTasksByStatusAndBoards,
-  saveTaskToDb,
+  updateTaskFields,
   getTasksByAgent,
   getTaskByIdPrefix,
 } from '../../database.js';
@@ -342,8 +342,7 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, call }) => {
   const statusChanged = task.status !== oldStatus;
   const previousAssignee = statusChanged ? task.assignee || null : null;
   if (previousAssignee) task.assignee = null;
-  if (!task.history) task.history = [];
-  task.history.push({
+  const historyEntry = {
     status: task.status,
     at: new Date().toISOString(),
     by: agent.name,
@@ -352,15 +351,32 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, call }) => {
     newBoardId: targetBoardId,
     ...(statusChanged ? { from: oldStatus } : {}),
     ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+  };
+  if (!task.history) task.history = [];
+  task.history.push(historyEntry);
+  // Targeted: the board/column/assignee this move changes, history appended — a
+  // full save of the snapshot reverted concurrent writes (commits, the claim).
+  const persisted = await updateTaskFields(task.id, {
+    boardId: targetBoardId,
+    ...(statusChanged
+      ? {
+          status: task.status,
+          startedAt: null,
+          executionStatus: null,
+          pendingOnEnter: null,
+          completedActionIdx: null,
+          resumeTransitionIdx: null,
+        }
+      : {}),
+    ...(previousAssignee ? { assignee: null } : {}),
+    historyAppend: [historyEntry],
   });
-  try {
-    await saveTaskToDb({ ...task, agentId: taskAgentId });
-  } catch (err: any) {
+  if (!persisted) {
     return {
       tool: 'move_task_to_board',
       args: call.args,
       success: false,
-      error: `Failed to persist board move: ${err?.message || err}`,
+      error: 'Failed to persist board move',
     };
   }
   const ownerAgent = mgr.agents.get(taskAgentId);

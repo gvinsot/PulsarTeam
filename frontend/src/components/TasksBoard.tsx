@@ -630,24 +630,12 @@ export default function TasksBoard({
 
   const handleStopAction = useCallback(
     async (task: TaskSocketPayload) => {
-      const agentId = task.actionRunningAgentId || task.assignee;
+      // Stop THIS task (its run, its executor's CLI) — not the executor agent
+      // as a whole, which halted every other task the agent was attached to.
       try {
-        if (agentId) {
-          await api.stopAgent(agentId);
-        } else {
-          // No executor recorded — fall back to a direct task-level stop so
-          // the user isn't stuck staring at a Stop button that does nothing.
-          await api.stopTask(task.id);
-        }
+        await api.stopTask(task.id);
       } catch (err) {
-        // Executor may have been recycled (404) or permission denied — try
-        // the task-level stop as a fallback so the user can always unstick.
-        console.warn('stopAgent failed, falling back to stopTask:', err);
-        try {
-          await api.stopTask(task.id);
-        } catch (e) {
-          console.warn('stopTask failed:', e);
-        }
+        console.warn('stopTask failed:', err);
       }
       refreshAll();
     },

@@ -236,24 +236,37 @@ export function mapLegacyExecuteMode(transitions: unknown): unknown {
 
 /**
  * Get workflow for a specific board.
- * Falls back to the built-in workflow if boardId is null or board not found.
+ * Falls back to the built-in workflow if boardId is null or the board does not
+ * exist (or has no workflow). THROWS when the board exists but could not be read
+ * (DB error): running the default workflow for a real board ran the wrong
+ * actions, or silently dropped the column entry with nothing to retry it.
  */
 export async function getWorkflowForBoard(
   boardId: string | null | undefined
 ): Promise<WorkflowConfig> {
   if (!boardId) return getWorkflow();
-  try {
-    const board = await getBoardById(boardId);
-    if (board?.workflow) {
-      return {
-        columns: board.workflow.columns || DEFAULT_COLUMNS,
-        transitions: mapLegacyExecuteMode(board.workflow.transitions || DEFAULT_TRANSITIONS),
-        version: board.workflow.version || 1,
-        userId: board.user_id || null,
-      };
+  const board = await getBoardById(boardId);
+  if (board?.workflow) {
+    return {
+      columns: board.workflow.columns || DEFAULT_COLUMNS,
+      transitions: mapLegacyExecuteMode(board.workflow.transitions || DEFAULT_TRANSITIONS),
+      version: board.workflow.version || 1,
+      userId: board.user_id || null,
+    };
+  }
+  if (!board) {
+    // getBoardById answers null both for "no such board" and for a swallowed DB
+    // error; only the former may fall back to the built-in workflow.
+    const pool = getPool();
+    if (pool) {
+      let exists = false;
+      try {
+        exists = (await pool.query('SELECT 1 FROM boards WHERE id = $1', [boardId])).rows.length > 0;
+      } catch (err) {
+        throw new Error(`Failed to read the workflow of board ${boardId}: ${errorMessage(err)}`);
+      }
+      if (exists) throw new Error(`Failed to read the workflow of board ${boardId}`);
     }
-  } catch (err) {
-    console.error('[ConfigManager] Failed to read workflow for board:', errorMessage(err));
   }
   return getWorkflow();
 }

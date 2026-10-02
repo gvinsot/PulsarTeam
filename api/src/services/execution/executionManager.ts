@@ -32,7 +32,7 @@ interface RunnerOpts {
 }
 
 interface ExecutionManagerOptions {
-  resolveProvider?: (agentId: string) => ProviderTypeInput;
+  resolveProvider?: (agentId: string) => ProviderTypeInput | string;
   claudecodeOptions?: RunnerOpts;
   /** @deprecated use claudecodeOptions */
   coderOptions?: RunnerOpts;
@@ -53,7 +53,7 @@ interface BindAgentMeta {
 
 export class ExecutionManager {
   private providers: Map<ProviderType, RunnerExecutionProvider> = new Map();
-  _resolveProvider: (agentId: string) => ProviderTypeInput;
+  _resolveProvider: (agentId: string) => ProviderTypeInput | string;
   _agentProviders: Map<string, ProviderType>;
 
   constructor(options: ExecutionManagerOptions = {}) {

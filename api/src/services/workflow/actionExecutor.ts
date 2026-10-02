@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { waitForProjectSwitch } from '../agentManager/crud.js';
 /**
  * ActionExecutor — executes individual workflow actions.
@@ -13,7 +14,19 @@ import { waitForProjectSwitch } from '../agentManager/crud.js';
 import { ActionType, AgentMode, AUTO_ROLE, columnExists } from './taskStateMachine.js';
 import type { WorkflowAction, WorkflowColumn, WorkflowConfig } from './taskStateMachine.js';
 import type { Agent } from '../database/agents.js';
-import { findAgentByRole, findAgentForAssignment, reserveAgentForTask } from './agentSelector.js';
+import {
+  findAgentByRole,
+  findAgentForAssignment,
+  hasAgentWithRole,
+  hasSelectableAgent,
+  reserveAgentForTask,
+} from './agentSelector.js';
+import {
+  claimRun,
+  releaseRun as releaseRunClaim,
+  refreshClaimedAgents,
+  type ClaimResult,
+} from './runClaims.js';
 import { resolveAutoRole } from './roleRouter.js';
 import {
   needsApproval,
@@ -22,13 +35,13 @@ import {
   isExternalTask,
 } from '../../lib/taskTrust.js';
 import { enterRunProfileForTask } from '../security/externalRunProfile.js';
-import { markTaskError, isUserStopError } from './taskErrors.js';
+import { isUserStopError } from './taskErrors.js';
 import {
   saveAgent,
-  saveTaskToDb,
   updateTaskExecutionStatus,
   updateTaskFields,
   getTaskById,
+  getActiveAssigneeIds,
 } from '../database.js';
 import {
   clearTaskErrorForRun,
@@ -48,11 +61,12 @@ import { isCliRunner } from '../runners.js';
 import { deliverTaskAttachments } from '../execution/taskAttachmentDelivery.js';
 import { errorMessage } from '../../lib/errors.js';
 import {
-  snapshotGitBaseline,
-  reconcileTaskCommits,
-  beginTaskCommitRun,
-  endTaskCommitRun,
+  getTaskCommitRun,
+  startTaskCommitRun,
+  finishTaskCommitRun,
 } from '../agentManager/tools/gitReconcile.js';
+import { noteCliActivity } from '../agentManager/cliActivity.js';
+import { getTaskSignal, setTaskSignal } from '../agentManager/tasks.js';
 import type { AgentManager } from '../agentManager/index.js';
 import type { Task } from '../database/tasks.js';
 
@@ -73,6 +87,10 @@ export interface ActionContext {
   workflow: WorkflowConfig | null;
   /** Status the chain started from — set by _executeActionChain only. */
   originalStatus?: string;
+  /** Called once a run_agent action holds its DB claim: a recheck-dispatched
+   *  chain releases its cross-replica advisory lock there (the claim fences the
+   *  task from then on), instead of pinning a pooled connection for the whole run. */
+  onRunClaimed?: () => void;
 }
 
 /** Context for the repo-ensure step of a run_agent action. */
@@ -123,7 +141,11 @@ async function _runViaCliTerminal(
   gitBaselineHead: string | null = null
 ) {
   await bindAgentRunner(agentManager, agent);
+  // A Stop that landed while the run was being prepared (repo switch, files)
+  // cancels the paste: the drain would only interrupt it 20 s later.
+  if (getTaskSignal(task.id, 'stopped')) return 'stopped';
   await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
+  noteCliActivity(agentManager, agent.id, 'CLI task injected');
   return agentManager._waitForExecutionComplete(
     task.agentId,
     task.id,
@@ -278,6 +300,73 @@ export interface ActionResult {
 
 // ── Main executor ───────────────────────────────────────────────────────────
 
+// ── Automatic role resolution (AUTO_ROLE) ───────────────────────────────────
+// The Role Router is an LLM call. An action whose resolved role has no idle
+// agent is skipped and retried on every recheck tick — re-asking the router
+// each time cost an LLM call every few seconds per waiting task. The answer is
+// kept per (task, column, action) until the column changes; a router failure is
+// retried a few times before the task is put in error.
+const AUTO_ROLE_CACHE_TTL_MS = 30 * 60_000;
+const AUTO_ROLE_MAX_FAILURES = 3;
+const _autoRoleCache = new Map<string, { role?: string; failures: number; at: number }>();
+
+function _autoRoleKey(action: WorkflowAction, task: Task): string {
+  const instructions = createHash('sha1')
+    .update(action.instructions || '')
+    .digest('hex')
+    .slice(0, 16);
+  return `${task.id}|${task.status}|${action.type}|${action.mode || ''}|${instructions}`;
+}
+
+async function _resolveAutoRoleCached(
+  action: WorkflowAction,
+  task: Task,
+  context: ActionContext
+): Promise<{ ok: true; role: string } | { ok: false; result: ActionResult }> {
+  const now = Date.now();
+  for (const [key, entry] of _autoRoleCache) {
+    if (now - entry.at > AUTO_ROLE_CACHE_TTL_MS) _autoRoleCache.delete(key);
+  }
+  const key = _autoRoleKey(action, task);
+  let cached = _autoRoleCache.get(key);
+  const boardId = task.boardId || null;
+  const ownerId = context.ownerId || null;
+  if (cached?.role) {
+    // A role nobody on the board holds any more (agent deleted, role renamed)
+    // would keep the task waiting forever: ask the router again.
+    if (hasAgentWithRole(context.agentManager.agents, cached.role, ownerId, boardId)) {
+      return { ok: true, role: cached.role };
+    }
+    _autoRoleCache.delete(key);
+    cached = undefined;
+  }
+  // Nobody on the board could take it whatever the role: wait without asking.
+  if (
+    action.type === ActionType.RUN_AGENT &&
+    !hasSelectableAgent(context.agentManager.agents, { ownerId, boardId })
+  ) {
+    return { ok: false, result: { executed: false, skipped: true, reason: 'no-idle-agent' } };
+  }
+  try {
+    const role = await resolveAutoRole(task, context);
+    _autoRoleCache.set(key, { role, failures: 0, at: now });
+    return { ok: true, role };
+  } catch (err) {
+    const failures = (cached?.failures || 0) + 1;
+    console.error(
+      `[ActionExecutor] auto-role: resolution failed for task="${task.id}" (${failures}/${AUTO_ROLE_MAX_FAILURES}): ${errorMessage(err)}`
+    );
+    if (failures >= AUTO_ROLE_MAX_FAILURES) {
+      _autoRoleCache.delete(key);
+      // Error → WorkflowEngine marks the task in error and stops the chain, so
+      // the retry does not re-invoke the LLM in a loop.
+      return { ok: false, result: { executed: false, error: true, message: errorMessage(err) } };
+    }
+    _autoRoleCache.set(key, { failures, at: now });
+    return { ok: false, result: { executed: false, skipped: true, reason: 'role-router-failed' } };
+  }
+}
+
 /**
  * Execute a single workflow action.
  *
@@ -291,32 +380,24 @@ export async function executeAction(
   task: Task,
   context: ActionContext
 ): Promise<ActionResult> {
-  // Automatic role selection: a run_agent / assign_agent action may defer its
-  // role choice to the admin-configured Role Router LLM by setting
-  // role === AUTO_ROLE. Resolve it to a concrete role BEFORE dispatch so the
-  // handlers below stay unchanged. On failure we return an { error } result and
-  // let WorkflowEngine._executeActionChain mark the task in error — which also
-  // stops the chain, so the on_enter/condition retry won't re-invoke the LLM.
-  if (
-    (action.type === ActionType.RUN_AGENT || action.type === ActionType.ASSIGN_AGENT) &&
-    action.role === AUTO_ROLE
-  ) {
-    try {
-      const resolvedRole = await resolveAutoRole(task, context);
-      action = { ...action, role: resolvedRole };
-    } catch (err) {
-      console.error(
-        `[ActionExecutor] auto-role: resolution failed for task="${task.id}": ${errorMessage(err)}`
-      );
-      return { executed: false, error: true, message: errorMessage(err) };
-    }
-  }
-
   // Defence in depth: processColumnEntry and the recheck already skip an
   // unapproved external task, but nothing that reaches an agent — including the
   // Role Router LLM below, which reads the text — may run on one.
   if (needsApproval(task)) {
     return { executed: false, skipped: true, reason: 'awaiting-approval' };
+  }
+
+  // Automatic role selection: a run_agent / assign_agent action may defer its
+  // role choice to the admin-configured Role Router LLM by setting
+  // role === AUTO_ROLE. Resolve it to a concrete role BEFORE dispatch so the
+  // handlers below stay unchanged.
+  if (
+    (action.type === ActionType.RUN_AGENT || action.type === ActionType.ASSIGN_AGENT) &&
+    action.role === AUTO_ROLE
+  ) {
+    const resolved = await _resolveAutoRoleCached(action, task, context);
+    if (!resolved.ok) return resolved.result;
+    action = { ...action, role: resolved.role };
   }
 
   switch (action.type) {
@@ -346,14 +427,50 @@ export async function executeAction(
 
 // ── assign_agent ────────────────────────────────────────────────────────────
 
+/** A 'reassign' history entry for the task's current column. */
+function reassignEntry(task: Task, assignee: string | null) {
+  return {
+    status: task.status,
+    at: new Date().toISOString(),
+    by: 'workflow',
+    type: 'reassign',
+    assignee,
+  };
+}
+
+/**
+ * Persist an assignment made by the workflow — awaited and TARGETED. The
+ * fire-and-forget full-row save it replaces was reliably overwritten by the
+ * chain's own bookkeeping write that followed, so the assignment (and the
+ * conditions waiting on it) silently never happened.
+ */
+async function _persistAssignment(agentManager: AgentManager, task: Task, assignee: string | null) {
+  const updated = await updateTaskFields(task.id, {
+    assignee,
+    historyAppend: [reassignEntry(task, assignee)],
+  });
+  task.assignee = assignee;
+  if (updated) emitTaskUpdated(agentManager, { ...updated }, { emitAgent: false, stampUpdatedAt: true });
+  return updated;
+}
+
 async function executeAssignAgent(
   action: WorkflowAction,
   task: Task,
   { agentManager, io: _io, ownerId }: ActionContext
 ): Promise<ActionResult> {
   // Precompute owned-task counts once from the DB so the (sync) load-balancer
-  // can tie-break by task count without an in-memory store.
-  const tasksByAgent = await agentManager._tasksByAgentMap();
+  // can tie-break by task count without an in-memory store. Agents already on
+  // another active card, or running anything anywhere, are not candidates: the
+  // engine never puts one agent on two in-progress tasks.
+  const [tasksByAgent, unavailable] = await Promise.all([
+    agentManager._tasksByAgentMap(),
+    getActiveAssigneeIds(task.id, {
+      boardId: task.boardId || null,
+      environment: task.environment || null,
+    }),
+    refreshClaimedAgents(),
+  ]);
   const agent = findAgentForAssignment(
     agentManager.agents,
     action.role,
@@ -361,7 +478,8 @@ async function executeAssignAgent(
     (agentId: any) => tasksByAgent.get(agentId) || [],
     task.id,
     task.boardId || null,
-    task.repoFullName || null
+    task.repoFullName || null,
+    unavailable
   ) as any;
 
   if (!agent) {
@@ -371,27 +489,10 @@ async function executeAssignAgent(
     return { executed: false, skipped: true, reason: 'no-agent-for-role' };
   }
 
-  const actualTask = task.agentId ? await getTaskById(task.id) : null;
-  if (actualTask) {
-    actualTask.assignee = agent.id;
-    recordReassign(actualTask, agent.id);
-    task.assignee = agent.id;
-    persistThenEmit(agentManager, actualTask);
-    console.log(
-      `[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`
-    );
-  } else {
-    // Board-level task (agent_id = null): no in-memory object, so the assignee
-    // was never persisted and the board showed nobody had picked it up. Persist
-    // on the working copy + emit so the card shows WHO took it. Ownership stays null.
-    task.assignee = agent.id;
-    recordReassign(task, agent.id);
-    persistThenEmit(agentManager, task, { fields: { assignee: agent.id, history: task.history } });
-    console.log(
-      `[ActionExecutor] assign_agent: assigned board-level task to "${agent.name}" (role: ${action.role}) task="${task.id}"`
-    );
-  }
-
+  await _persistAssignment(agentManager, task, agent.id);
+  console.log(
+    `[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`
+  );
   return { executed: true };
 }
 
@@ -411,32 +512,19 @@ async function executeAssignAgentIndividual(
     );
     return { executed: false, skipped: true, reason: 'agent-off-board' };
   }
-  const actualTask = task.agentId ? await getTaskById(task.id) : null;
-  const mutable = actualTask || task; // board-level tasks: mutate the working copy
-  const prev = mutable.assignee || null;
-  // No-op guard: avoid clobbering an assignee set by a concurrent run_agent
-  // action and spamming task:updated events when the target matches current.
-  if (prev === targetAgentId) {
-    const targetName = targetAgentId
-      ? agentManager.agents.get(targetAgentId)?.name || targetAgentId
-      : 'none';
-    console.log(`[ActionExecutor] assign_agent_individual: "${targetName}" — no change`);
-    return { executed: true };
-  }
-  mutable.assignee = targetAgentId;
-  recordReassign(mutable, targetAgentId);
-  task.assignee = targetAgentId;
-  if (actualTask) {
-    persistThenEmit(agentManager, actualTask);
-  } else {
-    // Board-level task (agent_id = null): persist targeted + emit. Ownership stays null.
-    persistThenEmit(agentManager, task, {
-      fields: { assignee: targetAgentId, history: task.history },
-    });
-  }
+  const current = await getTaskById(task.id);
+  const prev = (current || task).assignee || null;
   const targetName = targetAgentId
     ? agentManager.agents.get(targetAgentId)?.name || targetAgentId
     : 'none';
+  // No-op guard: avoid clobbering an assignee set by a concurrent run_agent
+  // action and spamming task:updated events when the target matches current.
+  if (prev === targetAgentId) {
+    task.assignee = prev;
+    console.log(`[ActionExecutor] assign_agent_individual: "${targetName}" — no change`);
+    return { executed: true };
+  }
+  await _persistAssignment(agentManager, task, targetAgentId);
   console.log(`[ActionExecutor] assign_agent_individual: "${prev || 'none'}" → "${targetName}"`);
   return { executed: true };
 }
@@ -495,17 +583,17 @@ async function executeChangeStatus(
   // Check if the real task is already at the target status (concurrent chain
   // may have moved it). This prevents duplicate "stopping chain" log spam and
   // avoids triggering a redundant _checkAutoRefine for an already-processed column.
-  const realTask = task.agentId ? await getTaskById(task.id) : null;
-  if (realTask && realTask.status === target) {
+  const realTask = await getTaskById(task.id);
+  if (!realTask) return { executed: false, skipped: true, reason: 'task-deleted' };
+  if (realTask.status === target) {
     console.log(`[ActionExecutor] change_status: task="${task.id}" already at "${target}" — no-op`);
     return { executed: true, statusChanged: true };
   }
 
-  // Board-level task (agent_id = null): no in-memory object, and setTaskStatus
-  // requires an owner — it would silently no-op, stranding the chain. Route
-  // through applyTaskUpdate, the canonical board-level path (mutates the DB row,
-  // emits, and fires the column-entry hook). Mirrors how MCP board moves work.
-  if (!realTask) {
+  // Board-level task (agent_id = null): route through applyTaskUpdate, the
+  // canonical board-level path (mutates the DB row, emits, and fires the
+  // column-entry hook). Mirrors how MCP board moves work.
+  if (!realTask.agentId) {
     console.log(
       `[ActionExecutor] change_status (board-level): "${task.status}" → "${target}" task="${task.id}"`
     );
@@ -518,12 +606,9 @@ async function executeChangeStatus(
     return { executed: true, statusChanged: true };
   }
 
-  // Clean up chain resume state before moving (owned task)
-  realTask.completedActionIdx = null;
-  delete realTask._pendingOnEnter;
-
   console.log(`[ActionExecutor] change_status: "${task.status}" → "${target}" task="${task.id}"`);
-  const result = await agentManager.setTaskStatus(task.agentId, task.id, target, {
+  // setTaskStatus resets the chain resume state of the column being left.
+  const result = await agentManager.setTaskStatus(realTask.agentId, task.id, target, {
     skipAutoRefine: false,
     by: 'workflow',
   });
@@ -539,122 +624,11 @@ async function executeChangeStatus(
 // ── run_agent ───────────────────────────────────────────────────────────────
 
 /**
- * Mark the task as having a workflow action running: set the actionRunning
- * flags, stamp startedAt, (re)assign the agent recording history, then save and
- * emit (deferred so loadTasks() reads the committed row).
- */
-async function _markActionRunning(
-  actualTask: Task,
-  agent: Agent,
-  mode: string,
-  agentManager: AgentManager,
-  _agentId: string | null
-) {
-  actualTask.actionRunning = true;
-  actualTask.actionRunningAgentId = agent.id;
-  actualTask.actionRunningMode = mode;
-  if (!actualTask.startedAt) actualTask.startedAt = new Date().toISOString();
-  // Persist ONLY the execution fields via a targeted, awaited column update —
-  // NOT a fire-and-forget full-row upsert. The full upsert wrote every column
-  // from a snapshot, so a late-landing save (under DB contention, e.g. a rolling
-  // redeploy) could resurrect actionRunning=true AFTER the finally's targeted
-  // clear, stranding the task: action_running=true makes it invisible to
-  // getActiveWorkflowTasks and the recheck loop never retries it. Mirrors
-  // _markActionRunningBoardLevel. Awaiting also guarantees the committed row is
-  // in place before the chain proceeds (same read-your-write intent as before).
-  const fields: any = {
-    actionRunning: true,
-    actionRunningAgentId: agent.id,
-    actionRunningMode: mode,
-    startedAt: actualTask.startedAt,
-  };
-  if (actualTask.assignee !== agent.id) {
-    actualTask.assignee = agent.id;
-    recordReassign(actualTask, agent.id);
-    fields.assignee = agent.id;
-    fields.history = actualTask.history;
-  }
-  await persistThenEmit(agentManager, actualTask, { fields });
-}
-
-/**
- * Board-level variant of _markActionRunning for tasks created unassigned via
- * MCP add_task (agent_id = null). These never live in the agentId-keyed
- * in-memory `_tasks` store, so _markActionRunning is skipped and the card never
- * shows "busy" while the agent works. Persist the running flag with a TARGETED
- * column update (not the full saveTaskToDb upsert, which would clobber fields
- * the transient task copy may not carry) and emit so the board updates live.
- * agentId stays null — ownership is unchanged.
- */
-async function _markActionRunningBoardLevel(
-  agentManager: AgentManager,
-  task: Task,
-  agent: Agent,
-  mode: string
-) {
-  task.actionRunning = true;
-  task.actionRunningAgentId = agent.id;
-  task.actionRunningMode = mode;
-  if (!task.startedAt) task.startedAt = new Date().toISOString();
-  // Assign the executing agent so the board shows WHO took the task (the busy
-  // spinner alone doesn't say who). Unlike the owned-task path — whose finally
-  // clears the assignee for non-execute modes because the task still has an
-  // owner to attribute it to — a board-level task has no owner, so we KEEP the
-  // assignee after the run (it surfaces "last worked by X"); a later run just
-  // overwrites it with the next executor.
-  const assigneeChanged = task.assignee !== agent.id;
-  if (assigneeChanged) task.assignee = agent.id;
-  try {
-    await updateTaskFields(task.id, {
-      actionRunning: true,
-      actionRunningAgentId: agent.id,
-      actionRunningMode: mode,
-      startedAt: task.startedAt,
-      ...(assigneeChanged ? { assignee: agent.id } : {}),
-    });
-  } catch {
-    /* best-effort — the emit below still drives the live UI */
-  }
-  emitTaskUpdated(
-    agentManager,
-    { ...task, agentId: task.agentId },
-    { emitAgent: false, stampUpdatedAt: true }
-  );
-}
-
-/** Persist + emit the cleared running flag for a board-level task (see above). */
-async function _clearActionRunningBoardLevel(agentManager: AgentManager, task: Task) {
-  task.actionRunning = false;
-  task.startedAt = null;
-  delete task.actionRunningAgentId;
-  delete task.actionRunningMode;
-  let updated: any = null;
-  try {
-    updated = await updateTaskFields(task.id, {
-      actionRunning: false,
-      actionRunningAgentId: null,
-      actionRunningMode: null,
-      startedAt: null,
-    });
-  } catch {
-    /* best-effort */
-  }
-  // Emit the fresh row (current status), not the captured `task`: a decide agent
-  // may have moved this board-level task to its next column during the run, so
-  // `task.status` is stale and would bounce the card back a column.
-  emitTaskUpdated(
-    agentManager,
-    updated ? { ...updated, agentId: task.agentId } : { ...task, agentId: task.agentId },
-    { emitAgent: false, stampUpdatedAt: true }
-  );
-}
-
-/**
  * Switch the agent to the task's repo if needed, failing the action if the
  * switch fails. On failure this leaves the task in its CURRENT column (no status
  * change) with an 'error' history entry and an agent:error:report — deliberately
  * different from markTaskError, which would move the task to the error column.
- * Lock/busy release on failure is handled by executeRunAgent's finally.
+ * Claim/reservation release on failure is handled by executeRunAgent's finally.
  *
  * Exported for services/__tests__/agentWorkspacePrep.test.ts, which pins the
  * "runner is prepared even when no switch is needed" behavior at this call site.
@@ -751,21 +725,27 @@ export async function _ensureAgentOnTaskRepo(
       taskError = `Project switch failed: ${raw}`;
       alertDescription = `[System Error] Project switch failed for "${agent.name}": ${raw}`;
     }
+    // Targeted: only the error and its history entry (the run's claim is
+    // released by executeRunAgent's finally). executeRunAgent always passes the
+    // claimed row, owned or board-level.
     if (actualTask) {
-      actualTask.actionRunning = false;
-      delete actualTask.actionRunningAgentId;
-      delete actualTask.actionRunningMode;
-      actualTask.error = taskError;
-      if (!actualTask.history) actualTask.history = [];
-      actualTask.history.push({
-        status: actualTask.status,
-        at: switchErrTimestamp,
-        by: agent.name || 'workflow',
-        type: 'error',
+      const target = actualTask;
+      target.error = taskError;
+      await persistThenEmit(agentManager, target, {
+      fields: {
         error: taskError,
-        actionMode: mode,
-      });
-      persistThenEmit(agentManager, actualTask);
+        historyAppend: [
+          {
+            status: target.status,
+            at: switchErrTimestamp,
+            by: agent.name || 'workflow',
+            type: 'error',
+            error: taskError,
+            actionMode: mode,
+          },
+        ],
+      },
+    });
     }
     agentManager._emit('agent:error:report', {
       agentId: agent.id,
@@ -783,11 +763,15 @@ export async function _ensureAgentOnTaskRepo(
 /**
  * Execute a run_agent action. This is the main entry point that replaces the
  * old monolithic processTransition function.
+ *
+ * Lifecycle (one live run per agent — never two tasks at once):
+ *   select → reserve (in-process) → [CLI quiet?] → claim (DB) → prepare →
+ *   run + wait (+ drain, inside the wait) → reconcile commits → release.
  */
 async function executeRunAgent(
   action: WorkflowAction,
   task: Task,
-  { agentManager, io, ownerId, workflow }: ActionContext
+  { agentManager, io, ownerId, workflow, onRunClaimed }: ActionContext
 ): Promise<ActionResult> {
   // Default to DECIDE for a run_agent action with no explicit mode (also the
   // landing spot for legacy 'execute' actions, which configManager maps to
@@ -800,8 +784,12 @@ async function executeRunAgent(
   const lockKey = `${task.agentId}:${task.id}:${mode}`;
   // Find agent for this role (scoped to the task's board, preferring agents
   // already on the task's repo so we don't have to project-switch every run).
-  // Precompute owned-task counts from the DB for the (sync) load-balancer.
-  const tasksByAgent = await agentManager._tasksByAgentMap();
+  // Precompute owned-task counts from the DB for the (sync) load-balancer, and
+  // refresh which agents hold a run claim anywhere (sibling stack included).
+  const [tasksByAgent] = await Promise.all([
+    agentManager._tasksByAgentMap(),
+    refreshClaimedAgents(),
+  ]);
   const agent = findAgentByRole(
     agentManager.agents,
     role,
@@ -818,26 +806,66 @@ async function executeRunAgent(
     return { executed: false, skipped: true, reason: 'no-idle-agent' };
   }
 
-  const releaseRun = reserveAgentForTask(agent.id, task.id, lockKey);
-  if (!releaseRun) {
+  const releaseReservation = reserveAgentForTask(agent.id, task.id, lockKey);
+  if (!releaseReservation) {
     console.log(
       `[ActionExecutor] run_agent: agent or task already reserved agent="${agent.id}" task="${task.id}"`
     );
     return { executed: false, skipped: true, reason: 'lock-held' };
   }
 
+  let claim: ClaimResult | null = null;
   try {
-    // A fresh run_agent execution is genuinely starting here — we've passed the
-    // durable executionStatus='stopped' gate in processColumnEntry. Drop any
-    // stale in-memory 'stopped' signal left by a PRIOR lifecycle (classically:
-    // the user pressed Stop and then moved the task to a new column, where
-    // PUT /tasks/:id re-sets the signal to interrupt the already-gone old run).
-    // Without this, _waitForExecutionComplete's early-stop check would consume
-    // that residual signal and abort this run before the agent does anything —
-    // so a stopped-then-moved task could never be picked up again. A genuine
-    // Stop during THIS run sets the signal again, after this point, so it stays
-    // honored.
-    agentManager._clearStopSignal?.(task.id);
+    // A fresh run_agent execution is starting — we've passed the durable
+    // executionStatus='stopped' gate in processColumnEntry. Drop the run-scoped
+    // signals of a PRIOR lifecycle (a residual 'stopped' would abort this run, a
+    // residual 'completed' end it the moment its prompt is pasted) BEFORE the
+    // claim: a Stop landing from here on is either refused by the claim (durable
+    // 'stopped') or still raised when the run looks.
+    agentManager._clearRunSignals(task.id);
+
+    // Only decide drives the CLI's terminal (the other modes ask a headless turn).
+    // Never paste into a terminal that is still busy: after an API restart, or
+    // while someone types in it, the runner would paste anyway.
+    const terminalDriven =
+      mode === AgentMode.DECIDE &&
+      isCliRunner(agent) &&
+      !!agentManager.executionManager?.sendTerminalInput;
+    if (terminalDriven && !(await agentManager._isCliQuiet(agent.id))) {
+      console.log(
+        `[ActionExecutor] run_agent: "${agent.name}"'s terminal is still active — task="${task.id}" stays pending`
+      );
+      // Mark it busy until its CLI goes quiet, so the next selection picks
+      // another agent of the role instead of this one again and again.
+      noteCliActivity(agentManager, agent.id, 'CLI still active');
+      return { executed: false, skipped: true, reason: 'cli-busy' };
+    }
+
+    // The durable claim — exclusive per task and per agent across every process
+    // sharing the database, and only while the task is still in this column.
+    // From here the card shows the run (spinner, Stop).
+    claim = await claimRun(task.id, agent.id, mode, {
+      expectStatus: task.status,
+      onLost: () => setTaskSignal(task.id, 'stopped', true),
+    });
+    if (!claim.ok) {
+      return { executed: false, skipped: true, reason: `claim-${claim.reason}` };
+    }
+    // The claim now fences the task across replicas: the advisory lock a
+    // recheck-dispatched chain holds is no longer needed for the long run below.
+    onRunClaimed?.();
+
+    // The executing agent is the card's assignee for the duration of the run.
+    let actualTask: Task = claim.task;
+    if (actualTask.assignee !== agent.id) {
+      actualTask =
+        (await updateTaskFields(task.id, {
+          assignee: agent.id,
+          historyAppend: [reassignEntry(actualTask, agent.id)],
+        })) || actualTask;
+      task.assignee = agent.id;
+    }
+    emitTaskUpdated(agentManager, { ...actualTask }, { emitAgent: false, stampUpdatedAt: true });
 
     // An external task runs confined, from an empty context; a regular task
     // run on an agent that was confined releases it, also from an empty context
@@ -845,23 +873,10 @@ async function executeRunAgent(
     // narrowed permissions, and before the task text reaches the agent.
     await enterRunProfileForTask(agentManager, agent, task);
 
-    // The outer reservation also covers setup and the entire cleanup below.
-    let actualTask;
     let execStartMsgIdx;
     let execStartedAt;
-    let gitBaselineHead: string | null = null;
+    let commitRunStarted = false;
     try {
-      // Set actionRunning flag on the task
-      actualTask = task.agentId ? await getTaskById(task.id) : null;
-      if (actualTask) {
-        await _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
-      } else {
-        // Board-level task (created unassigned via MCP add_task): not in the
-        // in-memory store, so mark + persist the running flag directly — otherwise
-        // the board never shows it as busy while the agent works.
-        await _markActionRunningBoardLevel(agentManager, task, agent, mode);
-      }
-
       // Auto-switch agent to the task's repo if needed.
       const switched = await _ensureAgentOnTaskRepo(agent, task, actualTask, {
         agentManager,
@@ -880,19 +895,13 @@ async function executeRunAgent(
       execStartMsgIdx = (agent.conversationHistory || []).length;
       execStartedAt = new Date().toISOString();
 
-      // Snapshot the repo HEAD before a decide run (the only mode that executes
-      // code). The finally below diffs baseline..HEAD to link every commit made
-      // during the run — the only detection that works for CLI runners, whose
-      // git activity happens inside their PTY and never reaches the direct
-      // command tool path.
-      // parser (and often isn't even rendered by the CLI's TUI).
+      // Open the commit window of a decide run (the only mode that executes
+      // code): snapshot the baselines and persist the run context. The finally
+      // links every commit made during the run — the only detection that works
+      // for CLI runners, whose git activity happens inside their PTY.
       if (mode === AgentMode.DECIDE) {
-        gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
-        beginTaskCommitRun(agentManager, agent.id, {
-          taskId: task.id,
-          baselineHead: gitBaselineHead,
-          startedAt: execStartedAt,
-        });
+        await startTaskCommitRun(agentManager, agent.id, task, execStartedAt);
+        commitRunStarted = true;
       }
 
       let result: ActionResult;
@@ -927,7 +936,7 @@ async function executeRunAgent(
             io,
             execStartMsgIdx,
             execStartedAt,
-            gitBaselineHead,
+            gitBaselineHead: getTaskCommitRun(agentManager, agent.id)?.baselineHead ?? null,
           });
           break;
         default:
@@ -946,8 +955,7 @@ async function executeRunAgent(
       // which propagates up here. Without this check, a user pressing Stop on a
       // running workflow action would flip the task to status=error — and if
       // that errorFromStatus path ever clobbers itself, the task disappears
-      // from the board entirely. stopAgent already marked the task as stopped
-      // and cleaned actionRunning flags, so we just log + return cleanly.
+      // from the board entirely.
       if (isUserStopError(err)) {
         console.log(
           `[ActionExecutor] run_agent stopped by user for "${task.text?.slice(0, 60)}" (mode=${mode}) — not marking as error`
@@ -997,119 +1005,36 @@ async function executeRunAgent(
         isSystemError: true,
         taskId: task.id,
       });
-      // Log detailed error in task history and set error status.
-      // markTaskError guarantees the task stays visible on the board even if
-      // it was already errored or if the prior status no longer exists in the
-      // workflow (renamed/deleted columns).
-      try {
-        if (actualTask) {
-          // Execution logging may have appended history since setup.
-          actualTask = (await getTaskById(task.id)) || actualTask;
-          const mutated = markTaskError(actualTask, errorMessage(err), {
-            by: agent.name || 'workflow',
-            mode,
-            agentName: agent.name,
-            workflow,
-          });
-          if (mutated) {
-            await saveTaskToDb({ ...actualTask, agentId: task.agentId });
-            agentManager._emit('task:updated', {
-              agentId: task.agentId,
-              task: { ...actualTask, agentId: task.agentId },
-            });
-          }
-        } else {
-          agentManager.setTaskStatus(task.agentId, task.id, 'error', {
-            skipAutoRefine: true,
-            by: 'workflow',
-          });
-        }
-      } catch (e) {
-        console.error(`[ActionExecutor] Failed to set error status:`, errorMessage(e));
-      }
+      // The error is persisted once, by the chain (WorkflowEngine), from the
+      // { error } result — markTaskError keeps the task visible on the board.
       return { executed: false, error: true, message: errorMessage(err) };
     } finally {
       // End-of-run commit/push reconcile — runs whichever way the run ended
       // (update_task completion, status-only move, no-decision retry, error,
-      // user stop). This is the safety net that catches commits a CLI runner
-      // made silently in its PTY: the update_task path only detects commits
-      // when the runner sends a completion comment, and a status-only move
-      // detects nothing at all. Idempotent (prefix-aware dedup), so overlap
-      // with the mid-run sweep and recordTaskCompletion is harmless.
-      if (mode === AgentMode.DECIDE && execStartedAt) {
-        try {
-          await reconcileTaskCommits(agentManager, agent.id, task.id, {
-            baselineHead: gitBaselineHead,
-            startedAt: execStartedAt,
-            label: 'RunEndReconcile',
-          });
-        } catch (reconcileErr) {
-          console.warn(
-            `[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${errorMessage(reconcileErr)}`
-          );
-        }
-      }
-      endTaskCommitRun(agentManager, agent.id, task.id);
-      let cleanupMutated = false;
-      const cleanupFields: any = {};
-      // Clear actionRunning with a targeted DB update. The chain reads the task
-      // fresh from the DB after this function returns; if the durable row still
-      // says action_running=true, skipped/no-decision actions get re-saved as
-      // "busy" forever and the recheck loop will ignore them.
-      if (actualTask && actualTask.actionRunning) {
-        actualTask.actionRunning = false;
-        actualTask.startedAt = null;
-        delete actualTask.actionRunningAgentId;
-        delete actualTask.actionRunningMode;
-        cleanupFields.actionRunning = false;
-        cleanupFields.actionRunningAgentId = null;
-        cleanupFields.actionRunningMode = null;
-        cleanupFields.startedAt = null;
-        cleanupMutated = true;
-      }
-      // Workflow action modes (decide, refine, title, set_type) should not leave
-      // the agent as the permanent assignee — clear it so the task loop won't send
-      // the task to the wrong agent if the next workflow action is delayed.
-      if (actualTask && actualTask.assignee === agent.id) {
-        actualTask.assignee = null;
-        cleanupFields.assignee = null;
-        cleanupMutated = true;
-      }
-      // Notify the UI that the action is no longer running. Without this, the
-      // frontend keeps the task card in "spinner / undraggable" state until a
-      // page refresh, because no later event in the chain may emit a fresh
-      // task:updated payload (e.g. when the chain has no change_status action
-      // after run_agent). Persist only the execution/assignee cleanup fields so a
-      // concurrent status/text update cannot be overwritten by a stale task copy.
-      if (cleanupMutated && actualTask) {
-        // Emit the FRESH row returned by the update, not the captured actualTask: a
-        // decide agent may have moved the task to its next column DURING the run, so
-        // actualTask.status is stale. Emitting it with a new timestamp bounces the
-        // card back to the previous column — mid-flow it self-corrects in ~0.5s when
-        // the next column emits, but on the FINAL action nothing corrects it, so the
-        // card sticks a column back until a reload. cleanupFields is non-empty
-        // whenever cleanupMutated, so the update runs and returns the current row.
-        const updated =
-          Object.keys(cleanupFields).length > 0
-            ? await updateTaskFields(actualTask.id, cleanupFields)
-            : null;
-        emitTaskUpdated(
-          agentManager,
-          updated
-            ? { ...updated, agentId: task.agentId }
-            : { ...actualTask, agentId: task.agentId },
-          { emitAgent: false, stampUpdatedAt: true }
-        );
-      }
-      // Board-level task: no in-memory copy, and board-level moves bypass
-      // setTaskStatus, so nothing else will persist the cleared flag — do it here
-      // or the task stays stuck "busy" in the DB after the run ends.
-      if (!actualTask && task?.actionRunning) {
-        await _clearActionRunningBoardLevel(agentManager, task);
+      // user stop) and AFTER the CLI went quiet (the wait drains it), so the
+      // run's last commits are linked to THIS task. Idempotent (prefix-aware
+      // dedup), so overlap with the mid-run sweep and recordTaskCompletion is
+      // harmless.
+      if (commitRunStarted) {
+        await finishTaskCommitRun(agentManager, agent.id, task.id, 'RunEndReconcile');
       }
     }
   } finally {
-    releaseRun();
+    if (claim?.ok) {
+      claim.stopHeartbeat();
+      // Release the claim — only while it is still this run's — and drop the
+      // executor as assignee if it still is (a user may have reassigned the task
+      // meanwhile): workflow modes do not leave the agent as the permanent
+      // assignee. Emit the FRESH row: a decide agent may have moved the task
+      // during the run, and re-emitting the pre-run column bounced the card back.
+      // A board-level task (no owning agent) keeps its executor as assignee: it
+      // is the only agent link the card has.
+      const released = await releaseRunClaim(task.id, agent.id, { clearAssignee: !!task.agentId });
+      if (released) {
+        emitTaskUpdated(agentManager, { ...released }, { emitAgent: false, stampUpdatedAt: true });
+      }
+    }
+    releaseReservation();
   }
 }
 
@@ -1160,15 +1085,52 @@ const SET_TYPE_VALID_TYPES = [
   'other',
 ];
 
+/**
+ * Write a run_agent mode result (title, type, refined text) on the task —
+ * awaited, by task id, as a targeted update. The un-awaited owner-keyed edit
+ * it replaces silently did nothing on board-level tasks (no owner agent), and
+ * its full-row save could land after the run's cleanup and resurrect the
+ * finished run's claim, or be reverted by the chain's next write.
+ */
+async function _applyModeResult(
+  agentManager: AgentManager,
+  task: Task,
+  field: 'title' | 'taskType' | 'text',
+  value: string,
+  by: string
+) {
+  const current = await getTaskById(task.id);
+  if (!current) return;
+  const oldValue = (current as any)[field] ?? null;
+  if (oldValue === value) return;
+  const updated = await updateTaskFields(task.id, {
+    [field]: value,
+    historyAppend: [
+      {
+        status: current.status,
+        at: new Date().toISOString(),
+        by,
+        type: 'edit',
+        field,
+        oldValue,
+        newValue: value,
+      },
+    ],
+  });
+  if (!updated) return;
+  (task as any)[field] = value;
+  emitTaskUpdated(agentManager, { ...updated }, { stampUpdatedAt: true });
+}
+
 const SIMPLE_MODES = {
   title: {
     buildPrompt: buildTitlePrompt,
     announce: (task: Task, agentName: string) =>
       `[ActionExecutor] title: generating for "${task.text?.slice(0, 60)}" via ${agentName}`,
-    apply: (agentManager: AgentManager, task: Task, raw: string, _agentName: string) => {
+    apply: async (agentManager: AgentManager, task: Task, raw: string, _agentName: string) => {
       const title = (raw || '').trim().replace(/^["']|["']$/g, '');
       if (title) {
-        agentManager.updateTaskTitle(task.agentId, task.id, title);
+        await _applyModeResult(agentManager, task, 'title', title, 'user');
         console.log(`[ActionExecutor] title: "${title}"`);
       }
     },
@@ -1177,13 +1139,13 @@ const SIMPLE_MODES = {
     buildPrompt: buildSetTypePrompt,
     announce: (task: Task, agentName: string) =>
       `[ActionExecutor] set_type: classifying "${task.text?.slice(0, 60)}" via ${agentName}`,
-    apply: (agentManager: AgentManager, task: Task, raw: string, agentName: string) => {
+    apply: async (agentManager: AgentManager, task: Task, raw: string, agentName: string) => {
       const rawType = (raw || '')
         .trim()
         .toLowerCase()
         .replace(/[^a-z_]/g, '');
       const taskType = SET_TYPE_VALID_TYPES.includes(rawType) ? rawType : 'other';
-      agentManager.updateTaskType(task.agentId, task.id, taskType, agentName);
+      await _applyModeResult(agentManager, task, 'taskType', taskType, agentName);
       console.log(`[ActionExecutor] set_type: "${taskType}"`);
     },
   },
@@ -1204,7 +1166,7 @@ async function _runSimpleMode(
 
   try {
     const result = await agentManager.sendMessage(agent.id, prompt, () => {});
-    apply(agentManager, task, result, agent.name);
+    await apply(agentManager, task, result, agent.name);
     await agentManager._saveExecutionLog(
       task.agentId,
       task.id,
@@ -1264,7 +1226,7 @@ async function _runRefineMode(
       'refine'
     );
 
-    if (response) agentManager.updateTaskText(task.agentId, task.id, response);
+    if (response) await _applyModeResult(agentManager, task, 'text', response, 'user');
   });
 
   return { executed: true };
@@ -1306,6 +1268,7 @@ async function _runDecideMode(
   const beforeTextLen = (beforeTask?.text || '').length;
 
   const buf = { text: '' };
+  let waitResult: string | null = null;
 
   // CLI runners drive their interactive PTY (visible in the terminal tab) and
   // signal via their MCP tools — never the headless sendMessage path, which
@@ -1316,7 +1279,7 @@ async function _runDecideMode(
     console.log(
       `[ActionExecutor] decide: injecting prompt into CLI terminal for "${agent.name}" (status=${agent.status})`
     );
-    const waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt, gitBaselineHead);
+    waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt, gitBaselineHead);
     _throwIfWaitError(
       agentManager,
       task,
@@ -1336,6 +1299,9 @@ async function _runDecideMode(
       'decide',
       { prompt }
     );
+  } else if (getTaskSignal(task.id, 'stopped')) {
+    // Stopped while the run was being prepared: no turn to abort yet.
+    waitResult = 'stopped';
   } else {
     await _withAgentStream(agentManager, agent.id, async () => {
       const workflowMeta = {
@@ -1372,6 +1338,15 @@ async function _runDecideMode(
   const afterStatus = afterTask?.status ?? task.status;
   const afterTextLen = (afterTask?.text || '').length;
   const decided = afterStatus !== beforeStatus || afterTextLen !== beforeTextLen;
+
+  // A Stop is the user's decision, not the agent's failure to make one: it must
+  // not count towards MAX_DECIDE_NO_DECISION (four Stops used to error the task
+  // with a false "assign the Swarm API MCP" diagnosis). The chain flags the
+  // action for retry, which the durable 'stopped' status holds until a resume.
+  if (!decided && waitResult === 'stopped') {
+    console.log(`[ActionExecutor] decide: stopped by user for task="${task.id}" — no decision recorded`);
+    return { executed: false, skipped: true, reason: 'user-stop' };
+  }
 
   if (!decided) {
     // Count consecutive no-decision attempts so a structurally-stuck agent fails

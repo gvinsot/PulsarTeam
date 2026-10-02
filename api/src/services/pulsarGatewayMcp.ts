@@ -3,12 +3,8 @@ import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { applyTaskUpdate } from './swarmApiMcp.js';
 import { BUILTIN_MCP_SERVERS } from '../data/mcpServers.js';
-import {
-  getBoardById,
-  getTaskByActionRunningAgent,
-  getTasksByAssignee,
-  getActiveTasksByAgent,
-} from './database.js';
+import { getBoardById } from './database.js';
+import { resolveAgentCurrentTask } from './agentManager/currentTask.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 import { confinedTaskId, isAgentConfined } from './security/externalRunProfile.js';
 
@@ -86,25 +82,13 @@ async function resolveAvailableServerIds(
 }
 
 /**
- * Resolve the agent's current/active task id, using the same priority order as
- * recordTaskCompletion: a task actively running via this agent, then a
- * task assigned to it, then its own active task. Returns null when none.
+ * Resolve the agent's current task id — the same resolution as
+ * recordTaskCompletion (agentManager/currentTask.ts): its live run first, then
+ * a single unambiguous assignment. Returns null when unknown or ambiguous.
  */
 async function resolveCurrentTaskId(agentManager: any, agentId: string): Promise<string | null> {
-  // Priority 1: a task with an in-flight action attributed to this agent.
-  const running = await getTaskByActionRunningAgent(agentId);
-  if (running && agentManager._isActiveTaskStatus((running as any).status))
-    return (running as any).id;
-  // Priority 2/3: an active task assigned to this agent (or its own unassigned).
-  const assigned = (await getTasksByAssignee(agentId)).find((t: any) =>
-    agentManager._isActiveTaskStatus(t.status)
-  );
-  if (assigned) return assigned.id;
-  // Priority 3b: the agent's own active task assigned to someone else (rare).
-  const own = (await getActiveTasksByAgent(agentId)).find((t: any) =>
-    agentManager._isActiveTaskStatus(t.status)
-  );
-  return own ? own.id : null;
+  const current = await resolveAgentCurrentTask(agentManager, agentId);
+  return current ? current.id : null;
 }
 
 /** Resolve a server name or id to a known server id without auto-registering it. */
@@ -178,7 +162,7 @@ export function createPulsarGatewayMcpServer(
         const current = await resolveCurrentTaskId(agentManager, callerAgentId);
         if (!current) {
           return jsonError(
-            'No active task found to update. Pass task_id explicitly, or ensure you have an in-progress task assigned to you.'
+            'Could not tell which task to update (no task running for you, and not exactly one active task assigned to you). Pass task_id explicitly.'
           );
         }
         resolvedTaskId = current;

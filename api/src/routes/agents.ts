@@ -10,7 +10,6 @@ import {
   getAllUsers,
   getBoardsByUser,
   getUserById,
-  saveTaskToDb,
   updateTaskFields,
   getAgentById,
 } from '../services/database.js';
@@ -683,7 +682,7 @@ export function agentRoutes(agentManager: AgentManager) {
         // Handle isManual update
         if (isManual !== undefined && oldTask) {
           oldTask.isManual = !!isManual;
-          await saveTaskToDb({ ...oldTask, agentId: oldTask.agentId });
+          await updateTaskFields(oldTask.id, { isManual: oldTask.isManual });
           agentManager._emit('task:updated', {
             agentId: oldTask.agentId,
             task: { ...oldTask, agentId: oldTask.agentId },

@@ -117,7 +117,7 @@ export interface AgentManager {
     userBoardIds?: Set<string>
   ): Promise<any>;
   setStatus(id: string, status: string, detail?: string | null): void;
-  _markTaskStopped(t: any, ownerAgentId: string | null, stopTimestamp: string): void;
+  _markTaskStopped(t: { id: string; status: string }, stopTimestamp: string): Promise<Task | null>;
   _haltAgentTasks(id: string, stopTimestamp: string): Promise<void>;
   stopAgent(id: string): boolean;
   beginStream(
@@ -445,6 +445,17 @@ export interface AgentManager {
   _consumeTaskAuthError(taskId: string): string | null;
   /** Drops a stale stop signal so the next run isn't cancelled on arrival. */
   _clearStopSignal(taskId: string): void;
+  _clearRunSignals(taskId: string): void;
+  _isCliQuiet(executorId: string): Promise<boolean>;
+  _cliIdleSeconds(executorId: string): Promise<number | null>;
+  _drainCliRun(
+    executorId: string,
+    executorName: string,
+    taskId: string,
+    options?: { stopped?: boolean }
+  ): Promise<void>;
+  _isWorkflowManagedStatus(boardId: string | null, status: string): boolean;
+  _isReassigningStatus(boardId: string | null, status: string): boolean;
 
   // ── workflow.ts ──
   _evaluateCondition(cond: any, task: any): boolean;
@@ -548,6 +559,8 @@ export class AgentManager {
   _loopProcessing: Set<string> | undefined;
   _taskResumeFailures: Map<string, { count: number; lastFailedAt: number }> | undefined;
   _workflowManagedStatuses: Set<string> | undefined;
+  _workflowManagedByBoard: Map<string, Set<string>> | undefined;
+  _reassigningByBoard: Map<string, Set<string>> | undefined;
   _reassigningStatuses: Set<string> | undefined;
   _staleActionCleanupDone: boolean | undefined;
 

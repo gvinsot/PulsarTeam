@@ -262,6 +262,11 @@ mock.module('../configManager.js', {
 
 // Now import the module under test
 const { AgentManager } = await import('../agentManager.js');
+// The task loop and the recheck only run once the instance knows its
+// environment (lib/environment.ts); lock it to the default 'prod' the seeded
+// tasks carry.
+const { setCurrentEnvironmentFromHost } = await import('../../lib/environment.js');
+setCurrentEnvironmentFromHost('pulsar.example');
 const { processColumnEntry, reconcileStaleActionRunning } = await import('../workflow/index.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -714,19 +719,26 @@ test('10 tasks fired rapidly with 3 agents all complete', async () => {
   assert.equal(stuck.length, 0, `${stuck.length} task(s) stuck`);
 });
 
-test('reconcileStaleActionRunning heals stranded tasks but spares live/fresh runs', async () => {
-  const { acquireLock, releaseLock } = await import('../workflow/agentSelector.js');
+test('reconcileStaleActionRunning heals dead run claims but spares live ones', async () => {
+  const { reserveAgentForTask } = await import('../workflow/agentSelector.js');
   const mgr = await setup([{ name: 'Dev', role: 'assistant' }]);
   const [agentId] = mgr.agents.keys();
 
-  const mkStranded = (label: string, startedAt: string | null, status = 'code') => {
+  const mkClaimed = (
+    label: string,
+    {
+      startedAt = null,
+      heartbeat = null,
+      environment = 'prod',
+    }: { startedAt?: string | null; heartbeat?: string | null; environment?: string } = {}
+  ) => {
     const id = `stale-${label}-${Math.random().toString(36).slice(2, 8)}`;
     const t: any = {
       id,
       agentId,
       text: label,
       title: null,
-      status,
+      status: 'code',
       boardId: 'board-test',
       assignee: null,
       taskType: null,
@@ -738,48 +750,52 @@ test('reconcileStaleActionRunning heals stranded tasks but spares live/fresh run
       executionStatus: null,
       completedActionIdx: null,
       actionRunning: true,
-      actionRunningAgentId: agentId,
-      actionRunningMode: 'title',
-      environment: 'prod',
+      actionRunningAgentId: `agent-${label}`,
+      actionRunningMode: 'decide',
+      actionHeartbeatAt: heartbeat,
+      environment,
       createdAt: new Date().toISOString(),
     };
     taskRows.set(id, t);
     return t;
   };
 
-  const old = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-  const corrupt = mkStranded('corrupt', null); // no startedAt → heal
-  const stale = mkStranded('stale', old); // > 20min old → heal
-  const fresh = mkStranded('fresh', new Date().toISOString()); // just started → spare
-  const live = mkStranded('live', old); // old but a run is live → spare
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  // Legacy claims (no heartbeat), own environment: healed when corrupt or old.
+  const corrupt = mkClaimed('corrupt');
+  const stale = mkClaimed('stale', { startedAt: ago(30 * 60_000) });
+  const fresh = mkClaimed('fresh', { startedAt: new Date().toISOString() });
+  // Heartbeated claims: dead once the heartbeat stops — in ANY environment (a
+  // stopped stack cannot heal its own claims, and its agents are shared).
+  const deadQa = mkClaimed('dead-qa', { heartbeat: ago(10 * 60_000), environment: 'qa' });
+  const beating = mkClaimed('beating', { startedAt: ago(60 * 60_000), heartbeat: ago(5_000) });
+  // Dead heartbeat, but this process is running it (DB hiccup): spared.
+  const live = mkClaimed('live', { heartbeat: ago(10 * 60_000) });
 
-  // Hold a live execution lock for the "live" task (mirrors executeRunAgent).
-  const token = acquireLock(`${agentId}:${live.id}:decide`);
+  const release = reserveAgentForTask(agentId, live.id, `${agentId}:${live.id}:decide`);
+  assert.ok(release, 'live run reserved');
   try {
     await reconcileStaleActionRunning(mgr, 'prod');
   } finally {
-    releaseLock(`${agentId}:${live.id}:decide`, token);
+    release!();
   }
 
-  // The fake's updateTaskFields assigns the field key verbatim; the real accessor
-  // maps pendingOnEnter → pending_on_enter → _pendingOnEnter on read.
-  const pending = (t: any) => t._pendingOnEnter ?? t.pendingOnEnter;
-
-  // Healed: flag cleared + on_enter re-armed → visible to the recheck loop again.
-  for (const t of [corrupt, stale]) {
+  for (const t of [corrupt, stale, deadQa]) {
     const r = taskRows.get(t.id);
-    assert.equal(r.actionRunning, false, `${t.text}: actionRunning cleared`);
+    assert.equal(r.actionRunning, false, `${t.text}: claim cleared`);
     assert.equal(r.actionRunningAgentId ?? null, null, `${t.text}: agent cleared`);
     assert.equal(r.actionRunningMode ?? null, null, `${t.text}: mode cleared`);
-    assert.equal(r.startedAt ?? null, null, `${t.text}: startedAt cleared`);
-    assert.equal(pending(r), 'code', `${t.text}: on_enter re-armed`);
+    // Re-armed → visible to the recheck loop of its environment again.
+    assert.equal(r._pendingOnEnter, 'code', `${t.text}: on_enter re-armed`);
   }
+  // The start stamp survives a heal: it is what lets the resume loop pick up a
+  // run interrupted in a column without workflow actions.
+  assert.equal(taskRows.get(stale.id).startedAt, stale.startedAt);
 
-  // Spared: still busy, not re-armed (clearing them would double-run an in-flight action).
-  for (const t of [fresh, live]) {
+  for (const t of [fresh, beating, live]) {
     const r = taskRows.get(t.id);
     assert.equal(r.actionRunning, true, `${t.text}: left running`);
-    assert.equal(pending(r) ?? null, null, `${t.text}: not re-armed`);
+    assert.equal(r._pendingOnEnter ?? null, null, `${t.text}: not re-armed`);
   }
 });
 

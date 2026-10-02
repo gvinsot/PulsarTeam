@@ -17,8 +17,20 @@ const LOCK_TTL_MS = 15 * 60 * 1000; // 15 min
 const _agentRuns = new Map<string, { taskId: string; lockKey: string }>();
 const _taskRuns = new Set<string>();
 
+// Agents holding a run claim in the DATABASE (database/tasks.ts claimTaskRun) —
+// runs this process cannot see in _agentRuns: the sibling stack sharing the DB
+// (prod/QA), the previous replica of a rolling update, a run still being healed.
+// Kept DB-free here: callers refresh it (refreshClaimedAgents in the engine)
+// right before they select, and the claim's unique index is the race-free
+// backstop for the few seconds the snapshot can lag.
+let _claimedAgents = new Set<string>();
+
+export function setClaimedAgents(agentIds: Iterable<string>): void {
+  _claimedAgents = new Set(agentIds);
+}
+
 export function isAgentBusy(agentId: string): boolean {
-  return _agentRuns.has(agentId) || _busyAgents.has(agentId);
+  return _agentRuns.has(agentId) || _busyAgents.has(agentId) || _claimedAgents.has(agentId);
 }
 
 /** The live task reservation, used to avoid interrupting a stale assignee. */
@@ -32,7 +44,10 @@ export function isTaskRunning(taskId: string): boolean {
 
 /** Synchronous check-and-reserve, before workspace preparation or prompt injection. */
 export function reserveAgentForTask(agentId: string, taskId: string, lockKey: string) {
-  if (isAgentBusy(agentId) || isTaskRunning(taskId)) return null;
+  // Only THIS process's runs block the reservation: the DB-claimed set may still
+  // list the agent for the run that just released it (the snapshot lags), and the
+  // claim itself is checked by the caller right after.
+  if (_agentRuns.has(agentId) || _busyAgents.has(agentId) || isTaskRunning(taskId)) return null;
   const token = acquireLock(lockKey);
   if (!token) return null;
   const run = { taskId, lockKey };
@@ -178,6 +193,53 @@ export function hasIdleAgentWithRole(
   return false;
 }
 
+/**
+ * True when findAgentByRole could pick SOME agent right now — same fences
+ * (enabled, owner, board) and the same availability (idle or error, not busy in
+ * another run). `role` narrows to one role; omitted, any role.
+ */
+export function hasSelectableAgent(
+  agents: Map<any, any>,
+  {
+    role,
+    ownerId = null,
+    boardId = null,
+  }: { role?: string; ownerId?: string | null; boardId?: string | null }
+): boolean {
+  for (const a of agents.values()) {
+    if (
+      a.enabled !== false &&
+      (a.status === 'idle' || a.status === 'error') &&
+      !isAgentBusy(a.id) &&
+      (!role || (a.role || '').toLowerCase() === role.toLowerCase()) &&
+      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
+      isOnTaskBoard(a, boardId)
+    )
+      return true;
+  }
+  return false;
+}
+
+/** True when at least one enabled agent of the board (and owner) has `role`,
+ *  whatever it is doing. */
+export function hasAgentWithRole(
+  agents: Map<any, any>,
+  role: string,
+  ownerId: string | null = null,
+  boardId: string | null = null
+): boolean {
+  for (const a of agents.values()) {
+    if (
+      a.enabled !== false &&
+      (a.role || '').toLowerCase() === role.toLowerCase() &&
+      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
+      isOnTaskBoard(a, boardId)
+    )
+      return true;
+  }
+  return false;
+}
+
 // ── Agent selection ─────────────────────────────────────────────────────────
 
 /**
@@ -314,7 +376,10 @@ export function findAgentForAssignment(
   getAgentTasks: (agentId: any) => any[] = () => [],
   excludeTaskId: string | null = null,
   boardId: string | null = null,
-  taskProject: string | null = null
+  taskProject: string | null = null,
+  // Agents already assigned to another active task (getActiveAssigneeIds): the
+  // engine never puts one agent on two in-progress cards.
+  unavailable: ReadonlySet<string> = new Set()
 ) {
   const allAgents = Array.from(agents.values()) as any[];
   const candidates = allAgents.filter(
@@ -322,6 +387,7 @@ export function findAgentForAssignment(
       a.enabled !== false &&
       (a.status === 'idle' || a.status === 'error') &&
       !isAgentBusy(a.id) &&
+      !unavailable.has(a.id) &&
       (a.role || '').toLowerCase() === (role || '').toLowerCase() &&
       (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
       isOnTaskBoard(a, boardId)

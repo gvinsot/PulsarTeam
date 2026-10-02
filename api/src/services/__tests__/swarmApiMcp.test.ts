@@ -43,6 +43,7 @@ mock.module('../database.js', {
       return searchTasksResponse;
     },
     // taskMutations.ts imports these from ../database.js
+    getTaskById: taskDbFake.getTaskById,
     saveTaskToDb: taskDbFake.saveTaskToDb,
     updateTaskFields: taskDbFake.updateTaskFields,
     appendTaskComment: taskDbFake.appendTaskComment,

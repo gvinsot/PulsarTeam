@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getAllBoards, getBoardById, searchTasks } from './database.js';
+import { getAllBoards, getBoardById, searchTasks, updateTaskFields } from './database.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { getTaskByIdPrefix, getTasksByAgent } from './database/tasks.js';
 import { emitTaskUpdated, clearExecutionOnMove, addTaskComment } from './taskMutations.js';
@@ -127,6 +127,8 @@ async function applyBoardLevelUpdate(
 ): Promise<any> {
   const now = new Date().toISOString();
   if (!task.history) task.history = [];
+  const historyBefore = task.history.length;
+  const fields: Record<string, unknown> = {};
   if (repoUpdate) {
     task.history.push({
       status: task.status,
@@ -139,6 +141,8 @@ async function applyBoardLevelUpdate(
     });
     task.repoFullName = repoUpdate.value;
     task.repoProvider = repoUpdate.value ? repoUpdate.provider : null;
+    fields.repoFullName = task.repoFullName;
+    fields.repoProvider = task.repoProvider;
   }
   if (storageUpdate) {
     task.history.push({
@@ -152,6 +156,8 @@ async function applyBoardLevelUpdate(
     });
     task.storagePath = storageUpdate.value;
     task.storageProvider = storageUpdate.value ? storageUpdate.provider : null;
+    fields.storagePath = task.storagePath;
+    fields.storageProvider = task.storageProvider;
   }
   const statusChanged = status !== undefined && status !== task.status;
   if (statusChanged) {
@@ -165,17 +171,39 @@ async function applyBoardLevelUpdate(
     });
     task.status = status;
     if (previousAssignee) task.assignee = null;
-    // Clear execution state so the workflow engine starts fresh in the
-    // new column (mirrors setTaskStatus / PUT /tasks/:id).
     // A column move starts a fresh chain — drop the decide no-decision counter
     // (relocated off the task object in Phase 2) so a later re-entry into a
     // decide column isn't penalised by stale attempts. Mirrors setTaskStatus.
     agentManager._decideNoDecisionCounts?.delete(task.id);
-    // Clear execution state so the workflow engine starts fresh in the new column.
-    clearExecutionOnMove(task, { toStatus: status, now });
+    // Clear execution state so the workflow engine starts fresh in the new
+    // column (mirrors setTaskStatus / PUT /tasks/:id). The run claim is left to
+    // the run itself.
+    clearExecutionOnMove(task, { toStatus: status, now, full: true });
+    Object.assign(fields, {
+      status,
+      ...(previousAssignee ? { assignee: null } : {}),
+      startedAt: null,
+      executionStatus: null,
+      pendingOnEnter: null,
+      completedActionIdx: null,
+      resumeTransitionIdx: null,
+      ...(status === 'done' ? { completedAt: task.completedAt || now } : {}),
+    });
   }
   task.updatedAt = now;
-  await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
+  // Targeted: only what this update changed, history appended atomically — a
+  // full save of the snapshot reverted concurrent writes (linked commits, the
+  // run's claim).
+  const appended = task.history.slice(historyBefore);
+  if (!Object.keys(fields).length && !appended.length) return task;
+  fields.historyAppend = appended;
+  const persisted = await updateTaskFields(task.id, fields);
+  if (!persisted) {
+    // Nothing was written: the caller must not report (nor act on) a change
+    // the board will never show.
+    throw new Error('Failed to persist the task update');
+  }
+  Object.assign(task, persisted);
   emitTaskUpdated(agentManager, task, { emitAgent: false, stampUpdatedAt: false });
   // Column-entry workflow actions (auto-assign / run_agent) only fire
   // through this hook — no loop ever rescans unassigned tasks, so
@@ -331,22 +359,36 @@ export async function applyTaskUpdate(
   const callerAgent = findAgent(agentManager, { agent_id, agent_name }) || agent;
   let completed = false;
   if (wantsCompletion) {
-    if (!boardLevel && callerAgent) {
+    if (callerAgent) {
+      // Owned or board-level alike: recordTaskCompletion works by task id (a
+      // null owner is fine) and is what links the `commits` argument and the
+      // run's own commits — the board-level branch used to drop both while
+      // still answering success.
       const outcome = await agentManager.recordTaskCompletion(callerAgent.id, {
         comment: comment || '',
         explicitTaskId: task.id,
         commitsArg: (commits || '').trim(),
       });
       completed = Boolean(outcome?.isTerminal);
-    } else if (comment && comment.trim()) {
-      // Board-level task: append the summary to the comment thread + persist
-      // (no agent / no execute wait to signal).
-      await addTaskComment(agentManager, task, {
-        author: callerAgent?.name || 'mcp',
-        authorType: callerAgent ? 'agent' : 'system',
-        authorId: callerAgent?.id ?? null,
-        text: comment,
-      });
+    } else {
+      // No agent behind the call (external API key): append the summary and
+      // link the explicitly listed commits.
+      if (comment && comment.trim()) {
+        await addTaskComment(agentManager, task, {
+          author: 'mcp',
+          authorType: 'system',
+          authorId: null,
+          text: comment,
+        });
+      }
+      for (const entry of (commits || '').split(/,\s*(?=[a-f0-9])/)) {
+        const colonIdx = entry.indexOf(':');
+        const hash = (colonIdx > 0 ? entry.slice(0, colonIdx) : entry).trim();
+        const msg = colonIdx > 0 ? entry.slice(colonIdx + 1).trim() : '';
+        if (/^[a-f0-9]{7,40}$/.test(hash)) {
+          await agentManager.addTaskCommit(task.agentId, task.id, hash, msg);
+        }
+      }
       completed = true;
     }
   }

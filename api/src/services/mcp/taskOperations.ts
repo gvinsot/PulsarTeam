@@ -320,10 +320,11 @@ export async function editTaskMetadata(
   actor: McpActor
 ) {
   if (!Object.keys(fields).length) return task;
+  // History appended atomically: rewriting it from this snapshot dropped the
+  // entries written meanwhile (a run's moves, its execution log, a stop).
   const updated = await updateTaskFields(task.id, {
     ...fields,
-    history: [
-      ...(task.history || []),
+    historyAppend: [
       {
         at: new Date().toISOString(),
         by: actor.username,

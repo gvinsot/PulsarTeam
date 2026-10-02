@@ -7,8 +7,11 @@ mock.module('../database.js', {
     saveAgent: async () => {},
     getTasksByAssignee: async () => [],
     getTaskById: async () => structuredClone(task),
+    // Mirrors database/tasks.ts: `historyAppend` concatenates atomically.
     updateTaskFields: async (_id: string, fields: any) => {
-      Object.assign(task, structuredClone(fields));
+      const { historyAppend, ...columns } = structuredClone(fields);
+      Object.assign(task, columns);
+      if (historyAppend) task.history = [...(task.history || []), ...historyAppend];
       return structuredClone(task);
     },
   },

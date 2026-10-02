@@ -11,6 +11,11 @@ const { rows, exports: taskDbFake } = makeTaskDbFake();
 mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
 
 const { AgentManager } = await import('../agentManager.js');
+// The task loop and the recheck only run once the instance knows its
+// environment (lib/environment.ts); lock it to the default 'prod' the seeded
+// tasks carry.
+const { setCurrentEnvironmentFromHost } = await import('../../lib/environment.js');
+setCurrentEnvironmentFromHost('pulsar.example');
 const { setTaskSignal, getTaskSignal } = await import('../agentManager/tasks.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

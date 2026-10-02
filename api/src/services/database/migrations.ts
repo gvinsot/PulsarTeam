@@ -317,6 +317,37 @@ const MIGRATIONS: Migration[] = [
     )`,
     'ALTER TABLE tasks DROP COLUMN IF EXISTS context_files',
   ]),
+
+  // One live run per agent, enforced by the database (database/tasks.ts
+  // claimTaskRun): the prod and QA stacks share this DB and its agents, and an
+  // in-process reservation cannot see the other stack's runs. Rows that already
+  // break the rule keep only their most recent claim; the others are re-armed so
+  // the workflow picks them up again. Also: the heartbeat that proves a claim
+  // alive, the transition a deferred chain resumes in, and the durable copy of a
+  // run's commit context.
+  sqlMigration('202610010001_task_run_claims', 'one live run claim per agent', [
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_heartbeat_at TIMESTAMPTZ',
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS resume_transition_idx INTEGER',
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS commit_run JSONB',
+    // The sibling stack keeps writing claims while this runs: block its writes
+    // between the dedup and the index, or a new duplicate fails the index build.
+    'LOCK TABLE tasks IN SHARE ROW EXCLUSIVE MODE',
+    `WITH ranked AS (
+       SELECT id, ROW_NUMBER() OVER (
+                PARTITION BY action_running_agent_id
+                ORDER BY started_at DESC NULLS LAST, updated_at DESC NULLS LAST, id) AS rn
+         FROM tasks
+        WHERE action_running IS TRUE AND deleted_at IS NULL
+          AND action_running_agent_id IS NOT NULL)
+     UPDATE tasks t
+        SET action_running = FALSE, action_running_agent_id = NULL, action_running_mode = NULL,
+            pending_on_enter = CASE WHEN t.status IN ('done', 'error') THEN t.pending_on_enter
+                                    ELSE t.status END,
+            updated_at = NOW()
+       FROM ranked WHERE t.id = ranked.id AND ranked.rn > 1`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uniq_tasks_running_agent ON tasks (action_running_agent_id)
+     WHERE action_running IS TRUE AND deleted_at IS NULL`,
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

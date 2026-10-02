@@ -2,7 +2,8 @@
 import {
   saveAgent,
   clearActionRunningForAgent,
-  saveTaskToDb,
+  updateTaskFields,
+  getTaskById,
   getTasksByAgent,
   getAllTasks,
   getTasksByAssignee,
@@ -12,6 +13,10 @@ import {
 } from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
 import { isCliRunner } from '../runners.js';
+import { getCurrentEnvironment } from '../../lib/environment.js';
+import { getAgentRunningTaskId } from '../workflow/agentSelector.js';
+import { emitTaskUpdated } from '../taskMutations.js';
+import type { Task } from '../database/tasks.js';
 
 function requestCliTerminalInterrupt(manager: any, agent: any): void {
   if (!manager?.executionManager || !agent?.id) return;
@@ -36,21 +41,25 @@ function requestCliTerminalInterrupt(manager: any, agent: any): void {
 
 /** @this {import('./index.js').AgentManager} */
 export const statusMethods = {
-  /** Apply the shared "mark task stopped" mutation: set executionStatus,
-   * clear startedAt, push a {type:'stopped', by:'user'} history entry, and
-   * persist. Does NOT set the task signal or emit task:updated — each stopAgent
-   * loop keeps its own guard/signal/emit because those differ per block. */
-  _markTaskStopped(this: any, t: any, ownerAgentId: string | null, stopTimestamp: string): void {
-    t.executionStatus = 'stopped';
-    t.startedAt = null;
-    if (!t.history) t.history = [];
-    t.history.push({
-      status: t.status,
-      at: stopTimestamp,
-      by: 'user',
-      type: 'stopped',
-    });
-    saveTaskToDb({ ...t, agentId: ownerAgentId });
+  /** Apply the shared "mark task stopped" mutation — a TARGETED write, guarded
+   * by the column the task was seen in: the full-row save of the snapshot it
+   * replaces landed after a concurrent move (PUT, bulk move) and sent the task
+   * back to its old column. Returns the fresh row, or null when the task moved
+   * meanwhile (that move already ended the run). */
+  async _markTaskStopped(
+    this: unknown,
+    t: { id: string; status: string },
+    stopTimestamp: string
+  ): Promise<Task | null> {
+    return updateTaskFields(
+      t.id,
+      {
+        executionStatus: 'stopped',
+        startedAt: null,
+        historyAppend: [{ status: t.status, at: stopTimestamp, by: 'user', type: 'stopped' }],
+      },
+      { expect: { status: t.status } }
+    );
   },
 
   /** Fetch every live task once and group by owning agentId. Board-level tasks
@@ -436,9 +445,15 @@ export const statusMethods = {
 
     this._taskQueues.delete(id);
 
+    const stopTimestamp = new Date().toISOString();
     if (agent.isLeader) {
+      // A leader's Stop halts ITS team — the agents of its owner on its board —
+      // not every busy agent of the instance (every voice agent is a leader).
+      const inTeam = (sub: any) =>
+        (sub.ownerId || null) === (agent.ownerId || null) &&
+        (!agent.boardId || sub.boardId === agent.boardId);
       for (const [subId, subAgent] of this.agents) {
-        if (subId !== id && (subAgent as any).status === 'busy') {
+        if (subId !== id && (subAgent as any).status === 'busy' && inTeam(subAgent)) {
           requestCliTerminalInterrupt(this, subAgent);
           const subCtrl = this.abortControllers.get(subId);
           if (subCtrl) {
@@ -455,6 +470,9 @@ export const statusMethods = {
           });
           (subAgent as any).currentTask = null;
           this._chatLocks.delete(subId);
+          // Their task waits must end too, or they keep re-prompting the CLI
+          // that was just interrupted.
+          this._haltAgentTasks(subId, stopTimestamp).catch(() => {});
           this.setStatus(subId, 'idle', 'Stopped by leader');
           saveAgent(subAgent);
           this._emit('agent:stopped', {
@@ -466,7 +484,6 @@ export const statusMethods = {
       }
     }
 
-    const stopTimestamp = new Date().toISOString();
     // Halt the agent's in-flight tasks. Sourced from the DB (the single source of
     // truth) and run fire-and-forget so the synchronous stop path (abort + set
     // idle below) isn't blocked on DB round-trips. Signals set here still reach
@@ -492,40 +509,46 @@ export const statusMethods = {
     return true;
   },
 
-  /** Mark every in-flight task this agent is executing as stopped. The candidate
-   * set is the DB union of: tasks it owns (active), tasks assigned to it (active,
-   * started or being watched), and the task carrying its in-flight action_running
-   * flag. Clears action_running, pushes a stopped history entry (via
-   * _markTaskStopped), sets the 'stopped' signal so a waiting reminder loop exits,
-   * and emits task:updated. Board-level (ownerless) tasks emit under their own
-   * agentId = null. */
+  /** Mark the task(s) this agent is EXECUTING, in this environment, as stopped:
+   * its in-process run, the task carrying its run claim, and active tasks
+   * assigned to it that are started or being watched. Tasks it merely OWNS are
+   * left alone — the board's container agent owns every card, and halting them
+   * froze the whole board and released other agents' runs while their CLIs kept
+   * working. The stop is persisted (targeted, guarded by the column) BEFORE the
+   * 'stopped' signal is raised, so the waiting run cannot exit and clear the
+   * execution status in between. */
   async _haltAgentTasks(this: any, id: string, stopTimestamp: string): Promise<void> {
-    // Capture the running task BEFORE clearing the DB flags below.
-    const running = await getTaskByActionRunningAgent(id);
-    clearActionRunningForAgent(id);
-
-    const owned = (await getTasksByAgent(id)).filter((t: any) =>
-      this._isActiveTaskStatus(t.status)
-    );
+    const env = getCurrentEnvironment();
+    const halt = new Map<string, any>();
+    const reservedTaskId = getAgentRunningTaskId(id);
+    const reserved = reservedTaskId ? await getTaskById(reservedTaskId) : null;
+    const running = await getTaskByActionRunningAgent(id, env);
     const assigned = (await getTasksByAssignee(id)).filter(
       (t: any) =>
-        this._isActiveTaskStatus(t.status) && (t.startedAt || getTaskSignal(t.id, 'watching'))
+        t.assignee === id &&
+        (t.environment || 'prod') === env &&
+        this._isActiveTaskStatus(t.status) &&
+        (t.startedAt || t.actionRunning || getTaskSignal(t.id, 'watching'))
     );
-
-    const halt = new Map<string, any>();
-    for (const t of [...owned, ...assigned, ...(running ? [running] : [])]) {
-      if (!halt.has(t.id)) halt.set(t.id, t);
+    for (const t of [reserved, running, ...assigned]) {
+      if (t && !halt.has(t.id)) halt.set(t.id, t);
     }
+    // The durable Stop first, the claim release after: in between, a released
+    // but not yet stopped task could be claimed again by another process (a
+    // claim refuses a stopped task).
+    const stoppedRows = new Map<string, Task | null>();
     for (const t of halt.values()) {
-      const ownerId = t.agentId || null;
-      t.actionRunning = false;
-      delete t.actionRunningAgentId;
-      delete t.actionRunningMode;
-      if (this._isActiveTaskStatus(t.status)) {
-        this._markTaskStopped(t, ownerId, stopTimestamp);
-      }
+      stoppedRows.set(
+        t.id,
+        this._isActiveTaskStatus(t.status) ? await this._markTaskStopped(t, stopTimestamp) : null
+      );
+    }
+    await clearActionRunningForAgent(id, env);
+
+    for (const t of halt.values()) {
       setTaskSignal(t.id, 'stopped', true);
-      this._emit('task:updated', { agentId: ownerId, task: { ...t, agentId: ownerId } });
+      const fresh = await getTaskById(t.id).catch(() => stoppedRows.get(t.id) || null);
+      if (fresh) emitTaskUpdated(this, { ...fresh }, { emitAgent: false, stampUpdatedAt: true });
     }
   },
 };

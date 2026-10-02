@@ -155,7 +155,11 @@ const TABLES = [
       action_running BOOLEAN DEFAULT FALSE,
       action_running_agent_id UUID,
       action_running_mode TEXT,
+      -- Refreshed by a live run; see database/tasks.ts (run claims).
+      action_heartbeat_at TIMESTAMPTZ,
       pending_on_enter TEXT,
+      resume_transition_idx INTEGER,
+      commit_run JSONB,
       is_manual BOOLEAN DEFAULT FALSE,
       -- Provenance of the text (lib/taskTrust.ts): NULL = written inside the
       -- tenant, 'untrusted' = external (insert key) awaiting human approval,

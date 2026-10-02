@@ -319,3 +319,111 @@ test('sequencer creation phases survive while start, finish and fast-forward mov
     );
   }
 });
+
+// ── Review round 2 ──────────────────────────────────────────────────────────
+
+const { isUsableRepoName } = await import('../agentManager/tools/gitReconcile.js');
+const { writeFileSync } = await import('node:fs');
+const { join } = await import('node:path');
+
+test('a commit made in a linked worktree, on another branch, is the run work', async t => {
+  const f = gitFixture(t);
+  const worktree = `${f.repo}-wt`;
+  f.git(f.repo, 'worktree', 'add', '-b', 'feature', worktree);
+  f.git(worktree, 'commit', '--allow-empty', '-m', 'worktree work');
+  const hash = f.git(worktree, 'rev-parse', 'HEAD');
+  const found = await detectCommitsSinceBaseline(f.executionManager, 'agent', f);
+  assert.deepEqual(
+    found.map(c => c.hash),
+    [hash]
+  );
+});
+
+test("a later run rebasing the task's own commit keeps it on the task, and nobody else's", async t => {
+  const f = gitFixture(t);
+  // The task's earlier run: an unpushed commit, authored before this run.
+  writeFileSync(join(f.repo, 'work.txt'), 'task work\n');
+  f.git(f.repo, 'add', 'work.txt');
+  f.git(f.repo, 'commit', '-m', 'task work', '--date=2020-01-01T00:00:00Z');
+  const original = f.git(f.repo, 'rev-parse', 'HEAD');
+  // Someone else pushes; this run pulls with --rebase, replaying the commit.
+  f.git(f.peer, 'commit', '--allow-empty', '-m', 'unrelated');
+  f.git(f.peer, 'push');
+  f.git(f.repo, 'pull', '--rebase');
+  const replayed = f.git(f.repo, 'rev-parse', 'HEAD');
+  assert.notEqual(replayed, original);
+
+  // Without knowing the task's commits, a replay of old work is not this run's.
+  assert.deepEqual(await detectCommitsSinceBaseline(f.executionManager, 'agent', f), []);
+  // Knowing them, the replay of the task's own commit is linked to it.
+  const found = await detectCommitsSinceBaseline(f.executionManager, 'agent', {
+    ...f,
+    ownCommits: [original],
+  });
+  assert.deepEqual(
+    found.map(c => c.hash),
+    [replayed]
+  );
+  // An unrelated known hash never vouches for the replay.
+  assert.deepEqual(
+    await detectCommitsSinceBaseline(f.executionManager, 'agent', {
+      ...f,
+      ownCommits: ['f'.repeat(40)],
+    }),
+    []
+  );
+});
+
+test('events after the run ended are not attributed to it', async () => {
+  // event: HEAD@{1767225601} = 2026-01-01T00:00:01Z
+  const env = fakeEnv(event);
+  assert.equal(
+    (await detectCommitsSinceBaseline(env, 'agent', { startedAt: start, until: '2026-01-01T00:00:00Z' }))
+      .length,
+    0
+  );
+  assert.equal(
+    (await detectCommitsSinceBaseline(env, 'agent', { startedAt: start, until: '2026-01-01T00:00:02Z' }))
+      .length,
+    1
+  );
+});
+
+test('a rebase resumed after a conflict is a rewrite, judged on its author date', async () => {
+  const resumed = (authorTime: number) =>
+    `${HASH}\tHEAD@{1767225601}\trebase (continue): resolved\tresolved\t${authorTime}`;
+  assert.equal(
+    (await detectCommitsSinceBaseline(fakeEnv(resumed(1767225601)), 'agent', { startedAt: start }))
+      .length,
+    1,
+    'authored during the run'
+  );
+  assert.deepEqual(
+    await detectCommitsSinceBaseline(fakeEnv(resumed(1000)), 'agent', { startedAt: start }),
+    [],
+    'old work replayed'
+  );
+});
+
+test('remote-tracking and stash reflogs never count as local creation', async () => {
+  for (const selector of ['refs/remotes/origin/main@{1767225601}', 'refs/stash@{1767225601}']) {
+    const line = `${HASH}\t${selector}\tpull: storing head\tfeature`;
+    assert.deepEqual(
+      await detectCommitsSinceBaseline(fakeEnv(line), 'agent', { startedAt: start }),
+      [],
+      selector
+    );
+  }
+  const branch = `${HASH}\trefs/heads/feature@{1767225601}\tcommit: feature\tfeature`;
+  assert.equal(
+    (await detectCommitsSinceBaseline(fakeEnv(branch), 'agent', { startedAt: start })).length,
+    1
+  );
+});
+
+test('secondary repo names never leave the projects base', () => {
+  for (const ok of ['owner/repo', 'my-org/my.repo', 'a_b/c-d']) assert.equal(isUsableRepoName(ok), true, ok);
+  for (const bad of ['../etc', 'owner/..', './repo', 'owner/.', 'a/b/c', 'owner', "o'x/r", 'o/r;rm']) {
+    assert.equal(isUsableRepoName(bad), false, bad);
+  }
+});

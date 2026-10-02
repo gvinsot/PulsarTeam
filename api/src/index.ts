@@ -130,11 +130,18 @@ const io = new Server(httpServer, {
 });
 
 const skillManager = new SkillManager();
+// The runner of an agent not bound yet (after a restart, before its first run):
+// the same choice bindAgentRunner makes. Defaulting to the sandbox sent the
+// CLI-quiet checks and the commit recovery of a CLI agent to a runner that has
+// neither its terminal nor its clone. Late-bound: the AgentManager is built
+// below, from this ExecutionManager.
+let runnerOfAgent: (agentId: string) => string = () => 'sandbox';
 const executionManager = new ExecutionManager({
   claudecodeOptions: {
     baseUrl: process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
     apiKey: readSecret('CODER_API_KEY'),
   },
+  resolveProvider: agentId => runnerOfAgent(agentId),
 });
 const mcpManager = new MCPManager();
 const codeIndexService = new CodeIndexService();
@@ -145,6 +152,12 @@ const agentManager = new AgentManager(
   mcpManager,
   codeIndexService
 );
+runnerOfAgent = agentId => {
+  const agent = agentManager.agents.get(agentId);
+  if (!agent) return 'sandbox';
+  if (agent.runner) return agent.runner;
+  return agentManager.resolveLlmConfig?.(agent)?.managesContext ? 'claudecode' : 'sandbox';
+};
 setAgentManager(agentManager);
 app.set('io', io);
 app.set('agentManager', agentManager);

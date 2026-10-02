@@ -45,8 +45,15 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
   actionRunning: 'action_running',
   actionRunningAgentId: 'action_running_agent_id',
   actionRunningMode: 'action_running_mode',
+  actionHeartbeatAt: 'action_heartbeat_at',
   errorFromStatus: 'error_from_status',
   pendingOnEnter: 'pending_on_enter',
+  // Index (among the column's matching transitions) of the transition a
+  // deferred chain resumes in — completedActionIdx is relative to it.
+  resumeTransitionIdx: 'resume_transition_idx',
+  // Durable copy of the in-flight run's commit context (gitReconcile.ts), so a
+  // restart can still link what the agent committed before it.
+  commitRun: 'commit_run',
   isManual: 'is_manual',
   isTemplate: 'is_template',
   templateId: 'template_id',
@@ -96,6 +103,24 @@ export interface TaskCommit {
   date?: string;
   /** Set once the runner has pushed the commit; absent until then. */
   pushed?: boolean;
+  /** "owner/repo" when the commit lives in one of the task's SECONDARY repos;
+   *  absent for the primary repo. */
+  repo?: string;
+}
+
+/** The commit context of one run, persisted on the task while the run lives
+ *  (see agentManager/tools/gitReconcile.ts). */
+export interface TaskCommitRunRecord {
+  executorId: string;
+  baselineHead: string | null;
+  startedAt: string;
+  /** Baseline HEAD of each secondary repo ("owner/repo" → hash or null). */
+  secondaryBaselines?: Record<string, string | null>;
+  /** Set when the claim was cleared under the run (Stop, heal, reset): the run's
+   *  window closes here, and its commits are linked by the commit sweeper. */
+  endedAt?: string;
+  /** Failed recovery attempts (the sweeper gives up after a few). */
+  recoverAttempts?: number;
 }
 
 /** One append-only audit entry in `task.history`. Entries share a small core
@@ -159,7 +184,11 @@ export interface TaskRow {
   action_running: boolean | null;
   action_running_agent_id: string | null;
   action_running_mode: string | null;
+  /** Refreshed by a live run; a claim whose heartbeat stops is provably dead. */
+  action_heartbeat_at: Date | null;
   pending_on_enter: string | null;
+  resume_transition_idx: number | null;
+  commit_run: TaskCommitRunRecord | null;
   is_manual: boolean | null;
   /** lib/taskTrust.ts: NULL (tenant), 'untrusted' (external, unapproved), 'approved'. */
   trust_level: string | null;
@@ -243,9 +272,12 @@ export function rowToTask(row: TaskRow) {
     executionStatus: row.execution_status || undefined,
     completedActionIdx: row.completed_action_idx != null ? row.completed_action_idx : undefined,
     _pendingOnEnter: row.pending_on_enter || undefined,
+    resumeTransitionIdx: row.resume_transition_idx != null ? row.resume_transition_idx : undefined,
+    commitRun: row.commit_run || undefined,
     actionRunning: row.action_running || false,
     actionRunningAgentId: row.action_running_agent_id || undefined,
     actionRunningMode: row.action_running_mode || undefined,
+    actionHeartbeatAt: toIso(row.action_heartbeat_at ?? null) || undefined,
     errorFromStatus: row.error_from_status || undefined,
     isManual: row.is_manual || false,
     trustLevel: (row.trust_level as TaskTrustLevel | null) || null,
@@ -274,6 +306,9 @@ type ClearedInPlace =
   | 'actionRunningAgentId'
   | 'actionRunningMode'
   | 'completedActionIdx'
+  | 'resumeTransitionIdx'
+  | 'commitRun'
+  | 'actionHeartbeatAt'
   | '_pendingOnEnter'
   | 'executionStatus'
   | 'errorFromStatus'
@@ -466,10 +501,10 @@ async function _doSaveTask(task: TaskWriteInput) {
          storage_provider = $8, storage_path = $9,
          board_id = $10, assignee = $11,
          task_type = $12, priority = $13, due_date = $14, source = $15, recurrence = $16,
-         commits = $17, history = $18, error = $19, updated_at = NOW(),
+         history = $18, error = $19, updated_at = NOW(),
          completed_at = $21, started_at = $22,
-         execution_status = $23, completed_action_idx = $24, action_running = $25, action_running_agent_id = $26,
-         action_running_mode = $27, error_from_status = $28, is_manual = $29, position = $30,
+         execution_status = $23, completed_action_idx = $24,
+         error_from_status = $28, is_manual = $29, position = $30,
          pending_on_enter = $32, secondary_repos = $33,
          is_template = $34, template_id = $35, occurrence_seq = $36`,
       // trust_level / security_flags are NOT in the UPDATE list on purpose. Every
@@ -481,6 +516,11 @@ async function _doSaveTask(task: TaskWriteInput) {
       // `comments` is excluded from the UPDATE for the same stale-snapshot
       // reason: it is only ever mutated through appendTaskComment /
       // deleteTaskComment, which touch the column atomically.
+      // So are `commits` (mutateTaskCommits) and the run claim
+      // (action_running / action_running_agent_id / action_running_mode, owned by
+      // claimTaskRun / releaseTaskRun): a snapshot saved after a commit was linked,
+      // or after a run ended, used to drop that commit or resurrect the finished
+      // run's claim. A new row never starts claimed, whatever the object says.
       [
         task.id,
         task.agentId,
@@ -506,9 +546,9 @@ async function _doSaveTask(task: TaskWriteInput) {
         task.startedAt || null,
         task.executionStatus || null,
         task.completedActionIdx != null ? task.completedActionIdx : null,
-        task.actionRunning || false,
-        task.actionRunningAgentId || null,
-        task.actionRunningMode || null,
+        false,
+        null,
+        null,
         task.errorFromStatus || null,
         task.isManual || false,
         task.position ?? 0,
@@ -561,7 +601,12 @@ export async function restoreTaskFromDb(taskId: string) {
   if (!pool) return null;
   try {
     const updated = await pool.query(
-      'UPDATE tasks SET deleted_at = NULL, updated_at = NOW() WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id',
+      // A task deleted mid-run keeps its claim columns; restoring it must not bring
+      // that dead claim back (it would make its agent look busy everywhere).
+      `UPDATE tasks SET deleted_at = NULL, action_running = FALSE, action_running_agent_id = NULL,
+              action_running_mode = NULL, action_heartbeat_at = NULL, started_at = NULL,
+              commit_run = NULL, updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id`,
       [taskId]
     );
     if (updated.rows.length === 0) return null;
@@ -632,6 +677,7 @@ export async function getTasksForResume(environment?: string | null) {
       WHERE t.deleted_at IS NULL
         AND t.is_template IS NOT TRUE
         AND t.started_at IS NOT NULL
+        AND t.action_running IS NOT TRUE
         AND t.status NOT IN ('done', 'backlog', 'error')
         AND (t.execution_status IS NULL OR t.execution_status NOT IN ('watching', 'stopped'))
         AND (t.is_manual IS NULL OR t.is_manual = FALSE)
@@ -721,13 +767,75 @@ export async function getInterruptedChainTasks(environment?: string | null) {
   );
 }
 
-/**
- * Clear execution flags for all tasks involving a given agent (as assignee or owner).
- */
-export async function clearTaskExecutionFlags(agentId: string) {
+// A run whose claim is cleared by someone else (Stop, heal, boot cleanup, agent
+// reset) leaves its commit context behind, stamped with the moment it ended:
+// the commits made up to then are linked later (recoverPersistedCommitRun, run
+// by the commit sweeper), and nothing made after that point is attributed to it.
+const COMMIT_RUN_ENDED = `CASE WHEN commit_run IS NULL OR commit_run ? 'endedAt' THEN commit_run
+  ELSE commit_run || jsonb_build_object('endedAt', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) END`;
+
+/** Stamp the end of a task's run context (see COMMIT_RUN_ENDED). */
+export async function markTaskCommitRunEnded(taskId: string) {
   const pool = getPool();
   if (!pool) return;
   try {
+    await pool.query(`UPDATE tasks SET commit_run = ${COMMIT_RUN_ENDED} WHERE id = $1`, [taskId]);
+  } catch (err) {
+    console.error('Failed to stamp the end of a commit run:', errorMessage(err));
+  }
+}
+
+/**
+ * Forget a task's run context — only while it is still the one that started at
+ * `startedAt`: a later run of the same task may have replaced it.
+ */
+export async function clearTaskCommitRun(taskId: string, startedAt: string | null) {
+  const pool = getPool();
+  if (!pool) return;
+  try {
+    await pool.query(
+      `UPDATE tasks SET commit_run = NULL
+        WHERE id = $1 AND commit_run IS NOT NULL
+          AND ($2::text IS NULL OR commit_run->>'startedAt' = $2::text)`,
+      [taskId, startedAt]
+    );
+  } catch (err) {
+    console.error('Failed to clear a commit run:', errorMessage(err));
+  }
+}
+
+/**
+ * Run contexts of `environment` left with no claim — the run that wrote them
+ * ended without linking its commits (killed, stopped elsewhere, or its repos
+ * could not be read). A live run always holds its task's claim.
+ */
+export async function getOrphanCommitRuns(environment: string): Promise<Task[]> {
+  return queryTasks(
+    `WHERE t.commit_run IS NOT NULL AND t.action_running IS NOT TRUE
+        AND t.deleted_at IS NULL AND t.environment = $1 AND ${NOT_TEMPLATE}`,
+    [environment],
+    'Failed to get orphan commit runs:'
+  );
+}
+
+/**
+ * Clear execution flags for the tasks a given agent EXECUTES (its assignments and
+ * its live claim). Tasks it merely owns are left alone: the board's container
+ * agent owns every card, and wiping their flags would orphan the runs other
+ * agents have in flight.
+ */
+export async function clearTaskExecutionFlags(agentId: string, environment: string | null = null) {
+  const pool = getPool();
+  if (!pool) return;
+  try {
+    // Scoped to one environment when given: the sibling stack's run on this
+    // (shared) agent is not this stack's to clear.
+    const params: unknown[] = [agentId];
+    let envFilter = '';
+    if (environment) {
+      params.push(environment);
+      envFilter = 'AND environment = $2';
+    }
     await pool.query(
       `
       UPDATE tasks SET
@@ -738,13 +846,16 @@ export async function clearTaskExecutionFlags(agentId: string) {
         action_running = FALSE,
         action_running_agent_id = NULL,
         action_running_mode = NULL,
+        action_heartbeat_at = NULL,
+        commit_run = ${COMMIT_RUN_ENDED},
         error_from_status = NULL,
         updated_at = NOW()
       WHERE deleted_at IS NULL
-        AND (assignee = $1 OR agent_id = $1)
+        AND (assignee = $1 OR action_running_agent_id = $1)
         AND (started_at IS NOT NULL OR execution_status IS NOT NULL OR action_running = TRUE)
+        ${envFilter}
     `,
-      [agentId]
+      params
     );
   } catch (err) {
     console.error('Failed to clear task execution flags:', errorMessage(err));
@@ -768,22 +879,35 @@ export async function updateTaskExecutionStatus(taskId: string, executionStatus:
 }
 
 /**
- * Clear action_running flags for tasks assigned to a specific agent.
+ * Clear the run claim an agent holds. Scoped to one environment when given: a
+ * Stop served by one stack interrupts that stack's PTY only, so it must not
+ * release a run the sibling stack is driving on the same (shared) agent.
  */
-export async function clearActionRunningForAgent(agentId: string) {
+export async function clearActionRunningForAgent(
+  agentId: string,
+  environment: string | null = null
+) {
   const pool = getPool();
   if (!pool) return;
   try {
+    const params: unknown[] = [agentId];
+    let envFilter = '';
+    if (environment) {
+      params.push(environment);
+      envFilter = 'AND environment = $2';
+    }
     await pool.query(
       `
       UPDATE tasks SET
         action_running = FALSE,
         action_running_agent_id = NULL,
         action_running_mode = NULL,
+        action_heartbeat_at = NULL,
+        commit_run = ${COMMIT_RUN_ENDED},
         updated_at = NOW()
-      WHERE action_running_agent_id = $1 AND action_running = TRUE
+      WHERE action_running_agent_id = $1 AND action_running = TRUE ${envFilter}
     `,
-      [agentId]
+      params
     );
   } catch (err) {
     console.error('Failed to clear action_running for agent:', errorMessage(err));
@@ -791,33 +915,58 @@ export async function clearActionRunningForAgent(agentId: string) {
 }
 
 /**
- * Clear action_running flags for tasks on startup (service restart recovery).
- * After a crash, no actions are actually running — the flags are stale. The
- * same goes for execution_status='watching': the watch loop that set it died
- * with the process, and leaving it behind would block both the resume loop
- * and the workflow re-arm forever.
+ * Boot-time cleanup of the execution markers this environment left behind.
  *
- * When `environment` is provided, only tasks tagged for that environment are
- * cleared, so a sibling replica's locks aren't wiped on restart.
+ *   • execution_status='watching' — the wait loop that set it died with the
+ *     previous process; left behind it hides the task from the resume loop and
+ *     the workflow recheck forever. Rows still holding a LIVE claim (fresh
+ *     heartbeat: the previous replica of a start-first update is still running
+ *     them) keep it.
+ *   • legacy claims (action_running without a heartbeat, written by a build that
+ *     predates heartbeats) — nothing can ever prove them alive, so they are
+ *     cleared, and the column's on_enter is re-armed (the run they marked was
+ *     interrupted mid-column; reArmInterruptedChains skips claimed rows, so
+ *     nothing else would ever pick the task up again). Heartbeated claims are
+ *     left to healStaleRunClaim, which only clears them once their run has
+ *     provably stopped.
+ *
+ * Returns the number of rows touched.
  */
-export async function clearAllStaleActionRunning(environment?: string | null) {
+export async function clearAllStaleActionRunning(
+  environment?: string | null,
+  staleSeconds: number = RUN_CLAIM_STALE_SECONDS
+) {
   const pool = getPool();
   if (!pool) return 0;
   try {
-    const params: unknown[] = [];
+    const params: unknown[] = [staleSeconds];
     let envFilter = '';
     if (environment) {
       params.push(environment);
-      envFilter = `AND environment = $1`;
+      envFilter = `AND environment = $2`;
     }
     const result = await pool.query(
       `
       UPDATE tasks SET
-        action_running = FALSE,
-        action_running_agent_id = NULL,
+        action_running = CASE WHEN action_heartbeat_at IS NULL THEN FALSE ELSE action_running END,
+        action_running_agent_id = CASE WHEN action_heartbeat_at IS NULL THEN NULL ELSE action_running_agent_id END,
+        action_running_mode = CASE WHEN action_heartbeat_at IS NULL THEN NULL ELSE action_running_mode END,
+        pending_on_enter = CASE
+          WHEN action_running = TRUE AND action_heartbeat_at IS NULL
+               AND status NOT IN ('done', 'error') AND execution_status IS DISTINCT FROM 'stopped'
+          THEN status ELSE pending_on_enter END,
+        commit_run = CASE
+          WHEN action_running = TRUE AND action_heartbeat_at IS NULL THEN ${COMMIT_RUN_ENDED}
+          ELSE commit_run END,
         execution_status = CASE WHEN execution_status = 'watching' THEN NULL ELSE execution_status END,
         updated_at = NOW()
-      WHERE (action_running = TRUE OR execution_status = 'watching') AND deleted_at IS NULL
+      WHERE deleted_at IS NULL
+        AND (
+          (action_running = TRUE AND action_heartbeat_at IS NULL)
+          OR (execution_status = 'watching'
+              AND (action_running IS NOT TRUE
+                   OR action_heartbeat_at < NOW() - make_interval(secs => $1)))
+        )
       ${envFilter}
     `,
       params
@@ -887,12 +1036,21 @@ export async function getBoardWithMostTasksForProject(projectName: string) {
  * authoritative "this agent is working this task right now" signal. Returns the
  * most-recently-started match, or null.
  */
-export async function getTaskByActionRunningAgent(agentId: string) {
+export async function getTaskByActionRunningAgent(
+  agentId: string,
+  environment: string | null = null
+) {
+  const params: unknown[] = [agentId];
+  let envFilter = '';
+  if (environment) {
+    params.push(environment);
+    envFilter = 'AND t.environment = $2';
+  }
   return queryOneTask(
     `WHERE t.action_running_agent_id = $1 AND t.action_running IS TRUE AND t.deleted_at IS NULL
-         AND ${NOT_TEMPLATE}
+         AND ${NOT_TEMPLATE} ${envFilter}
        ORDER BY t.started_at DESC NULLS LAST LIMIT 1`,
-    [agentId],
+    params,
     'Failed to get task by action-running agent:'
   );
 }
@@ -1309,10 +1467,41 @@ export async function getTasksByStatusAndBoard(
   );
 }
 
+/** Resolve a field name (camelCase or snake_case) to its writable column. */
+function taskColumnFor(key: string): string | null {
+  // Object.hasOwn avoids prototype-chain keys (e.g. 'toString') sneaking in.
+  if (Object.hasOwn(TASK_COLUMN_BY_FIELD, key)) return TASK_COLUMN_BY_FIELD[key];
+  return TASK_COLUMNS.has(key) ? key : null;
+}
+
+/** Objects and arrays go to JSONB columns as JSON text; scalars and Dates as-is. */
+function toColumnValue(value: unknown): unknown {
+  if (value instanceof Date) return value;
+  return typeof value === 'object' && value !== null ? JSON.stringify(value) : value;
+}
+
+export interface UpdateTaskFieldsOptions {
+  /**
+   * Apply the update only if these columns still hold these values (null means
+   * IS NULL). Returns null — nothing written — when the row no longer matches,
+   * which is how a writer avoids clobbering a change made since it looked.
+   */
+  expect?: Record<string, unknown>;
+}
+
 /**
- * Update specific fields of a task. Returns the updated task.
+ * Update specific fields of a task. Returns the updated task, or null when
+ * nothing was written (unknown task, `expect` mismatch, DB error).
+ *
+ * `historyAppend: [entry, …]` appends to `history` atomically (jsonb concat)
+ * instead of rewriting the array from a snapshot, so concurrent writers cannot
+ * drop each other's audit entries. Prefer it to passing `history`.
  */
-export async function updateTaskFields(taskId: string, fields: Record<string, unknown>) {
+export async function updateTaskFields(
+  taskId: string,
+  fields: Record<string, unknown>,
+  { expect }: UpdateTaskFieldsOptions = {}
+) {
   const pool = getPool();
   if (!pool) return null;
   const sets: string[] = [];
@@ -1320,35 +1509,39 @@ export async function updateTaskFields(taskId: string, fields: Record<string, un
   // set — strings, numbers, Dates, or JSON.stringify'd objects (see below).
   const values: unknown[] = [taskId];
   let paramIdx = 2;
-  for (const [key, value] of Object.entries(fields)) {
+  const { historyAppend, ...columns } = fields;
+  for (const [key, value] of Object.entries(columns)) {
     // Resolve the writable column: a known camelCase field maps to its snake_case
     // column, or an already-snake_case key passes through if it is a known column.
-    // Object.hasOwn avoids prototype-chain keys (e.g. 'toString') sneaking in.
-    const col = Object.hasOwn(TASK_COLUMN_BY_FIELD, key)
-      ? TASK_COLUMN_BY_FIELD[key]
-      : TASK_COLUMNS.has(key)
-        ? key
-        : null;
+    const col = taskColumnFor(key);
     if (!col) continue;
-    // JSON-serialize objects
-    const val =
-      typeof value === 'object' &&
-      value !== null &&
-      !Array.isArray(value) &&
-      !(value instanceof Date)
-        ? JSON.stringify(value)
-        : Array.isArray(value)
-          ? JSON.stringify(value)
-          : value;
     sets.push(`${col} = $${paramIdx}`);
-    values.push(val);
+    values.push(toColumnValue(value));
+    paramIdx++;
+  }
+  if (Array.isArray(historyAppend) && historyAppend.length > 0 && !('history' in columns)) {
+    sets.push(`history = COALESCE(history, '[]'::jsonb) || $${paramIdx}::jsonb`);
+    values.push(JSON.stringify(historyAppend));
     paramIdx++;
   }
   if (sets.length === 0) return null;
   sets.push('updated_at = NOW()');
+  const guards: string[] = [];
+  for (const [key, value] of Object.entries(expect || {})) {
+    const col = taskColumnFor(key);
+    if (!col) continue;
+    if (value === null || value === undefined) {
+      guards.push(`${col} IS NULL`);
+    } else {
+      guards.push(`${col} = $${paramIdx}`);
+      values.push(toColumnValue(value));
+      paramIdx++;
+    }
+  }
+  const where = ['id = $1', ...guards].join(' AND ');
   try {
     const updated = await pool.query(
-      `UPDATE tasks SET ${sets.join(', ')} WHERE id = $1 RETURNING id`,
+      `UPDATE tasks SET ${sets.join(', ')} WHERE ${where} RETURNING id`,
       values
     );
     if (updated.rows.length === 0) return null;
@@ -1356,6 +1549,329 @@ export async function updateTaskFields(taskId: string, fields: Record<string, un
     return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
   } catch (err) {
     console.error('Failed to update task fields:', errorMessage(err));
+    return null;
+  }
+}
+
+// ─── Run claims: one live run per task AND per agent, enforced by the DB ──────
+//
+// Every execution (workflow run_agent action, task-loop resume, explicit start)
+// CLAIMS its task before it touches the agent: action_running +
+// action_running_agent_id are set by ONE conditional UPDATE. Two guards make the
+// claim exclusive across processes, replicas and the environments sharing this DB:
+//   • `action_running IS NOT TRUE` — a task already being run is not claimed twice;
+//   • the partial unique index uniq_tasks_running_agent — an agent already running
+//     ANOTHER task anywhere makes the UPDATE fail with 23505.
+// The in-process reservation (workflow/agentSelector.ts) stays the synchronous
+// first line of defence; this is what holds when it cannot see the other run.
+//
+// A live run refreshes action_heartbeat_at; a claim whose heartbeat stopped
+// belongs to a run that is provably gone (crash, killed replica, stopped stack)
+// and is healed by healStaleRunClaim, from any environment.
+
+/** A claim whose heartbeat is older than this is dead (heartbeat every ~20 s). */
+export const RUN_CLAIM_STALE_SECONDS = 120;
+/** Legacy claims (no heartbeat) of the own environment are dead after this. */
+export const LEGACY_CLAIM_STALE_MINUTES = 20;
+
+export type TaskRunClaimFailure =
+  | 'task-running'
+  | 'agent-busy'
+  | 'moved'
+  | 'stopped'
+  | 'missing'
+  | 'error';
+
+/**
+ * Claim `taskId` for `agentId`. With `expectStatus`, only while the task still
+ * sits in that column: a card moved on while its old column's run was being
+ * prepared must not be run with that column's instructions. A task the user
+ * stopped is never claimed (its Stop may land before the claim). A workflow
+ * run's claim also consumes the column's retry marker (pending_on_enter): left
+ * set, a sibling replica could dispatch the column again while this run is
+ * going. A task-loop resume ('resume') is no workflow action and leaves it.
+ */
+export async function claimTaskRun(
+  taskId: string,
+  agentId: string,
+  mode: string,
+  expectStatus: string | null = null
+): Promise<{ ok: true; task: Task } | { ok: false; reason: TaskRunClaimFailure }> {
+  const pool = getPool();
+  if (!pool) return { ok: false, reason: 'error' };
+  try {
+    const claimed = await pool.query(
+      `UPDATE tasks
+          SET action_running = TRUE, action_running_agent_id = $2, action_running_mode = $3,
+              started_at = COALESCE(started_at, NOW()), action_heartbeat_at = NOW(),
+              pending_on_enter = CASE WHEN $3 = 'resume' THEN pending_on_enter ELSE NULL END,
+              updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL AND action_running IS NOT TRUE
+          AND ($4::text IS NULL OR status = $4::text)
+          AND execution_status IS DISTINCT FROM 'stopped'
+        RETURNING id`,
+      [taskId, agentId, mode, expectStatus]
+    );
+    const task = await getTaskById(taskId);
+    if (claimed.rows.length === 0) {
+      if (!task) return { ok: false, reason: 'missing' };
+      if (task.actionRunning) return { ok: false, reason: 'task-running' };
+      if (task.executionStatus === 'stopped') return { ok: false, reason: 'stopped' };
+      return { ok: false, reason: 'moved' };
+    }
+    if (!task) {
+      // Claimed but unreadable: never leave the claim behind with no run to
+      // heartbeat or release it.
+      await releaseTaskRun(taskId, agentId).catch(() => {});
+      return { ok: false, reason: 'error' };
+    }
+    return { ok: true, task };
+  } catch (err) {
+    if ((err as { code?: string })?.code === '23505') return { ok: false, reason: 'agent-busy' };
+    console.error('Failed to claim task run:', errorMessage(err));
+    return { ok: false, reason: 'error' };
+  }
+}
+
+/** Keep a live claim fresh. Leaves updated_at alone: nothing visible changed.
+ *  Returns false when the claim is gone, null when the DB could not be reached. */
+export async function heartbeatTaskRun(taskId: string, agentId: string): Promise<boolean | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const r = await pool.query(
+      `UPDATE tasks SET action_heartbeat_at = NOW()
+        WHERE id = $1 AND action_running IS TRUE AND action_running_agent_id = $2
+        RETURNING id`,
+      [taskId, agentId]
+    );
+    return r.rows.length > 0;
+  } catch (err) {
+    console.error('Failed to heartbeat task run:', errorMessage(err));
+    return null;
+  }
+}
+
+/**
+ * End a run: clear its claim — but only while it is still THIS agent's. A Stop
+ * or the healer may have cleared it already, and another run's claim must never
+ * be released by a finished one. `clearAssignee` drops the assignee only if it
+ * is still the executor (a user may have reassigned the task meanwhile).
+ * Throws on a DB error so the caller can retry; returns the fresh row.
+ */
+export async function releaseTaskRun(
+  taskId: string,
+  agentId: string,
+  {
+    clearAssignee = false,
+    keepStartedAt = false,
+  }: { clearAssignee?: boolean; keepStartedAt?: boolean } = {}
+): Promise<Task | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  await pool.query(
+    `UPDATE tasks
+        SET action_running = FALSE, action_running_agent_id = NULL, action_running_mode = NULL,
+            action_heartbeat_at = NULL,
+            started_at = CASE WHEN $3::boolean THEN started_at ELSE NULL END,
+            updated_at = NOW()
+      WHERE id = $1 AND action_running IS TRUE AND action_running_agent_id = $2`,
+    [taskId, agentId, keepStartedAt]
+  );
+  if (clearAssignee) {
+    // Independent of the claim: a Stop clears the claim before the run ends, and
+    // the executor must not stay assigned to the card it was stopped on. Never
+    // while another run holds the task.
+    await pool.query(
+      `UPDATE tasks SET assignee = NULL, updated_at = NOW()
+        WHERE id = $1 AND assignee = $2 AND action_running IS NOT TRUE`,
+      [taskId, agentId]
+    );
+  }
+  return getTaskById(taskId);
+}
+
+/** Agents holding a live (or not yet healed) run claim, in any environment. */
+export async function getRunningAgentIds(): Promise<Set<string>> {
+  const pool = getPool();
+  if (!pool) return new Set();
+  try {
+    const r = await pool.query<{ agent: string }>(
+      `SELECT DISTINCT action_running_agent_id AS agent FROM tasks
+        WHERE action_running IS TRUE AND deleted_at IS NULL AND action_running_agent_id IS NOT NULL`
+    );
+    return new Set(r.rows.map(row => row.agent));
+  } catch (err) {
+    console.error('Failed to list running agents:', errorMessage(err));
+    return new Set();
+  }
+}
+
+/** Predicate shared by the stale-claim query and its conditional heal. */
+const STALE_CLAIM_SQL = `t.action_running IS TRUE AND t.deleted_at IS NULL AND (
+     (t.action_heartbeat_at IS NOT NULL
+        AND t.action_heartbeat_at < NOW() - make_interval(secs => $1))
+     OR (t.action_heartbeat_at IS NULL AND t.environment = $2
+        AND (t.started_at IS NULL OR t.started_at < NOW() - make_interval(mins => $3))))`;
+
+/**
+ * Claims whose run is provably gone: heartbeat older than `staleSeconds` (any
+ * environment — a dead stack cannot heartbeat, and its claim would otherwise
+ * block the shared agent everywhere), or legacy claims without a heartbeat of
+ * `ownEnv` older than `legacyMinutes`.
+ */
+export async function getStaleRunClaims(
+  ownEnv: string,
+  staleSeconds: number = RUN_CLAIM_STALE_SECONDS,
+  legacyMinutes: number = LEGACY_CLAIM_STALE_MINUTES
+): Promise<Task[]> {
+  return queryTasks(
+    `WHERE ${STALE_CLAIM_SQL} AND ${NOT_TEMPLATE} ORDER BY t.created_at`,
+    [staleSeconds, ownEnv, legacyMinutes],
+    'Failed to get stale run claims:'
+  );
+}
+
+/**
+ * Clear one stale claim, re-checking staleness atomically (a heartbeat that
+ * landed since the query keeps the claim), and re-arm the column's on_enter so
+ * the workflow picks the task up again. The started_at stamp is kept: it is
+ * what lets the resume loop pick up a run interrupted in a column without
+ * workflow actions. Returns the healed row (with the stale claim's agent in
+ * `staleAgentId`), or null when it was not stale anymore.
+ */
+export async function healStaleRunClaim(
+  taskId: string,
+  ownEnv: string,
+  staleSeconds: number = RUN_CLAIM_STALE_SECONDS,
+  legacyMinutes: number = LEGACY_CLAIM_STALE_MINUTES
+): Promise<(Task & { staleAgentId: string | null }) | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const r = await pool.query<{ agent: string | null }>(
+      `WITH stale AS (
+         SELECT t.id, t.action_running_agent_id AS agent FROM tasks t
+          WHERE t.id = $4 AND ${STALE_CLAIM_SQL}
+          FOR UPDATE)
+       UPDATE tasks u
+          SET action_running = FALSE, action_running_agent_id = NULL, action_running_mode = NULL,
+              action_heartbeat_at = NULL,
+              commit_run = ${COMMIT_RUN_ENDED.replace(/commit_run/g, 'u.commit_run')},
+              execution_status = CASE WHEN u.execution_status = 'watching' THEN NULL ELSE u.execution_status END,
+              pending_on_enter = CASE
+                WHEN u.status IN ('done', 'error') OR u.execution_status = 'stopped' THEN u.pending_on_enter
+                ELSE u.status END,
+              updated_at = NOW()
+         FROM stale WHERE u.id = stale.id
+       RETURNING stale.agent`,
+      [staleSeconds, ownEnv, legacyMinutes, taskId]
+    );
+    if (r.rows.length === 0) return null;
+    const task = await getTaskById(taskId);
+    return task ? { ...task, staleAgentId: r.rows[0].agent } : null;
+  } catch (err) {
+    console.error('Failed to heal stale run claim:', errorMessage(err));
+    return null;
+  }
+}
+
+/**
+ * Agents that are the explicit assignee of an active (non backlog/done/error)
+ * task other than `excludeTaskId`, on the same board and in the same
+ * environment. Automatic assignment skips them, so the engine never puts one
+ * agent on two in-progress cards of a board — while a card parked on another
+ * board, or a QA card, does not starve this board's queue.
+ */
+export async function getActiveAssigneeIds(
+  excludeTaskId: string | null,
+  scope: { boardId: string | null; environment: string | null }
+) {
+  const pool = getPool();
+  if (!pool) return new Set<string>();
+  try {
+    const r = await pool.query<{ agent: string }>(
+      `SELECT DISTINCT assignee AS agent FROM tasks
+        WHERE assignee IS NOT NULL AND deleted_at IS NULL AND is_template IS NOT TRUE
+          AND status NOT IN ('done', 'backlog', 'error')
+          AND ($1::uuid IS NULL OR id <> $1::uuid)
+          AND board_id IS NOT DISTINCT FROM $2::uuid
+          AND COALESCE(environment, 'prod') = COALESCE($3::text, 'prod')`,
+      [excludeTaskId, scope.boardId, scope.environment]
+    );
+    return new Set(r.rows.map(row => row.agent));
+  } catch (err) {
+    console.error('Failed to list active assignees:', errorMessage(err));
+    return new Set<string>();
+  }
+}
+
+/**
+ * Read-modify-write of `commits` under a row lock, in one transaction: two
+ * linkers running at once (mid-run sweep, update_task, end-of-run reconcile)
+ * both land, which a read + full-row save could not guarantee. `mutate`
+ * receives the current list and returns the new one, or null for "no change".
+ * Returns `{ task, changed }`, or null when the task does not exist.
+ */
+export async function mutateTaskCommits(
+  taskId: string,
+  mutate: (commits: TaskCommit[]) => TaskCommit[] | null
+): Promise<{ task: Task; changed: boolean } | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const client = await pool.connect();
+  let changed = false;
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query<{ commits: TaskCommit[] | null }>(
+      'SELECT commits FROM tasks WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
+      [taskId]
+    );
+    if (cur.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const next = mutate(Array.isArray(cur.rows[0].commits) ? [...cur.rows[0].commits] : []);
+    if (next) {
+      await client.query('UPDATE tasks SET commits = $2, updated_at = NOW() WHERE id = $1', [
+        taskId,
+        JSON.stringify(next),
+      ]);
+      changed = true;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  const task = await getTaskById(taskId);
+  return task ? { task, changed } : null;
+}
+
+/**
+ * Hand a task to another owning agent IN PLACE: same id, same commits, history,
+ * comments and attachments (re-creating the row lost them all, and orphaned the
+ * commits of a run still pointing at the old id).
+ */
+export async function transferTaskOwner(
+  taskId: string,
+  toAgentId: string,
+  historyEntry: TaskHistoryEntry
+): Promise<Task | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const r = await pool.query(
+      `UPDATE tasks SET agent_id = $2, assignee = $2,
+              history = COALESCE(history, '[]'::jsonb) || $3::jsonb, updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
+      [taskId, toAgentId, JSON.stringify([historyEntry])]
+    );
+    return r.rows.length ? getTaskById(taskId) : null;
+  } catch (err) {
+    console.error('Failed to transfer task:', errorMessage(err));
     return null;
   }
 }

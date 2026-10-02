@@ -22,7 +22,7 @@ mock.module('../database.js', {
   namedExports: { ...realDb, getTaskById: async () => dbState.task },
 });
 
-const { tasksMethods, setTaskSignal, getTaskSignal, clearTaskSignals } =
+const { tasksMethods, setTaskSignal, getTaskSignal, clearTaskSignals, setAwaitingCompletion } =
   await import('../agentManager/tasks.js');
 
 // Minimal `this`: only _isActiveTaskStatus is consulted by _pollTaskVerdict.
@@ -35,6 +35,8 @@ const poll = (taskId: string, startStatus: string | undefined) =>
 test("'completed' wins and clears the completed+comment signals", async () => {
   const id = 't-completed';
   clearTaskSignals(id);
+  // A resume wait registers itself as the consumer of the completion signal.
+  setAwaitingCompletion(id, true);
   dbState.task = { id, status: 'execute' };
   setTaskSignal(id, 'completed', true);
   setTaskSignal(id, 'comment', 'done it');
@@ -46,6 +48,31 @@ test("'completed' wins and clears the completed+comment signals", async () => {
   assert.equal(getTaskSignal(id, 'comment'), undefined, 'comment cleared');
   // stopped left intact (only consumed when it is the winning verdict)
   assert.equal(getTaskSignal(id, 'stopped'), true);
+  setAwaitingCompletion(id, false);
+});
+
+test('a completion nobody waits for is discarded, never taken as the verdict', async () => {
+  // Raised by an update_task while no run awaited it (a manager, or the agent
+  // after its run ended): it must not end the NEXT run of the task the moment
+  // its prompt is pasted — that freed the agent while its CLI kept working.
+  const id = 't-stale-completed';
+  clearTaskSignals(id);
+  dbState.task = { id, status: 'code' };
+  setTaskSignal(id, 'completed', true);
+  setTaskSignal(id, 'comment', 'old summary');
+
+  assert.equal(await poll(id, 'code'), null);
+  assert.equal(getTaskSignal(id, 'completed'), undefined, 'stale signal consumed');
+  assert.equal(getTaskSignal(id, 'comment'), undefined);
+});
+
+test('a run that starts in an inactive column is not "moved" while it stays there', async () => {
+  const id = 't-backlog-start';
+  clearTaskSignals(id);
+  dbState.task = { id, status: 'backlog' };
+  assert.equal(await poll(id, 'backlog'), null);
+  dbState.task = { id, status: 'code' };
+  assert.equal(await poll(id, 'backlog'), 'moved');
 });
 
 test("'stopped' wins over deleted/moved and clears the stopped signal", async () => {

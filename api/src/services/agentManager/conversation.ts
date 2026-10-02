@@ -7,6 +7,7 @@ import {
 } from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
 import { clearRunProfile } from '../security/externalRunProfile.js';
+import { getCurrentEnvironment } from '../../lib/environment.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const conversationMethods = {
@@ -105,8 +106,9 @@ export const conversationMethods = {
     for (const t of involved.values()) {
       if (getTaskSignal(t.id, 'watching')) setTaskSignal(t.id, 'stopped', true);
     }
-    // Persist the cleared execution flags to DB
-    clearTaskExecutionFlags(agentId);
+    // Persist the cleared execution flags to DB — this environment's only: the
+    // sibling stack's run on this (shared) agent is not this reset's to clear.
+    clearTaskExecutionFlags(agentId, getCurrentEnvironment());
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return true;

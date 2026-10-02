@@ -10,8 +10,10 @@ import {
   getTasksByAssignee,
   getActiveTaskForExecutor,
   getTaskByActionRunningAgent,
+  getTaskById,
   updateTaskFields,
 } from '../database.js';
+import { getAgentRunningTaskId } from '../workflow/agentSelector.js';
 import { NATIVE_TOOL_DEFINITIONS, type NativeToolCall } from '../nativeTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
@@ -492,7 +494,14 @@ export const chatMethods = {
           err.message
         );
 
-        const activeTask = await getActiveTaskForExecutor(id);
+        // Only the task THIS call serves goes to error: the workflow action's
+        // task (messageMeta), or the run this agent is executing. "The oldest
+        // started task assigned to the agent" errored a task another agent was
+        // running, and a plain chat errored whatever task the agent was last on.
+        const servedTaskId = messageMeta?.taskId || getAgentRunningTaskId(id);
+        const servedTask = servedTaskId ? await getTaskById(servedTaskId) : null;
+        const activeTask =
+          servedTask && this._isActiveTaskStatus(servedTask.status) ? servedTask : null;
         if (activeTask) {
           // Persist the error text first, then flip status — setTaskStatus
           // re-fetches the row and preserves the error in its upsert.

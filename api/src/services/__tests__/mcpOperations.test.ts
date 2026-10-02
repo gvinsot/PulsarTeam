@@ -110,9 +110,13 @@ function setup() {
     runnerSessions: { private: 'SESSION_SECRET' },
     conversationHistory: ['HISTORY_SECRET'],
   };
-  const resume = mock.fn(async (_id: string, _agent: object, task: { id: string }) => {
-    await taskDb.updateTaskFields(task.id, { startedAt: new Date().toISOString() });
-  });
+  // Stands in for _resumeActiveTask: like the real run, it claims the task for
+  // its executor (the durable "running" marker the Stop path keys on).
+  const resume = mock.fn(
+    async (_id: string, _agent: object, task: { id: string; assignee?: string | null }) => {
+      await taskDb.claimTaskRun(task.id, task.assignee || 'agent', 'resume');
+    }
+  );
   const interrupt = mock.fn(async () => true);
   const controller = new AbortController();
   const manager = {

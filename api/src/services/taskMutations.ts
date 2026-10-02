@@ -10,7 +10,9 @@
 // registry (assignee enrichment), emit over the WS layer, and (for the persist
 // variants) hit the DB accessors. The DB is the single source of truth — there
 // is no in-memory task store.
-import { saveTaskToDb, updateTaskFields, appendTaskComment } from './database.js';
+import { saveTaskToDb, updateTaskFields, appendTaskComment, getTaskById } from './database.js';
+import { markTaskError } from './workflow/taskErrors.js';
+import type { Task, TaskHistoryEntry } from './database/tasks.js';
 import { recordTaskComment, type TaskComment, type TaskCommentInput } from '../lib/taskComments.js';
 
 export { recordTaskComment };
@@ -98,6 +100,55 @@ export function persistThenEmit(
     .then(() => emitTaskUpdated(agentManager, payload, { emitAgent, stampUpdatedAt }));
 }
 
+/**
+ * Put a task in error (markTaskError's invariants: errorFromStatus kept valid
+ * and visible) with a TARGETED write of exactly what that changes, plus an
+ * atomic history append, then emit. The full-row saves this replaces wrote a
+ * snapshot back — dropping commits linked meanwhile, or reverting a move.
+ * Leaves the run claim alone: the run that failed releases it. Returns the fresh
+ * row, or null when the task is gone.
+ */
+export async function persistTaskError(
+  agentManager: Parameters<typeof emitTaskUpdated>[0],
+  taskId: string,
+  message: string | undefined,
+  opts: {
+    by: string;
+    mode?: string | null;
+    actionIndex?: number | null;
+    agentName?: string | null;
+    actionType?: string | null;
+    workflow?: Parameters<typeof markTaskError>[2]['workflow'];
+  }
+): Promise<Task | null> {
+  const task = await getTaskById(taskId);
+  if (!task) return null;
+  let workflow = opts.workflow ?? null;
+  if (!workflow && task.boardId) {
+    try {
+      // Imported lazily: this module stays out of configManager's import graph
+      // (consumers mock the database module with only what they use).
+      const { getWorkflowForBoard } = await import('./configManager.js');
+      workflow = await getWorkflowForBoard(task.boardId);
+    } catch {
+      /* best-effort: markTaskError still works without column validation */
+    }
+  }
+  const draft: Task & { history: TaskHistoryEntry[] } = { ...task, history: [] };
+  if (!markTaskError(draft, message, { ...opts, workflow })) return task;
+  const entry = draft.history[draft.history.length - 1];
+  if (entry && opts.actionType) entry.actionType = opts.actionType;
+  const updated = await updateTaskFields(taskId, {
+    status: draft.status,
+    error: draft.error,
+    errorFromStatus: draft.errorFromStatus ?? null,
+    assignee: draft.assignee ?? null,
+    historyAppend: entry ? [entry] : [],
+  });
+  if (updated) emitTaskUpdated(agentManager, { ...updated }, { stampUpdatedAt: true });
+  return updated;
+}
+
 /** Retire a previous run's error only after the next run's preparation succeeds.
  * Keep the history intact, and persist before a prompt or UI can read the task.
  */
@@ -137,6 +188,34 @@ export function clearExecutionOnMove(
   }
   if (toStatus === 'done') task.completedAt = now;
 }
+
+// Columns a move never writes: they change only through their own atomic
+// accessors (history is appended, comments/commits/claim have dedicated writers),
+// or are not columns at all (derived/transient fields of the task object).
+const MOVE_NEVER_WRITES = new Set([
+  'history',
+  'comments',
+  'commits',
+  'actionRunning',
+  'actionRunningAgentId',
+  'actionRunningMode',
+  'actionHeartbeatAt',
+  'commitRun',
+  'trustLevel',
+  'securityFlags',
+  'updatedAt',
+  'createdAt',
+  'deletedAt',
+  'deletedBy',
+  'project',
+  'projectId',
+  'repoHtmlUrl',
+  'humanViewedAt',
+  'assigneeName',
+  'assigneeIcon',
+  'materializedAttachments',
+  '_pendingOnEnter',
+]);
 
 /**
  * Shared task-move core for PUT /tasks/:id and POST /tasks/bulk-move.
@@ -184,6 +263,7 @@ export async function applyTaskMove(
     editedFields = [],
     unassignOnStatusChange = true,
     setTaskSignal,
+    baseline = null,
   }: {
     targetBoard?: { id: string; name?: string | null; oldName?: string | null } | null;
     targetColumn?: string;
@@ -193,6 +273,9 @@ export async function applyTaskMove(
     editedFields?: string[];
     unassignOnStatusChange?: boolean;
     setTaskSignal?: (taskId: string, key: string, value: any) => void;
+    /** The task as read before the caller edited it: only what differs from it
+     *  is written (see the persistence step below). */
+    baseline?: object | null;
   }
 ): Promise<{
   statusChanged: boolean;
@@ -264,8 +347,42 @@ export async function applyTaskMove(
   }
 
   // Persist to the single source of truth BEFORE the move side-effects — the
-  // auto-refine path reads the committed row.
-  await agentManager.saveTaskDirectly(task);
+  // auto-refine path reads the committed row. Only what this request changed is
+  // written (the fields that differ from `baseline`), plus the execution reset of
+  // a column move and an atomic history append: the full-row save of the
+  // request's snapshot it replaces reverted every write that landed while the
+  // request was in flight — a linked commit, the agent's own status move, a claim.
+  const reference = (baseline || (await getTaskById(task.id)) || {}) as Record<string, unknown>;
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(task)) {
+    if (MOVE_NEVER_WRITES.has(key)) continue;
+    if (JSON.stringify(value) !== JSON.stringify(reference[key])) fields[key] = value ?? null;
+  }
+  if (statusChanged) {
+    // A column move starts the new column fresh: no run state, no chain resume
+    // marker of the previous column (kept, it made a later re-entry resume the
+    // old chain mid-way).
+    Object.assign(fields, {
+      status: task.status,
+      startedAt: null,
+      executionStatus: null,
+      pendingOnEnter: null,
+      completedActionIdx: null,
+      resumeTransitionIdx: null,
+    });
+    if (task.status === 'done') fields.completedAt = task.completedAt || now;
+  }
+  // An emptied date field arrives as '' from the forms; the column wants NULL
+  // (an '' made the whole update fail, silently).
+  if (fields.dueDate === '') fields.dueDate = null;
+  if (historyEntry) fields.historyAppend = [historyEntry];
+  const persisted = await updateTaskFields(task.id, fields);
+  if (!persisted && (historyEntry || statusChanged)) {
+    // Nothing reached the database: reporting success would show the user a
+    // move that never happened, and fire the new column's actions on it.
+    throw new Error('Failed to persist the task change');
+  }
+  if (persisted) Object.assign(task, persisted);
 
   if (statusChanged) {
     // Signal the reminder loop / execution wait to exit — the executing agent
@@ -292,10 +409,16 @@ export async function addTaskComment(
   task: any,
   input: TaskCommentInput
 ): Promise<{ comment: TaskComment; task: any } | null> {
+  const historyBefore = (task.history || []).length;
   const comment = recordTaskComment(task, input);
   if (!comment) return null;
   await appendTaskComment(task.id, comment);
-  const updated = (await updateTaskFields(task.id, { history: task.history })) || task;
+  // Append only the comment's history entry: rewriting the whole array from the
+  // caller's snapshot dropped entries written meanwhile.
+  const updated =
+    (await updateTaskFields(task.id, {
+      historyAppend: (task.history || []).slice(historyBefore),
+    })) || task;
   emitTaskUpdated(agentManager, updated, { emitAgent: false });
   return { comment, task: updated };
 }

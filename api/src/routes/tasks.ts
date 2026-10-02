@@ -43,6 +43,7 @@ import { projectObject, projectionIncludesField, type FieldProjection } from '..
 import { parseTaskProjection } from '../services/taskProjection.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import { stopTaskExecution } from '../services/taskControl.js';
+import { isTaskRunning } from '../services/workflow/agentSelector.js';
 import {
   reorderTasksSchema,
   updateTaskSchema,
@@ -243,11 +244,29 @@ function clearActionRunning(t: Task) {
   delete t.actionRunningMode;
 }
 
-/** Stop the agent executing a task and clear its actionRunning flags. */
-function stopTaskExecutor(mgr: AgentManager, task: Task) {
-  const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
-  if (executorId) mgr.stopAgent(executorId);
+/** Whether a run is executing this task right now: its durable claim, or a run of
+ *  this process that has not claimed it yet (workspace preparation). */
+function hasLiveRun(task: Task): boolean {
+  return !!task.actionRunning || isTaskRunning(task.id);
+}
+
+/**
+ * Stop the run executing THIS task before it is moved, reassigned or deleted —
+ * awaited, so the move is persisted after the stop and not overwritten by it.
+ * Task-scoped: stopping the executor AGENT halted every task it merely owned
+ * (every card of the board for the container agent) and left other agents'
+ * CLIs running unattended.
+ */
+async function stopTaskExecutor(mgr: AgentManager, task: Task, by: string) {
+  const stopped = await stopTaskExecution(mgr, task, by).catch(err => {
+    console.warn(`[Tasks] Could not stop task ${task.id} before changing it: ${errorMessage(err)}`);
+    return null;
+  });
   clearActionRunning(task);
+  if (stopped) {
+    task.history = stopped.history;
+    task.executionStatus = stopped.executionStatus;
+  }
 }
 
 /**
@@ -673,14 +692,12 @@ router.put(
     const now = new Date().toISOString();
     const username = req.user?.username || 'user';
 
-    // ── Stop agent when task is moved to another column/board ───────────
+    // ── A running task is stopped before it is moved or handed to another
+    //    agent (after the validations below, right before the change) ────────
     const wantsColumnChange = column !== undefined && column !== task.status;
     const wantsBoardChange = boardId !== undefined && boardId !== (task.boardId || null);
-    if (task.actionRunning && (wantsColumnChange || wantsBoardChange)) {
-      // Stop the executing agent so the task can be moved and clear
-      // actionRunning on our copy so it persists correctly.
-      stopTaskExecutor(mgr, task);
-    }
+    const wantsReassign = agentId !== undefined && (agentId || null) !== (task.assignee || null);
+    const mustStop = hasLiveRun(task) && (wantsColumnChange || wantsBoardChange || wantsReassign);
 
     const oldBoardId = task.boardId || null;
 
@@ -724,6 +741,9 @@ router.put(
       targetColumn = column;
     }
 
+    // The task as read: the move persists only what this request changes.
+    const baseline = structuredClone(task);
+
     // ── Field-edit phase (plain editable attributes) ───────────────────────
     const edits = await applyTaskFieldEdits(
       mgr,
@@ -735,6 +755,8 @@ router.put(
     if (!edits.ok) return res.status(edits.status).json({ error: edits.error });
     const editedFields = edits.editedFields;
 
+    if (mustStop) await stopTaskExecutor(mgr, task, username);
+
     // ── Apply the move (mutate + history + persist + signal + auto-refine) ──
     const { statusChanged, boardChanged } = await applyTaskMove(mgr, task, {
       targetBoard,
@@ -745,6 +767,7 @@ router.put(
       editedFields,
       unassignOnStatusChange: agentId === undefined,
       setTaskSignal,
+      baseline,
     });
 
     // ── Notifications ──────────────────────────────────────────────────────
@@ -806,10 +829,10 @@ router.post(
         results.failed.push({ taskId, error: 'Access denied' });
         continue;
       }
-      // Stop the executing agent if it's actively processing this task
-      if (task.actionRunning) {
-        stopTaskExecutor(mgr, task);
-      }
+      // Stop the run executing this task (only this task), awaited so the move
+      // below is persisted after the stop.
+      if (hasLiveRun(task)) await stopTaskExecutor(mgr, task, username);
+      const baseline = structuredClone(task);
 
       const oldBoardId = task.boardId || null;
       let oldBoardName = null;
@@ -827,6 +850,7 @@ router.post(
         now,
         bulk: true,
         setTaskSignal,
+        baseline,
       });
 
       emitTaskUpdated(mgr, task);
@@ -907,8 +931,7 @@ router.post(
     const flags = (task.securityFlags || []).map(f => f.code);
     const updated = await updateTaskFields(task.id, {
       trustLevel: 'approved',
-      history: [
-        ...(task.history || []),
+      historyAppend: [
         { at: new Date().toISOString(), by, type: 'trust_approved', status: task.status, flags },
       ],
     });
@@ -934,6 +957,8 @@ router.patch(
     }
 
     clearTaskSignal(req.params.id, 'stopped');
+    // A 'watching' marker left by an earlier wait would keep the task loop away.
+    clearTaskSignal(req.params.id, 'watching');
     await updateTaskExecutionStatus(req.params.id, null);
 
     // Reset circuit breaker so the task loop doesn't skip this task
@@ -992,6 +1017,7 @@ router.post(
       return res.status(409).json({ error: 'Cannot determine the column to retry in' });
     }
 
+    const baseline = structuredClone(task);
     task.error = null;
     task.errorFromStatus = null;
     // Fresh-start semantics: a retry must replay the whole on_enter chain.
@@ -1000,7 +1026,7 @@ router.post(
     mgr._taskResumeFailures?.delete(task.id);
     mgr._decideNoDecisionCounts?.delete(task.id);
 
-    await applyTaskMove(mgr, task, { targetColumn, username, setTaskSignal });
+    await applyTaskMove(mgr, task, { targetColumn, username, setTaskSignal, baseline });
     emitTaskUpdated(mgr, task);
 
     await auditLog('retry', req.params.id, req.user.userId, username, {
@@ -1022,10 +1048,11 @@ router.delete(
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Block deletion of tasks being executed by a busy agent
-    const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
-    if (task.startedAt && mgr._isActiveTaskStatus(task.status) && agent?.status === 'busy') {
-      return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
+    // Block deletion of a task a run is executing: deleting it would orphan the
+    // run (its commits could no longer be linked). Judged on the run itself —
+    // the owner agent's status said nothing about who executes the task.
+    if (hasLiveRun(task)) {
+      return res.status(409).json({ error: 'Task is being executed. Stop it first.' });
     }
 
     const ok = await mgr.deleteTask(task.agentId, req.params.id);
@@ -1582,7 +1609,18 @@ router.get(
         .json({ error: 'No GitHub plugin connected on this board', code: 'GITHUB_NOT_CONNECTED' });
     }
 
-    const ownerRepo = await resolveOwnerRepo(task, mgr);
+    // A commit linked from one of the task's SECONDARY repos records it; any
+    // other commit belongs to the task's primary repo.
+    const hash = req.params.hash.toLowerCase();
+    const linked = (task.commits || []).find(
+      (c: { hash: string; repo?: string }) =>
+        c.hash.toLowerCase().startsWith(hash) || hash.startsWith(c.hash.toLowerCase())
+    );
+    const secondary =
+      typeof linked?.repo === 'string' && linked.repo.includes('/') ? linked.repo.split('/') : null;
+    const ownerRepo = secondary
+      ? { owner: secondary[0], repo: secondary[1] }
+      : await resolveOwnerRepo(task, mgr);
     if (!ownerRepo) {
       return res.status(400).json({ error: 'Cannot determine GitHub repository for this task' });
     }

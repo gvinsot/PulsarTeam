@@ -40,6 +40,7 @@ export function gitFixture(t: TestContext) {
         stdout: execSync(command, {
           cwd: repo,
           env,
+          shell: process.platform === 'win32' ? 'bash' : undefined,
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe'],
         }),
