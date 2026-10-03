@@ -11,6 +11,7 @@ import type {
   BoardShare,
   UserDirectoryEntry,
 } from '../types';
+import { useUserDisplayName } from '../hooks/useUserDisplayName';
 
 interface PermissionLevel {
   value: BoardPermission;
@@ -67,6 +68,7 @@ function toPermission(value: string): BoardPermission {
 export default function ShareBoardModal({ board, onClose, currentUserId }: ShareBoardModalProps) {
   const [shares, setShares] = useState<BoardShare[]>([]);
   const [allUsers, setAllUsers] = useState<UserDirectoryEntry[]>([]);
+  const displayName = useUserDisplayName();
   const [loading, setLoading] = useState(true);
   const [username, setUsername] = useState('');
   const [permission, setPermission] = useState<BoardPermission>('read');
@@ -194,7 +196,7 @@ export default function ShareBoardModal({ board, onClose, currentUserId }: Share
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm text-dark-200 font-medium truncate">
-                {isOwner ? 'You' : board.owner_username || 'Owner'}
+                {isOwner ? 'You' : displayName(board.owner_username) || 'Owner'}
               </div>
               <div className="text-xs text-dark-500">Owner</div>
             </div>

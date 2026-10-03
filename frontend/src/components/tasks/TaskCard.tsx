@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 import type { TaskSocketPayload } from '../../types';
+import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 
 interface TaskCardProps {
   /** A card is rendered out of the board's task state, which holds
@@ -106,6 +107,12 @@ export default function TaskCard({
   }, [task]);
 
   const sourceMeta = task.source ? SOURCE_META[task.source.type] || SOURCE_META.api : null;
+  const displayName = useUserDisplayName();
+  // People are stored by username; show their display name instead.
+  const displaySource =
+    task.source?.type === 'user' && task.source.name
+      ? { ...task.source, name: displayName(task.source.name) }
+      : task.source;
   // Same value as task.assignee, read once so the navigate handler below keeps the
   // non-null narrowing its surrounding guard establishes (a property narrowing is
   // lost inside a nested closure, a const local's is not).
@@ -536,7 +543,7 @@ export default function TaskCard({
             {/* `?? null`: SourceMeta.label takes `TaskSource | null`, and on a
                 socket frame the key can also be absent. Every labeller treats
                 the two the same (`s?.name || …`). */}
-            {sourceMeta.label(task.source ?? null)}
+            {sourceMeta.label(displaySource ?? null)}
           </span>
         )}
         {showAgent && task.assigneeName && (

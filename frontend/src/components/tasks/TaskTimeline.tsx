@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { MODE_LABELS, timeAgo, formatDate } from './taskConstants';
 import type { TaskCommit, TaskHistoryEntry } from '../../types';
+import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 
 interface TaskTimelineProps {
   /** `Task.history` — always an array on a GET /tasks row, but the caller reads
@@ -38,6 +39,7 @@ export default function TaskTimeline({
   onOpenCommit,
   onRemoveCommit,
 }: TaskTimelineProps) {
+  const displayName = useUserDisplayName();
   // `as const` on the two discriminants: without it both widen to `string` and
   // the `item.kind === 'commit'` test below stops narrowing the merged array.
   const historyItems = (history || []).map((h, i) => ({
@@ -151,7 +153,7 @@ export default function TaskTimeline({
                           {MODE_LABELS[item.h.mode || 'execute'] || 'Execution'}{' '}
                           {item.h.success ? '✓' : '✗'}
                         </span>
-                        <span className="text-dark-500 truncate">by {item.h.by}</span>
+                        <span className="text-dark-500 truncate">by {displayName(item.h.by)}</span>
                         {item.h.messages && item.h.messages.length > 0 && (
                           <span className="text-[10px] text-dark-500">
                             — {item.h.messages.length} msg{item.h.messages.length > 1 ? 's' : ''}
@@ -170,7 +172,9 @@ export default function TaskTimeline({
                             (item.h.fields?.length ? item.h.fields.join(', ') : 'task')}
                         </span>
                         {item.h.by && (
-                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                          <span className="text-dark-500 truncate">
+                            by {displayName(item.h.by)}
+                          </span>
                         )}
                       </>
                     ) : item.h.type === 'comment' ? (
@@ -178,7 +182,9 @@ export default function TaskTimeline({
                         <MessageSquare className="w-2.5 h-2.5 text-emerald-400 flex-shrink-0" />
                         <span className="text-emerald-300 font-medium">commented</span>
                         {item.h.by && (
-                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                          <span className="text-dark-500 truncate">
+                            by {displayName(item.h.by)}
+                          </span>
                         )}
                         {typeof item.h.newValue === 'string' && (
                           <span className="text-dark-400 truncate" title={item.h.newValue}>
@@ -191,7 +197,9 @@ export default function TaskTimeline({
                         <User className="w-2.5 h-2.5 text-indigo-400 flex-shrink-0" />
                         <span className="text-dark-200 font-medium">reassigned</span>
                         {item.h.by && (
-                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                          <span className="text-dark-500 truncate">
+                            by {displayName(item.h.by)}
+                          </span>
                         )}
                       </>
                     ) : item.h.type === 'error' ? (
@@ -202,7 +210,9 @@ export default function TaskTimeline({
                           <span className="text-dark-500 truncate">in {item.h.from}</span>
                         )}
                         {item.h.by && (
-                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                          <span className="text-dark-500 truncate">
+                            by {displayName(item.h.by)}
+                          </span>
                         )}
                         {item.h.error && (
                           <span className="text-red-400/70 truncate" title={item.h.error}>
@@ -215,7 +225,9 @@ export default function TaskTimeline({
                         <ShieldCheck className="w-2.5 h-2.5 text-sky-400 flex-shrink-0" />
                         <span className="text-sky-300 font-medium">approved for agents</span>
                         {item.h.by && (
-                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                          <span className="text-dark-500 truncate">
+                            by {displayName(item.h.by)}
+                          </span>
                         )}
                       </>
                     ) : item.h.type === 'stopped' ? (
@@ -223,7 +235,9 @@ export default function TaskTimeline({
                         <Pause className="w-2.5 h-2.5 text-yellow-400 flex-shrink-0" />
                         <span className="text-yellow-300 font-medium">stopped</span>
                         {item.h.by && (
-                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                          <span className="text-dark-500 truncate">
+                            by {displayName(item.h.by)}
+                          </span>
                         )}
                       </>
                     ) : (
@@ -236,7 +250,9 @@ export default function TaskTimeline({
                         )}
                         <span className="text-dark-200 font-medium">{item.h.status}</span>
                         {item.h.by && (
-                          <span className="text-dark-500 truncate">by {item.h.by}</span>
+                          <span className="text-dark-500 truncate">
+                            by {displayName(item.h.by)}
+                          </span>
                         )}
                       </>
                     )}

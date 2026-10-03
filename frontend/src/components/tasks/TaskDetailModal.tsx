@@ -39,6 +39,7 @@ import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
 import type { StatusOption } from './taskConstants';
 import type { Agent, Board, TaskHistoryEntry, TaskSocketPayload, TaskStatus } from '../../types';
+import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 
 interface TaskDetailModalProps {
   /** The modal is opened from a card, i.e. from the board's task state, which
@@ -381,6 +382,12 @@ export default function TaskDetailModal({
   const isError = task.status === 'error';
   const isStopped = task.executionStatus === 'stopped';
   const sourceMeta = task.source ? SOURCE_META[task.source.type] || SOURCE_META.api : null;
+  const displayName = useUserDisplayName();
+  // People are stored by username; show their display name instead.
+  const displaySource =
+    task.source?.type === 'user' && task.source.name
+      ? { ...task.source, name: displayName(task.source.name) }
+      : task.source;
   const timelineHistory = taskHistory ?? [];
 
   const handleStop = async () => {
@@ -803,7 +810,7 @@ export default function TaskDetailModal({
                   <span
                     className={`text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${sourceMeta.cls}`}
                   >
-                    {sourceMeta.label(task.source)}
+                    {sourceMeta.label(displaySource ?? null)}
                   </span>
                 </div>
               )}

@@ -23,6 +23,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { formatDate, timeAgo, MODE_LABELS } from './taskConstants';
 import type { Agent, TaskExecutionMessage, TaskHistoryEntry } from '../../types';
+import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 
 const MODE_COLORS: Record<string, string> = {
   execute: 'text-blue-300',
@@ -351,6 +352,7 @@ export default function HistoryDetailModal({
   onClose: () => void;
 }) {
   const modalRef = useRef<HTMLDivElement>(null);
+  const displayName = useUserDisplayName();
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -420,7 +422,7 @@ export default function HistoryDetailModal({
             {entry.by && (
               <div className="flex items-center gap-1.5">
                 <User className="w-3.5 h-3.5" />
-                <span className="text-dark-300">{entry.by}</span>
+                <span className="text-dark-300">{displayName(entry.by)}</span>
               </div>
             )}
             {durationLabel && (
@@ -598,7 +600,7 @@ export default function HistoryDetailModal({
           {entry.type === 'stopped' && (
             <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
               <div className="text-xs text-yellow-300">
-                Execution was manually stopped{entry.by ? ` by ${entry.by}` : ''}.
+                Execution was manually stopped{entry.by ? ` by ${displayName(entry.by)}` : ''}.
               </div>
             </div>
           )}
@@ -607,7 +609,7 @@ export default function HistoryDetailModal({
           {entry.type === 'restored' && (
             <div className="p-3 rounded-lg bg-teal-500/10 border border-teal-500/20">
               <div className="text-xs text-teal-300">
-                Task was restored from trash{entry.by ? ` by ${entry.by}` : ''}.
+                Task was restored from trash{entry.by ? ` by ${displayName(entry.by)}` : ''}.
               </div>
             </div>
           )}

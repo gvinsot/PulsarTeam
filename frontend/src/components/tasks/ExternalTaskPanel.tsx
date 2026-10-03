@@ -3,6 +3,7 @@ import { ShieldAlert, ShieldCheck, Loader2 } from 'lucide-react';
 import { api } from '../../api';
 import { errorMessage } from '../../utils/errors';
 import type { TaskSecurityFlag, TaskSocketPayload } from '../../types';
+import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 
 interface ExternalTaskPanelProps {
   task: TaskSocketPayload;
@@ -29,6 +30,7 @@ export default function ExternalTaskPanel({ task, onApproved }: ExternalTaskPane
   const [approving, setApproving] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const displayName = useUserDisplayName();
 
   if (task.trustLevel !== 'untrusted' && task.trustLevel !== 'approved') return null;
 
@@ -43,8 +45,8 @@ export default function ExternalTaskPanel({ task, onApproved }: ExternalTaskPane
         <ShieldCheck className="w-4 h-4 text-sky-400 flex-shrink-0 mt-0.5" />
         <p className="text-xs text-sky-200/80 leading-relaxed">
           External task from {origin}
-          {approval?.by ? `, approved by ${approval.by}` : ', approved'}. Agents work on it in a
-          restricted profile: fresh context, no credentials, no MCP servers.
+          {approval?.by ? `, approved by ${displayName(approval.by)}` : ', approved'}. Agents work
+          on it in a restricted profile: fresh context, no credentials, no MCP servers.
         </p>
       </div>
     );

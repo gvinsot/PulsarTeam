@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { addTaskComment, deleteTaskComment } from '../../api';
 import { errorMessage } from '../../utils/errors';
 import type { TaskComment, TaskCommentAuthorType } from '../../types';
+import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 
 // The comment thread of a task — kept SEPARATE from the description (task.text).
 // Agents write here through update_task's `comment` / add_task_comment; people
@@ -35,6 +36,7 @@ export default function TaskComments({ taskId, comments, onChanged }: TaskCommen
   const [posting, setPosting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const displayName = useUserDisplayName();
 
   // Follow the task as socket frames / refreshes arrive.
   useEffect(() => {
@@ -110,7 +112,7 @@ export default function TaskComments({ taskId, comments, onChanged }: TaskCommen
                     className={`flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded ring-1 ${style.cls}`}
                   >
                     <Icon className="w-3 h-3" />
-                    {c.author}
+                    {c.authorType === 'user' ? displayName(c.author) : c.author}
                   </span>
                   <span className="text-[10px] text-dark-500">{formatWhen(c.at)}</span>
                   <button

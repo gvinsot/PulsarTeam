@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Trash2, Edit3, ChevronDown, Plus, KanbanSquare, Users, Share2, ArrowLeft, ArrowRight } from 'lucide-react';
 import type { BoardPermission } from '../../types';
+import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 
 /**
  * What this component actually reads off a board.
@@ -49,6 +50,7 @@ export default function BoardTabs<B extends BoardTabsBoard>({
   onShare,
   onMove,
 }: BoardTabsProps<B>) {
+  const displayName = useUserDisplayName();
   // Both hold the id of the board being renamed / showing its context menu.
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -149,7 +151,7 @@ export default function BoardTabs<B extends BoardTabsBoard>({
               {board.share_permission && (
                 <span
                   className="text-[10px] text-dark-500 bg-dark-700/50 px-1 py-0.5 rounded"
-                  title={`Shared by ${board.owner_username || 'owner'} (${board.share_permission})`}
+                  title={`Shared by ${displayName(board.owner_username) || 'owner'} (${board.share_permission})`}
                 >
                   <Users className="w-3 h-3 inline" />
                 </span>

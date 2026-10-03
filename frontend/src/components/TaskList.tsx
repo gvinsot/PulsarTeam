@@ -1,4 +1,5 @@
 import type { Task, TaskSource, TaskStatus } from '../types';
+import { useUserDisplayName } from '../hooks/useUserDisplayName';
 
 interface SourceMetaEntry {
   color: string;
@@ -13,9 +14,11 @@ const SOURCE_META: Record<string, SourceMetaEntry> = {
 };
 
 function SourceBadge({ source }: { source: TaskSource | null | undefined }) {
+  const displayName = useUserDisplayName();
   if (!source) return null;
   const meta = SOURCE_META[source.type] || { color: '#6b7280', label: () => source.type };
-  const label = meta.label(source.name || '');
+  const name = source.type === 'user' ? displayName(source.name) : source.name;
+  const label = meta.label(name || '');
   return (
     <span
       title={`Assigned by: ${label}`}
