@@ -1212,8 +1212,11 @@ export default function TasksBoard({
             <Archive className="w-3.5 h-3.5" />
           </button>
 
-          {/* GitHub Activity per project */}
-          {boardProjectsWithGithub.map(p => (
+          {/* GitHub Activity per project. With several repos, a single native
+              <select> is used instead of one button per repo: the toolbar is a
+              horizontally-scrolling strip with a hidden scrollbar, so a long list
+              of repo buttons would push the plugins/settings buttons out of reach. */}
+          {boardProjectsWithGithub.length === 1 && boardProjectsWithGithub.map(p => (
             <button
               key={p.name}
               onClick={() => setActivityTarget(p.github)}
@@ -1224,6 +1227,30 @@ export default function TasksBoard({
               <span className="text-[10px] max-w-[80px] truncate">{p.name}</span>
             </button>
           ))}
+          {boardProjectsWithGithub.length > 1 && (
+            <div className="relative flex items-center flex-shrink-0" title="GitHub activity">
+              <GitCommit className="absolute left-1.5 w-3.5 h-3.5 text-dark-400 pointer-events-none" />
+              <select
+                value=""
+                onChange={e => {
+                  const target = boardProjectsWithGithub.find(p => p.name === e.target.value);
+                  if (target) setActivityTarget(target.github);
+                }}
+                aria-label="GitHub activity"
+                className="pl-6 pr-2 py-1 max-w-[140px] bg-dark-800 border border-dark-700 rounded-lg text-[11px] text-dark-300
+                focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+              >
+                <option value="" disabled>
+                  Activity ({boardProjectsWithGithub.length} repos)
+                </option>
+                {boardProjectsWithGithub.map(p => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Board plugins */}
           {canEdit && activeBoard && (
