@@ -131,6 +131,41 @@ function toResponsesTools(tools: any[]): any[] {
   }));
 }
 
+interface ContentEvent {
+  type: 'text' | 'thinking';
+  text: string;
+}
+
+/**
+ * Mistral can switch from strings to text/thinking blocks within one response.
+ * Normalize at the provider boundary so chat accumulation never coerces objects
+ * to "[object Object]". Non-text blocks (references, images, etc.) are ignored.
+ */
+function* contentEvents(
+  content: unknown,
+  type: ContentEvent['type'] = 'text'
+): Generator<ContentEvent> {
+  if (typeof content === 'string') {
+    if (content) yield { type, text: content };
+  } else if (Array.isArray(content)) {
+    for (const part of content) yield* contentEvents(part, type);
+  } else if (content && typeof content === 'object') {
+    const part = content as Record<string, unknown>;
+    if (part.type === 'text' && typeof part.text === 'string') {
+      if (part.text) yield { type, text: part.text };
+    } else if (part.type === 'thinking') {
+      yield* contentEvents(part.thinking, 'thinking');
+    }
+  }
+}
+
+function contentText(content: unknown): string {
+  return Array.from(contentEvents(content))
+    .filter(event => event.type === 'text')
+    .map(event => event.text)
+    .join('');
+}
+
 // ─── OpenAI-compatible stream consumption ───────────────────────────────────
 // Shared chunk-consumption loop for any OpenAI-compatible streaming response
 // (OpenAI chat completions, vLLM, Mistral). Yields {type:'text'} from
@@ -239,14 +274,10 @@ async function* consumeOpenAIStream(
   for await (const chunk of stream) {
     if (signal?.aborted) throw new Error('Agent stopped by user');
     const choice = chunk.choices?.[0];
-    if (choice?.delta?.content) {
-      yield { type: 'text', text: choice.delta.content };
-    }
+    yield* contentEvents(choice?.delta?.content);
     // Reasoning models: emit thinking tokens separately
     const reasoningText = choice?.delta?.reasoning_content || choice?.delta?.reasoning;
-    if (reasoningText) {
-      yield { type: 'thinking', text: reasoningText };
-    }
+    yield* contentEvents(reasoningText, 'thinking');
     if (Array.isArray(choice?.delta?.tool_calls)) {
       applyNativeToolCallDelta(nativeToolCalls, choice.delta.tool_calls);
     }
@@ -423,7 +454,7 @@ export class OllamaProvider {
     const data = await res.json();
     const choice = data.choices?.[0];
     return {
-      content: choice?.message?.content || '',
+      content: contentText(choice?.message?.content),
       toolCalls: messageNativeToolCalls(choice?.message?.tool_calls),
       model: this.model,
       provider: 'ollama',
@@ -507,13 +538,12 @@ export class OllamaProvider {
           try {
             const data = JSON.parse(payload);
             const choice = data.choices?.[0];
-            if (choice?.delta?.content) {
-              yield { type: 'text', text: choice.delta.content };
-            }
+            yield* contentEvents(choice?.delta?.content);
             // Reasoning models: emit thinking tokens separately
-            if (choice?.delta?.reasoning_content) {
-              yield { type: 'thinking', text: choice.delta.reasoning_content };
-            }
+            yield* contentEvents(
+              choice?.delta?.reasoning_content || choice?.delta?.reasoning,
+              'thinking'
+            );
             if (Array.isArray(choice?.delta?.tool_calls)) {
               applyNativeToolCallDelta(nativeToolCalls, choice.delta.tool_calls);
             }
@@ -834,7 +864,7 @@ export class OpenAIProvider {
     const response = await this.client.chat.completions.create(params);
 
     return {
-      content: response.choices[0]?.message?.content || '',
+      content: contentText(response.choices[0]?.message?.content),
       toolCalls: messageNativeToolCalls(response.choices[0]?.message?.tool_calls),
       model: this.model,
       provider: 'openai',
@@ -1172,7 +1202,7 @@ export class VLLMProvider {
     }
 
     return {
-      content: response.choices[0]?.message?.content || '',
+      content: contentText(response.choices[0]?.message?.content),
       toolCalls: messageNativeToolCalls(response.choices[0]?.message?.tool_calls),
       model: this.model,
       provider: this.providerName,
