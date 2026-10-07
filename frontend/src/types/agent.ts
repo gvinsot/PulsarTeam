@@ -207,6 +207,10 @@ export interface ConversationMessage {
   role: ConversationRole;
   /** ContextTab defensively handles a non-string content; no producer emits one. */
   content: string;
+  /** Sandbox transcript, including streamed tool progress; not replayed to the LLM. */
+  displayContent?: string;
+  /** Reasoning streamed by the sandbox provider across all tool rounds. */
+  thinking?: string;
   /** ISO 8601. Required here — contrast AgentLastMessage.timestamp, which is
    *  normalised to `string | null`. */
   timestamp: string;

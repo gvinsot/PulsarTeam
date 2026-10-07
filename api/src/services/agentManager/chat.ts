@@ -259,6 +259,19 @@ export const chatMethods = {
     }
 
     let fullResponse = '';
+    let thinking = '';
+    let displayContent = '';
+    // Sandbox streams mix model prose with tool progress/errors. Keep the
+    // displayed transcript separately from model content so finishing the turn
+    // does not replace everything the user saw with a tool-name placeholder.
+    // Capture headless runs too, so opening their history gives the same result.
+    if (!isCliRunner(agent)) {
+      const onChunk = streamCallback;
+      streamCallback = (chunk: string) => {
+        displayContent += chunk;
+        onChunk?.(chunk);
+      };
+    }
     // True once post-response processing has begun (assistant entry persisted,
     // tool dispatch about to run). NOT a record of whether any tool actually
     // ran — it gates the stream retry so we never re-send a turn whose
@@ -277,6 +290,7 @@ export const chatMethods = {
         activeTaskId
       );
       fullResponse = streamResult.fullResponse;
+      thinking = streamResult.thinkingBuffer;
 
       // A direct chat provider now speaks the native function-calling loop:
       // assistant tool_calls followed by role: tool results. CLI runners keep
@@ -357,6 +371,7 @@ export const chatMethods = {
           activeTaskId
         );
         fullResponse += streamResult.fullResponse;
+        thinking += streamResult.thinkingBuffer;
       }
 
       // With native function calling a whole turn can be tool calls and nothing
@@ -371,6 +386,8 @@ export const chatMethods = {
         content: fullResponse || summarizeToolTrace(nativeToolTrace),
         timestamp: new Date().toISOString(),
       };
+      if (displayContent.trim()) assistantEntry.displayContent = displayContent;
+      if (thinking.trim()) assistantEntry.thinking = thinking;
       if (nativeToolTrace.length > 0) assistantEntry.nativeToolTrace = nativeToolTrace;
       if (streamResult.durationMs > 0) assistantEntry.durationMs = streamResult.durationMs;
       if (streamResult.outputTokens > 0) assistantEntry.outputTokens = streamResult.outputTokens;

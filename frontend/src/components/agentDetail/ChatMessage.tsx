@@ -287,11 +287,19 @@ export default function ChatMessage({
             ))}
           </div>
         )}
+        {!isUser && message.thinking && (
+          <details className="mb-2 text-sm text-dark-300" open={!message.displayContent}>
+            <summary className="cursor-pointer text-xs text-amber-400">Thinking</summary>
+            <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">
+              {message.thinking}
+            </pre>
+          </details>
+        )}
         <div className="markdown-content text-sm text-dark-200">
           {isUser ? (
             <ReactMarkdown remarkPlugins={markdownRemarkPlugins}>{message.content}</ReactMarkdown>
           ) : (
-            <RichAssistantContent text={message.content} />
+            <RichAssistantContent text={message.displayContent || message.content} />
           )}
         </div>
         {message.timestamp && (
