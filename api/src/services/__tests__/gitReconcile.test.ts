@@ -378,13 +378,21 @@ test('events after the run ended are not attributed to it', async () => {
   // event: HEAD@{1767225601} = 2026-01-01T00:00:01Z
   const env = fakeEnv(event);
   assert.equal(
-    (await detectCommitsSinceBaseline(env, 'agent', { startedAt: start, until: '2026-01-01T00:00:00Z' }))
-      .length,
+    (
+      await detectCommitsSinceBaseline(env, 'agent', {
+        startedAt: start,
+        until: '2026-01-01T00:00:00Z',
+      })
+    ).length,
     0
   );
   assert.equal(
-    (await detectCommitsSinceBaseline(env, 'agent', { startedAt: start, until: '2026-01-01T00:00:02Z' }))
-      .length,
+    (
+      await detectCommitsSinceBaseline(env, 'agent', {
+        startedAt: start,
+        until: '2026-01-01T00:00:02Z',
+      })
+    ).length,
     1
   );
 });
@@ -422,8 +430,18 @@ test('remote-tracking and stash reflogs never count as local creation', async ()
 });
 
 test('secondary repo names never leave the projects base', () => {
-  for (const ok of ['owner/repo', 'my-org/my.repo', 'a_b/c-d']) assert.equal(isUsableRepoName(ok), true, ok);
-  for (const bad of ['../etc', 'owner/..', './repo', 'owner/.', 'a/b/c', 'owner', "o'x/r", 'o/r;rm']) {
+  for (const ok of ['owner/repo', 'my-org/my.repo', 'a_b/c-d'])
+    assert.equal(isUsableRepoName(ok), true, ok);
+  for (const bad of [
+    '../etc',
+    'owner/..',
+    './repo',
+    'owner/.',
+    'a/b/c',
+    'owner',
+    "o'x/r",
+    'o/r;rm',
+  ]) {
     assert.equal(isUsableRepoName(bad), false, bad);
   }
 });

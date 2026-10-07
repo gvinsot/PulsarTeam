@@ -1575,12 +1575,7 @@ export const RUN_CLAIM_STALE_SECONDS = 120;
 export const LEGACY_CLAIM_STALE_MINUTES = 20;
 
 export type TaskRunClaimFailure =
-  | 'task-running'
-  | 'agent-busy'
-  | 'moved'
-  | 'stopped'
-  | 'missing'
-  | 'error';
+  'task-running' | 'agent-busy' | 'moved' | 'stopped' | 'missing' | 'error';
 
 /**
  * Claim `taskId` for `agentId`. With `expectStatus`, only while the task still

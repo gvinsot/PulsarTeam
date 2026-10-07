@@ -1,5 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash } from 'node:crypto';
+import type { ZVecStatus } from '@zvec/zvec';
 import { cosineSimilarity, EMBEDDING_DIMENSION } from './embedding.js';
 
 function unwrapZvecModule(module: any): any {
@@ -34,13 +36,24 @@ function sanitizeCollectionName(value: any): string {
     .slice(0, 120);
 }
 
+function checkZvecStatuses(statuses: ZVecStatus | ZVecStatus[]): void {
+  const failure = (Array.isArray(statuses) ? statuses : [statuses]).find(status => !status.ok);
+  if (failure) throw new Error(`ZVEC ${failure.code}: ${failure.message}`);
+}
+
+// Symbol IDs contain paths, punctuation and Unicode that native Zvec IDs reject.
+// Keep the original ID in a scalar field so it survives closing/reopening.
+function zvecDocumentId(id: string): string {
+  return createHash('sha256').update(id).digest('hex');
+}
+
 function normalizeResults(results: any): Array<{ id: any; score: number; payload: any }> {
   const list = Array.isArray(results) && Array.isArray(results[0]) ? results[0] : results;
   if (!Array.isArray(list)) return [];
 
   return list
     .map(item => ({
-      id: item?.id || item?.docId || item?.doc?.id || item?._id || null,
+      id: item?.fields?.symbol_id || item?.id || item?.docId || item?.doc?.id || item?._id || null,
       score: Number(item?.score ?? item?.similarity ?? item?.distance ?? 0),
       payload: item,
     }))
@@ -170,7 +183,9 @@ export class ZvecVectorStore {
 
   async releaseCollection(collectionName: string): Promise<void> {
     const cached = this.collections.get(collectionName);
-    if (cached?.close && typeof cached.close === 'function') {
+    if (typeof cached?.closeSync === 'function') {
+      cached.closeSync();
+    } else if (cached?.close && typeof cached.close === 'function') {
       try {
         await cached.close();
       } catch {
@@ -200,6 +215,12 @@ export class ZvecVectorStore {
     return tryCandidates(
       [
         () =>
+          new zvec.CollectionSchema({
+            name: collectionName,
+            fields: [{ name: 'symbol_id', dataType: DataType.STRING }],
+            vectors: [{ name: 'embedding', dataType, dimension: this.dimension }],
+          }),
+        () =>
           new zvec.CollectionSchema(collectionName, [
             { name: 'embedding', dataType, dimension: this.dimension },
           ]),
@@ -227,6 +248,16 @@ export class ZvecVectorStore {
     const schema = await this.createSchema(zvec, sanitizedName);
     const vectorPath = this.collectionPath(collectionName);
 
+    // A fresh process must reopen the persisted collection, not recreate it.
+    try {
+      await fs.access(vectorPath);
+      const collection = await zvec.openCollection(vectorPath);
+      this.collections.set(collectionName, collection);
+      return collection;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
     await fs.mkdir(path.dirname(vectorPath), { recursive: true });
 
     const createAndOpen = zvec.createAndOpen || zvec.openCollection;
@@ -249,7 +280,23 @@ export class ZvecVectorStore {
   }
 
   async upsert(collectionName: string, docs: VectorDoc[]): Promise<void> {
+    if (docs.length === 0) return;
     const collection = await this.getCollection(collectionName);
+    // @zvec/zvec 0.2 exposes synchronous operations with per-document status
+    // results. Metadata lives in the code index; only its original symbol ID
+    // needs to be stored alongside the embedding.
+    if (typeof collection.upsertSync === 'function') {
+      checkZvecStatuses(
+        collection.upsertSync(
+          docs.map(doc => ({
+            id: zvecDocumentId(doc.id),
+            fields: { symbol_id: doc.id },
+            vectors: { embedding: doc.vector },
+          }))
+        )
+      );
+      return;
+    }
     const payload = docs.map(doc => ({
       id: doc.id,
       vectors: {
@@ -269,8 +316,13 @@ export class ZvecVectorStore {
   }
 
   async remove(collectionName: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const collection = await this.getCollection(collectionName);
+    if (typeof collection.deleteSync === 'function') {
+      checkZvecStatuses(collection.deleteSync(ids.map(zvecDocumentId)));
+      return;
+    }
     try {
-      const collection = await this.getCollection(collectionName);
       await tryCandidates(
         [
           () => collection.delete(ids),
@@ -286,6 +338,10 @@ export class ZvecVectorStore {
 
   async query(collectionName: string, vector: number[], topK: number = 10): Promise<QueryResult[]> {
     const collection = await this.getCollection(collectionName);
+
+    if (typeof collection.querySync === 'function') {
+      return normalizeResults(collection.querySync({ fieldName: 'embedding', vector, topk: topK }));
+    }
 
     const results = await tryCandidates(
       [

@@ -450,7 +450,8 @@ async function _persistAssignment(agentManager: AgentManager, task: Task, assign
     historyAppend: [reassignEntry(task, assignee)],
   });
   task.assignee = assignee;
-  if (updated) emitTaskUpdated(agentManager, { ...updated }, { emitAgent: false, stampUpdatedAt: true });
+  if (updated)
+    emitTaskUpdated(agentManager, { ...updated }, { emitAgent: false, stampUpdatedAt: true });
   return updated;
 }
 
@@ -732,20 +733,20 @@ export async function _ensureAgentOnTaskRepo(
       const target = actualTask;
       target.error = taskError;
       await persistThenEmit(agentManager, target, {
-      fields: {
-        error: taskError,
-        historyAppend: [
-          {
-            status: target.status,
-            at: switchErrTimestamp,
-            by: agent.name || 'workflow',
-            type: 'error',
-            error: taskError,
-            actionMode: mode,
-          },
-        ],
-      },
-    });
+        fields: {
+          error: taskError,
+          historyAppend: [
+            {
+              status: target.status,
+              at: switchErrTimestamp,
+              by: agent.name || 'workflow',
+              type: 'error',
+              error: taskError,
+              actionMode: mode,
+            },
+          ],
+        },
+      });
     }
     agentManager._emit('agent:error:report', {
       agentId: agent.id,
@@ -1344,7 +1345,9 @@ async function _runDecideMode(
   // with a false "assign the Swarm API MCP" diagnosis). The chain flags the
   // action for retry, which the durable 'stopped' status holds until a resume.
   if (!decided && waitResult === 'stopped') {
-    console.log(`[ActionExecutor] decide: stopped by user for task="${task.id}" — no decision recorded`);
+    console.log(
+      `[ActionExecutor] decide: stopped by user for task="${task.id}" — no decision recorded`
+    );
     return { executed: false, skipped: true, reason: 'user-stop' };
   }
 

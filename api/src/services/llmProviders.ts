@@ -591,46 +591,53 @@ export class ClaudeProvider {
   }
 
   _mapMessages(messages: any[]): any[] {
-    return messages
-      .filter(m => m.role !== 'system')
-      // Anthropic rejects a message whose content is empty ("all messages must
-      // have non-empty content"), which a tool-only assistant turn produces.
-      // One such row in the replayed history 400s every subsequent turn, so
-      // drop it here — _sanitizeMessages below re-establishes alternation.
-      .filter(m => m.content || m.images?.length > 0 || m.toolCalls?.length > 0)
-      .map(m => {
-        if (m.role === 'tool') {
-          return {
-            role: 'user',
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: m.toolCallId,
-                content: m.content,
-                ...(m.toolError ? { is_error: true } : {}),
-              },
-            ],
-          };
-        }
-
-        if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
-          const content = buildClaudeContent(m.content || '', m.images);
-          const blocks = Array.isArray(content)
-            ? content
-            : content
-              ? [{ type: 'text', text: content }]
-              : [];
-          for (const call of m.toolCalls as NativeToolCall[]) {
-            blocks.push({ type: 'tool_use', id: call.id, name: call.name, input: call.arguments });
+    return (
+      messages
+        .filter(m => m.role !== 'system')
+        // Anthropic rejects a message whose content is empty ("all messages must
+        // have non-empty content"), which a tool-only assistant turn produces.
+        // One such row in the replayed history 400s every subsequent turn, so
+        // drop it here — _sanitizeMessages below re-establishes alternation.
+        .filter(m => m.content || m.images?.length > 0 || m.toolCalls?.length > 0)
+        .map(m => {
+          if (m.role === 'tool') {
+            return {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: m.toolCallId,
+                  content: m.content,
+                  ...(m.toolError ? { is_error: true } : {}),
+                },
+              ],
+            };
           }
-          return { role: 'assistant', content: blocks };
-        }
 
-        return {
-          role: m.role === 'user' ? 'user' : 'assistant',
-          content: buildClaudeContent(m.content || '', m.images),
-        };
-      });
+          if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+            const content = buildClaudeContent(m.content || '', m.images);
+            const blocks = Array.isArray(content)
+              ? content
+              : content
+                ? [{ type: 'text', text: content }]
+                : [];
+            for (const call of m.toolCalls as NativeToolCall[]) {
+              blocks.push({
+                type: 'tool_use',
+                id: call.id,
+                name: call.name,
+                input: call.arguments,
+              });
+            }
+            return { role: 'assistant', content: blocks };
+          }
+
+          return {
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: buildClaudeContent(m.content || '', m.images),
+          };
+        })
+    );
   }
 
   async chat(messages: any[], options: any = {}): Promise<any> {

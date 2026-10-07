@@ -112,8 +112,7 @@ export function buildRecurrenceConfig(
     enabled: true,
     period: source.period || previous.period || 'daily',
     intervalMinutes: source.intervalMinutes || previous.intervalMinutes || 1440,
-    originalStatus:
-      source.originalStatus || previous.originalStatus || defaultStatus || 'backlog',
+    originalStatus: source.originalStatus || previous.originalStatus || defaultStatus || 'backlog',
     historyRetentionDays: normalizeRetention(
       source.historyRetentionDays !== undefined
         ? source.historyRetentionDays

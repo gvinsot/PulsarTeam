@@ -1912,55 +1912,55 @@ export const tasksMethods = {
       }
 
       const currentExecutor = this.agents.get(executorId);
-        if (
-          !currentExecutor ||
-          currentExecutor.status === 'busy' ||
-          (terminalDriven && isCliRecentlyActive(executorId))
-        ) {
-          console.log(`🔔 [Execution] Executor "${executorName}" is busy — skipping reminder`);
-          continue;
-        }
-        if (currentExecutor.status === 'error') {
-          console.log(
-            `🔔 [Execution] Executor "${executorName}" is in error — exiting reminder loop`
+      if (
+        !currentExecutor ||
+        currentExecutor.status === 'busy' ||
+        (terminalDriven && isCliRecentlyActive(executorId))
+      ) {
+        console.log(`🔔 [Execution] Executor "${executorName}" is busy — skipping reminder`);
+        continue;
+      }
+      if (currentExecutor.status === 'error') {
+        console.log(
+          `🔔 [Execution] Executor "${executorName}" is in error — exiting reminder loop`
+        );
+        return 'error';
+      }
+
+      // Late CLI auth failure (token expired mid-run, re-auth needed). Surface
+      // it the same way as the early probe so the task is failed, not left to
+      // exhaust the reminder loop and time out as if "done".
+      if (terminalDriven) {
+        const loopAuthErr = await this._checkTerminalAuthError(executorId);
+        if (loopAuthErr) {
+          setTaskSignal(taskId, 'authError', loopAuthErr);
+          console.warn(
+            `🔐 [Execution] CLI auth failure (mid-run) for "${executorName}" on task ${taskId}: ${loopAuthErr}`
           );
           return 'error';
         }
+      }
 
-        // Late CLI auth failure (token expired mid-run, re-auth needed). Surface
-        // it the same way as the early probe so the task is failed, not left to
-        // exhaust the reminder loop and time out as if "done".
-        if (terminalDriven) {
-          const loopAuthErr = await this._checkTerminalAuthError(executorId);
-          if (loopAuthErr) {
-            setTaskSignal(taskId, 'authError', loopAuthErr);
-            console.warn(
-              `🔐 [Execution] CLI auth failure (mid-run) for "${executorName}" on task ${taskId}: ${loopAuthErr}`
-            );
-            return 'error';
-          }
-        }
-
-        // Cooldown: skip if a reminder was sent too recently
-        const now = Date.now();
-        if (COOLDOWN_MS > 0 && lastReminderSentAt > 0 && now - lastReminderSentAt < COOLDOWN_MS) {
-          console.log(
-            `🔔 [Execution] Cooldown active for "${executorName}" — skipping redundant reminder`
-          );
-          continue;
-        }
-
-        reminded++;
-        lastReminderSentAt = now;
+      // Cooldown: skip if a reminder was sent too recently
+      const now = Date.now();
+      if (COOLDOWN_MS > 0 && lastReminderSentAt > 0 && now - lastReminderSentAt < COOLDOWN_MS) {
         console.log(
-          `🔔 [Execution] Reminding "${executorName}" to complete task (attempt ${reminded}/${MAX_REMINDERS})`
+          `🔔 [Execution] Cooldown active for "${executorName}" — skipping redundant reminder`
         );
+        continue;
+      }
 
-        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST use the native update_task tool with the task ID, final column, and summary. Moving it to the final column with a summary signals completion.\n\nIf you have already finished all the work, use update_task now to move the task to its final column with a summary of what was accomplished.`;
-        await this._sendPromptStreamed(executorId, currentExecutor, reminderPrompt, {
-          terminalDriven,
-          label: 'Reminder',
-        });
+      reminded++;
+      lastReminderSentAt = now;
+      console.log(
+        `🔔 [Execution] Reminding "${executorName}" to complete task (attempt ${reminded}/${MAX_REMINDERS})`
+      );
+
+      const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST use the native update_task tool with the task ID, final column, and summary. Moving it to the final column with a summary signals completion.\n\nIf you have already finished all the work, use update_task now to move the task to its final column with a summary of what was accomplished.`;
+      await this._sendPromptStreamed(executorId, currentExecutor, reminderPrompt, {
+        terminalDriven,
+        label: 'Reminder',
+      });
 
       const afterResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
       if (afterResult) return afterResult;
@@ -2439,7 +2439,8 @@ export const tasksMethods = {
         // Runs after the CLI went quiet (_waitForExecutionComplete drains it), so
         // the run's last commits land on THIS task, not on the next one the agent
         // gets. Idempotent.
-        if (commitRunStarted) await finishTaskCommitRun(this, executorId, task.id, 'ResumeEndReconcile');
+        if (commitRunStarted)
+          await finishTaskCommitRun(this, executorId, task.id, 'ResumeEndReconcile');
         this._emit('agent:stream:end', { agentId: executorId });
         this._emit('agent:updated', this._sanitize(executor));
       }
@@ -2447,7 +2448,8 @@ export const tasksMethods = {
       if (claim?.ok) {
         claim.stopHeartbeat();
         const released = await releaseRunClaim(task.id, executorId, { keepStartedAt });
-        if (released) emitTaskUpdated(this, { ...released }, { emitAgent: false, stampUpdatedAt: true });
+        if (released)
+          emitTaskUpdated(this, { ...released }, { emitAgent: false, stampUpdatedAt: true });
       }
       releaseRun();
     }

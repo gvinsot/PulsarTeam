@@ -261,7 +261,8 @@ export async function getWorkflowForBoard(
     if (pool) {
       let exists = false;
       try {
-        exists = (await pool.query('SELECT 1 FROM boards WHERE id = $1', [boardId])).rows.length > 0;
+        exists =
+          (await pool.query('SELECT 1 FROM boards WHERE id = $1', [boardId])).rows.length > 0;
       } catch (err) {
         throw new Error(`Failed to read the workflow of board ${boardId}: ${errorMessage(err)}`);
       }

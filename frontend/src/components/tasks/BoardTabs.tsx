@@ -1,6 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Trash2, Edit3, ChevronDown, Plus, KanbanSquare, Users, Share2, ArrowLeft, ArrowRight } from 'lucide-react';
+import {
+  Trash2,
+  Edit3,
+  ChevronDown,
+  Plus,
+  KanbanSquare,
+  Users,
+  Share2,
+  ArrowLeft,
+  ArrowRight,
+} from 'lucide-react';
 import type { BoardPermission } from '../../types';
 import { useUserDisplayName } from '../../hooks/useUserDisplayName';
 

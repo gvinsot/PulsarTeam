@@ -1216,17 +1216,18 @@ export default function TasksBoard({
               <select> is used instead of one button per repo: the toolbar is a
               horizontally-scrolling strip with a hidden scrollbar, so a long list
               of repo buttons would push the plugins/settings buttons out of reach. */}
-          {boardProjectsWithGithub.length === 1 && boardProjectsWithGithub.map(p => (
-            <button
-              key={p.name}
-              onClick={() => setActivityTarget(p.github)}
-              className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
-              title={`GitHub activity — ${p.name}`}
-            >
-              <GitCommit className="w-3.5 h-3.5" />
-              <span className="text-[10px] max-w-[80px] truncate">{p.name}</span>
-            </button>
-          ))}
+          {boardProjectsWithGithub.length === 1 &&
+            boardProjectsWithGithub.map(p => (
+              <button
+                key={p.name}
+                onClick={() => setActivityTarget(p.github)}
+                className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"
+                title={`GitHub activity — ${p.name}`}
+              >
+                <GitCommit className="w-3.5 h-3.5" />
+                <span className="text-[10px] max-w-[80px] truncate">{p.name}</span>
+              </button>
+            ))}
           {boardProjectsWithGithub.length > 1 && (
             <div className="relative flex items-center flex-shrink-0" title="GitHub activity">
               <GitCommit className="absolute left-1.5 w-3.5 h-3.5 text-dark-400 pointer-events-none" />

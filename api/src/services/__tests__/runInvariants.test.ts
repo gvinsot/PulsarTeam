@@ -60,9 +60,8 @@ const { setCurrentEnvironmentFromHost } = await import('../../lib/environment.js
 setCurrentEnvironmentFromHost('pulsar.example'); // locks the 'prod' environment
 const { processColumnEntry, recheckPendingTransitions } = await import('../workflow/index.js');
 const { isAgentBusy } = await import('../workflow/agentSelector.js');
-const { getTaskSignal, setAwaitingCompletion, clearTaskSignals } = await import(
-  '../agentManager/tasks.js'
-);
+const { getTaskSignal, setAwaitingCompletion, clearTaskSignals } =
+  await import('../agentManager/tasks.js');
 const { resolveAgentCurrentTask } = await import('../agentManager/currentTask.js');
 
 const mockIo = {
@@ -131,7 +130,13 @@ test('an agent running a task anywhere (sibling stack) is never given a second o
   const { mgr, ids } = await setup([{ name: 'Dev', role: 'dev' }]);
   const dev = ids.Dev;
   const prompts: string[] = [];
-  mgr.sendMessage = async (_agentId: string, _prompt: string, _cb: unknown, _d: unknown, meta: any) => {
+  mgr.sendMessage = async (
+    _agentId: string,
+    _prompt: string,
+    _cb: unknown,
+    _d: unknown,
+    meta: any
+  ) => {
     prompts.push(meta?.taskId);
     await mgr.setTaskStatus(null, meta.taskId, 'done', { by: 'Dev' });
     return 'ok';
@@ -217,7 +222,11 @@ test('a CLI run holds its agent until the terminal is quiet, not just until the 
         });
         // The CLI keeps printing after it moved the card — and commits once more.
         if (wrapUpPolls === 0) {
-          created.push({ hash: 'c'.repeat(40), msg: 'tail commit', at: Math.floor(Date.now() / 1000) });
+          created.push({
+            hash: 'c'.repeat(40),
+            msg: 'tail commit',
+            at: Math.floor(Date.now() / 1000),
+          });
         }
         if (++wrapUpPolls >= 3) phase = 'idle';
         return { alive: true, idle_seconds: 0 };
@@ -314,7 +323,11 @@ test('a chain resumes in the transition that was skipped, never replaying or ski
   // A pm appears: the retry runs refine (not title again), then the second
   // transition — whose change_status the old shared index skipped forever.
   const pm = await mgr.create({ boardId: 'board-1', name: 'Pm', role: 'pm' });
-  Object.assign(mgr.agents.get(pm.id), { status: 'idle', boardId: 'board-1', conversationHistory: [] });
+  Object.assign(mgr.agents.get(pm.id), {
+    status: 'idle',
+    boardId: 'board-1',
+    conversationHistory: [],
+  });
   await processColumnEntry({ ...rows.get('spec-task') }, mgr, { by: 'on-enter-retry' });
   assert.equal(titleCalls, 1, 'completed actions are not replayed');
   assert.equal(rows.get('spec-task').status, 'ready');
@@ -331,11 +344,7 @@ test('a chain never writes its bookkeeping onto a task that left its column', as
   await processColumnEntry({ ...task }, mgr, { by: 'test' });
   // First the deferral marker (b entered while a's chain held the task), then
   // b's own chain runs (continuation), skips, and records ITS resume point.
-  await waitFor(
-    () => rows.get('moving').resumeTransitionIdx === 0,
-    5_000,
-    "b's resume point"
-  );
+  await waitFor(() => rows.get('moving').resumeTransitionIdx === 0, 5_000, "b's resume point");
   const row = rows.get('moving');
   assert.equal(row.status, 'b');
   // b's own skipped chain armed it (transition 0, before its first action) —
@@ -382,7 +391,7 @@ test('stopping an agent halts only what it executes, never the tasks it merely o
   assert.equal(rows.get(othersRun.id).actionRunning, true);
 });
 
-test("a stop observed before a move never sends the task back to its old column", async () => {
+test('a stop observed before a move never sends the task back to its old column', async () => {
   const { mgr } = await setup([{ name: 'Dev', role: 'dev' }]);
   const seen = { ...seed({ id: 'moved-meanwhile', status: 'code' }) };
   rows.get('moved-meanwhile').status = 'backlog'; // a concurrent move lands first
@@ -444,7 +453,13 @@ test('a resumed condition chain is not re-gated by conditions its own actions ch
   ];
   const { mgr, ids } = await setup([{ name: 'Dev', role: 'dev' }]);
   const prompts: string[] = [];
-  mgr.sendMessage = async (_agentId: string, _prompt: string, _cb: unknown, _d: unknown, meta: any) => {
+  mgr.sendMessage = async (
+    _agentId: string,
+    _prompt: string,
+    _cb: unknown,
+    _d: unknown,
+    meta: any
+  ) => {
     prompts.push(meta?.taskId);
     await mgr.setTaskStatus(null, meta.taskId, 'done', { by: 'Dev' });
     return 'ok';

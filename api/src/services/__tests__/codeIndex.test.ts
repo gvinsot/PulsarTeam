@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { CodeIndexService } from '../codeIndexService.js';
+import { ZvecVectorStore } from '../codeSearch/vectorStore.js';
 import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
@@ -9,13 +10,16 @@ const TEST_DATA_DIR = path.join(os.tmpdir(), 'code-index-data-' + Date.now());
 const FIXTURE_DIR = path.join(os.tmpdir(), 'code-index-test-' + Date.now());
 
 let _serviceCounter = 0;
+const services: CodeIndexService[] = [];
 function makeService() {
   _serviceCounter++;
   const serviceDir = path.join(TEST_DATA_DIR, 'svc-' + _serviceCounter);
-  return new CodeIndexService({
+  const service = new CodeIndexService({
     storageRoot: serviceDir,
     allowedRoots: [FIXTURE_DIR, os.tmpdir()],
   });
+  services.push(service);
+  return service;
 }
 
 const FIXTURES = {
@@ -96,7 +100,14 @@ before(() => {
   }
 });
 
-after(() => {
+after(async () => {
+  // Native collections must flush/close before their directories are removed.
+  for (const service of services) {
+    const store = await service.vectorStorePromise;
+    if (store instanceof ZvecVectorStore) {
+      for (const name of store.collections.keys()) await store.releaseCollection(name);
+    }
+  }
   fsSync.rmSync(FIXTURE_DIR, { recursive: true, force: true });
   fsSync.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });

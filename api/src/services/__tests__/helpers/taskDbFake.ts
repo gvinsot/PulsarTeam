@@ -168,11 +168,23 @@ export function makeTaskDbFake() {
       ),
     getStaleRunClaims: async (ownEnv: string, staleSeconds = 120, legacyMinutes = 20) =>
       all()
-        .filter(t => card(t) && t.actionRunning === true && isStale(t, ownEnv, staleSeconds, legacyMinutes))
+        .filter(
+          t =>
+            card(t) && t.actionRunning === true && isStale(t, ownEnv, staleSeconds, legacyMinutes)
+        )
         .map(clone),
-    healStaleRunClaim: async (id: string, ownEnv: string, staleSeconds = 120, legacyMinutes = 20) => {
+    healStaleRunClaim: async (
+      id: string,
+      ownEnv: string,
+      staleSeconds = 120,
+      legacyMinutes = 20
+    ) => {
       const t = rows.get(id);
-      if (!live(t) || t.actionRunning !== true || !isStale(t, ownEnv, staleSeconds, legacyMinutes)) {
+      if (
+        !live(t) ||
+        t.actionRunning !== true ||
+        !isStale(t, ownEnv, staleSeconds, legacyMinutes)
+      ) {
         return null;
       }
       const staleAgentId = t.actionRunningAgentId || null;
@@ -218,10 +230,7 @@ export function makeTaskDbFake() {
       all()
         .filter(
           t =>
-            card(t) &&
-            t.commitRun &&
-            t.actionRunning !== true &&
-            (t.environment || 'prod') === env
+            card(t) && t.commitRun && t.actionRunning !== true && (t.environment || 'prod') === env
         )
         .map(clone),
     mutateTaskCommits: async (id: string, mutate: (commits: any[]) => any[] | null) => {

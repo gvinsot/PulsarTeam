@@ -59,5 +59,7 @@ export function agentsVisibleTo(
   scope: ReadonlySet<string>
 ): any[] {
   const userId = agent?.ownerId || null;
-  return allAgents.filter((candidate: any) => canSeeAgent(candidate, { userId, role: null }, scope));
+  return allAgents.filter((candidate: any) =>
+    canSeeAgent(candidate, { userId, role: null }, scope)
+  );
 }

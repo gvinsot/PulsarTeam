@@ -729,8 +729,7 @@ export class AgentManager {
         ? byId
         : configs.find(
             (c: any) =>
-              c.model === model &&
-              (c.costPerInputToken != null || c.costPerOutputToken != null)
+              c.model === model && (c.costPerInputToken != null || c.costPerOutputToken != null)
           );
     if (candidate) {
       return price(candidate.costPerInputToken || 0, candidate.costPerOutputToken || 0);

@@ -127,7 +127,13 @@ test('undefined startStatus never spuriously reports moved for an active task', 
 
 const waitCtx = { ...ctx, _pollTaskVerdict: (tasksMethods as any)._pollTaskVerdict };
 const waitInterval = (taskId: string, startStatus: string | undefined, ms: number) =>
-  (tasksMethods as any)._waitIntervalOrVerdict.call(waitCtx, taskId, 'some task text', startStatus, ms);
+  (tasksMethods as any)._waitIntervalOrVerdict.call(
+    waitCtx,
+    taskId,
+    'some task text',
+    startStatus,
+    ms
+  );
 
 test('_waitIntervalOrVerdict returns the verdict long before the interval ends', async () => {
   const id = 't-wait-early';

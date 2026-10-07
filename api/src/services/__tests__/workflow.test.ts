@@ -1093,10 +1093,7 @@ test('a rule is invisible to every task listing', async () => {
     ['getTasksByAssignee', await db.getTasksByAssignee(agentId)],
     ['getActiveWorkflowTasks', await db.getActiveWorkflowTasks(null)],
   ] as [string, any[]][]) {
-    assert.ok(
-      !listed.some(t => t.id === rule.id),
-      `${label} must not return the rule`
-    );
+    assert.ok(!listed.some(t => t.id === rule.id), `${label} must not return the rule`);
   }
   // …but the run it spawned is there.
   assert.equal((await db.getTasksByBoard('board-1')).length, 1);
@@ -1203,7 +1200,10 @@ test('retention deletes old finished runs and never one in flight', async () => 
   assert.equal(purged, 2, 'the two oldest finished runs are gone');
   const left = runsOf(rule.id);
   assert.equal(left.length, 3, '2 kept finished + 1 in flight');
-  assert.ok(left.some(t => t.id === stillRunning.id), 'the in-flight run survives');
+  assert.ok(
+    left.some(t => t.id === stillRunning.id),
+    'the in-flight run survives'
+  );
   // Run numbers keep climbing even after older rows are deleted.
   assert.equal(rule.recurrence.occurrenceCount, 5);
 });

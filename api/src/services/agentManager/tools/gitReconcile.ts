@@ -52,9 +52,7 @@ const REPO_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 export function isUsableRepoName(name: unknown): name is string {
   if (typeof name !== 'string') return false;
   const parts = name.split('/');
-  return (
-    parts.length === 2 && parts.every(p => REPO_SEGMENT.test(p) && p !== '.' && p !== '..')
-  );
+  return parts.length === 2 && parts.every(p => REPO_SEGMENT.test(p) && p !== '.' && p !== '..');
 }
 
 /** `git` invocation for the primary clone (exec cwd) or a secondary clone, which
@@ -167,7 +165,13 @@ export async function detectCommitsSinceBaseline(
 export async function detectCommits(
   executionManager: any,
   agentId: string,
-  { baselineHead, startedAt, until = null, secondaryRepo = null, ownCommits = [] }: DetectOptions = {}
+  {
+    baselineHead,
+    startedAt,
+    until = null,
+    secondaryRepo = null,
+    ownCommits = [],
+  }: DetectOptions = {}
 ): Promise<DetectedCommit[] | null> {
   const start = startedAt ? Date.parse(startedAt) : NaN;
   if (!Number.isFinite(start)) return [];
@@ -303,7 +307,13 @@ async function _reconcile(
   agentManager: any,
   executorAgentId: string,
   taskId: string,
-  { baselineHead, startedAt, until = null, secondaryBaselines = {}, label = 'Reconcile' }: ReconcileOptions
+  {
+    baselineHead,
+    startedAt,
+    until = null,
+    secondaryBaselines = {},
+    label = 'Reconcile',
+  }: ReconcileOptions
 ): Promise<{ linked: number; failed: boolean }> {
   const em = agentManager.executionManager;
   // Nothing can be read without an exec channel; that is not a failure to retry.
@@ -497,7 +507,11 @@ export async function recoverPersistedCommitRun(
   const attempts = (rec.recoverAttempts || 0) + 1;
   if (result.failed && attempts < MAX_RECOVERY_ATTEMPTS) {
     await updateTaskFields(task.id, {
-      commitRun: { ...rec, endedAt: rec.endedAt || new Date().toISOString(), recoverAttempts: attempts },
+      commitRun: {
+        ...rec,
+        endedAt: rec.endedAt || new Date().toISOString(),
+        recoverAttempts: attempts,
+      },
     });
     return result.linked;
   }

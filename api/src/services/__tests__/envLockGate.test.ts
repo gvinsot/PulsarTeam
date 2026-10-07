@@ -35,9 +35,8 @@ mock.module('../database.js', {
 });
 
 const { AgentManager } = await import('../agentManager.js');
-const { setCurrentEnvironmentFromHost, isEnvironmentLocked } = await import(
-  '../../lib/environment.js'
-);
+const { setCurrentEnvironmentFromHost, isEnvironmentLocked } =
+  await import('../../lib/environment.js');
 
 const mockIo = {
   emit() {},

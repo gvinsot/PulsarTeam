@@ -16,12 +16,7 @@
  * database (the sibling stack, the previous replica of a rolling update, the
  * stale-claim healer) and to the UI (spinner, Stop, undraggable card).
  */
-import {
-  claimTaskRun,
-  heartbeatTaskRun,
-  releaseTaskRun,
-  getRunningAgentIds,
-} from '../database.js';
+import { claimTaskRun, heartbeatTaskRun, releaseTaskRun, getRunningAgentIds } from '../database.js';
 import { setClaimedAgents } from './agentSelector.js';
 import { errorMessage } from '../../lib/errors.js';
 import type { Task, TaskRunClaimFailure } from '../database/tasks.js';
@@ -35,8 +30,7 @@ export async function refreshClaimedAgents(): Promise<void> {
 }
 
 export type ClaimResult =
-  | { ok: true; task: Task; stopHeartbeat: () => void }
-  | { ok: false; reason: TaskRunClaimFailure };
+  { ok: true; task: Task; stopHeartbeat: () => void } | { ok: false; reason: TaskRunClaimFailure };
 
 /**
  * Claim `taskId` for `agentId` and start heartbeating it. On failure nothing was
@@ -54,10 +48,7 @@ export async function claimRun(
   taskId: string,
   agentId: string,
   mode: string,
-  {
-    expectStatus = null,
-    onLost,
-  }: { expectStatus?: string | null; onLost?: () => void } = {}
+  { expectStatus = null, onLost }: { expectStatus?: string | null; onLost?: () => void } = {}
 ): Promise<ClaimResult> {
   const claim = await claimTaskRun(taskId, agentId, mode, expectStatus);
   if (!claim.ok) {

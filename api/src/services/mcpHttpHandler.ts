@@ -100,12 +100,10 @@ export function createMcpHttpHandler(
       const boardId = headerValue(req.headers['x-board-id']);
 
       if (!internalMcpContextMatches(req.user, agentId, boardId)) {
-        res
-          .status(403)
-          .json({
-            error:
-              'MCP service token does not match this agent/board. Refresh the runner configuration.',
-          });
+        res.status(403).json({
+          error:
+            'MCP service token does not match this agent/board. Refresh the runner configuration.',
+        });
         return;
       }
 

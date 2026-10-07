@@ -114,7 +114,9 @@ export default function CreateTaskModal({
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = previous; };
+    return () => {
+      document.body.style.overflow = previous;
+    };
   }, []);
 
   useEffect(() => {
@@ -231,7 +233,10 @@ export default function CreateTaskModal({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-4 min-h-0 overflow-y-auto overscroll-contain">
+        <form
+          onSubmit={handleSubmit}
+          className="flex flex-col gap-4 px-5 py-4 min-h-0 overflow-y-auto overscroll-contain"
+        >
           {/* Text */}
           <div>
             <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">

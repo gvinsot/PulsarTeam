@@ -143,10 +143,7 @@ function _clearChainMarkers(taskId: string, status: string) {
 export async function processColumnEntry(
   task: Task,
   agentManager: AgentManager,
-  {
-    by = null,
-    onRunClaimed,
-  }: { by?: string | null; onRunClaimed?: () => void } = {}
+  { by = null, onRunClaimed }: { by?: string | null; onRunClaimed?: () => void } = {}
 ) {
   const io = agentManager.io;
 
@@ -574,7 +571,9 @@ function _recheckTask(
     // A condition chain interrupted mid-way resumes without re-checking its
     // conditions: its own first actions may have made them false.
     const resuming =
-      transition.trigger === Trigger.CONDITION && !!resume && resume.transitionIdx === transitionIdx;
+      transition.trigger === Trigger.CONDITION &&
+      !!resume &&
+      resume.transitionIdx === transitionIdx;
 
     // Evaluate conditions
     const allMet =

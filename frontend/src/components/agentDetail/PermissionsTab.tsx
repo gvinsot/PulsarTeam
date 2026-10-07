@@ -405,13 +405,7 @@ function buildHookRules(agent: Agent) {
   }).concat(existing.filter(r => !BUILTIN_RULE_IDS.has(r.id)));
 }
 
-function PermissionsSecurityPanel({
-  agent,
-  onRefresh,
-}: {
-  agent: Agent;
-  onRefresh: () => void;
-}) {
+function PermissionsSecurityPanel({ agent, onRefresh }: { agent: Agent; onRefresh: () => void }) {
   const [perms, setPerms] = useState(() => buildPerms(agent));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -982,7 +976,9 @@ function findBoardAssignments(boards: BoardListItem[], agent: Agent): BoardAssig
           a.role &&
           a.role === agent.role
         ) {
-          reasons.add(`Role "${a.role}" (${a.type === 'run_agent' ? 'run' : 'assign'}) on "${col}"`);
+          reasons.add(
+            `Role "${a.role}" (${a.type === 'run_agent' ? 'run' : 'assign'}) on "${col}"`
+          );
         }
       }
     }
@@ -1025,9 +1021,8 @@ function AssignmentsPanel({ agent }: { agent: Agent }) {
   const agentTasks = tasks.filter(t => t.agentId === agent.id || t.assignee === agent.id);
   const boardName = (id?: string | null) => boards.find(b => b.id === id)?.name || 'Unknown board';
   const statusLabel = (t: TaskSocketPayload) =>
-    boards
-      .find(b => b.id === t.boardId)
-      ?.workflow?.columns?.find(c => c.id === t.status)?.label || t.status;
+    boards.find(b => b.id === t.boardId)?.workflow?.columns?.find(c => c.id === t.status)?.label ||
+    t.status;
 
   return (
     <div className="space-y-4">
