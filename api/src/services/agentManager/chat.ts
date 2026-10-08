@@ -1,4 +1,10 @@
 import { waitForProjectSwitch } from './crud.js';
+import {
+  replayNativeToolHistory,
+  interruptedWorkflowHistory,
+  TOOL_BUDGET_NOTICE,
+  ToolBudgetReachedError,
+} from './nativeToolHistory.js';
 // ─── Chat: sendMessage, _cleanMarkdown, _buildSystemPrompt, _assembleMessages,
 //     _streamAndContinue, _processPostResponseActions ──
 import { createProvider } from '../llmProviders.js';
@@ -296,25 +302,13 @@ export const chatMethods = {
       // assistant tool_calls followed by role: tool results. CLI runners keep
       // their own MCP/native loop and therefore receive no local tool schemas.
       const nativeToolTrace: any[] = [];
-      // One round = one assistant turn that asked for tools. A real coding task
-      // (explore → edit → build → commit → update_task) routinely needs dozens,
-      // so this is a runaway guard, not a step budget. Hitting it ENDS the turn
-      // instead of throwing: the work already done is kept, and the task loop's
-      // reminder brings the agent back. Throwing here marked the agent in error
-      // and stranded the task mid-flight.
+      // One round = one assistant turn asking for tools. Keep the runaway
+      // guard, but reserve a tool-free conclusion rather than silently exiting.
       const MAX_NATIVE_TOOL_ROUNDS = 40;
       let nativeToolRound = 0;
+      let toolBudgetReached = false;
       while (!isCliRunner(agent) && streamResult.toolCalls.length > 0) {
         nativeToolRound++;
-        if (nativeToolRound > MAX_NATIVE_TOOL_ROUNDS) {
-          console.warn(
-            `⚠️ [Tools] "${agent.name}": native tool loop hit ${MAX_NATIVE_TOOL_ROUNDS} rounds — ending turn`
-          );
-          if (streamCallback) {
-            streamCallback(`\n⚠️ *Tool budget reached (${MAX_NATIVE_TOOL_ROUNDS} rounds).*\n`);
-          }
-          break;
-        }
         postProcessingStarted = true;
 
         messages.push({
@@ -361,6 +355,57 @@ export const chatMethods = {
           });
         }
 
+        if (nativeToolRound === MAX_NATIVE_TOOL_ROUNDS - 5) {
+          messages.push({
+            role: 'user',
+            content:
+              'Only 5 tool rounds remain in this turn. Finish the essential checks and conclude. ' +
+              'If work remains, clearly report findings, unchecked items, blockers and next steps. ' +
+              'Do not claim completion unless the requested work is actually complete.',
+          });
+        }
+
+        if (nativeToolRound === MAX_NATIVE_TOOL_ROUNDS) {
+          toolBudgetReached = true;
+          console.warn(`⚠️ [Tools] "${agent.name}": tool limit reached — requesting final summary`);
+          fullResponse += TOOL_BUDGET_NOTICE;
+          streamCallback?.(TOOL_BUDGET_NOTICE);
+          messages.push({
+            role: 'user',
+            content:
+              'The tool limit has been reached. No more tools are available in this turn. ' +
+              "Write a final progress report in the user's language using the results above: " +
+              'findings, completed checks, unchecked items, blockers and precise next steps. ' +
+              'The work is incomplete and will need a continuation. Do not claim success, ' +
+              'emit tool calls, or output executable action JSON.',
+          });
+          try {
+            streamResult = await this._streamAndContinue(
+              agent,
+              id,
+              messages,
+              llmConfig,
+              streamCallback,
+              abortController,
+              activeTaskId,
+              { toolsEnabled: false, maxTokens: 4096 }
+            );
+            fullResponse += streamResult.fullResponse;
+            thinking += streamResult.thinkingBuffer;
+            if (!streamResult.fullResponse.trim()) throw new Error('Empty final summary');
+          } catch (summaryError) {
+            // Even a failed/aborted summary must not discard forty rounds of work.
+            console.warn(
+              `[Tools] Final summary failed for agent ${id}: ${summaryError instanceof Error ? summaryError.name : 'unknown error'}`
+            );
+            const fallback =
+              'La synthèse n’a pas pu être générée. Reprenez pour poursuivre à partir des résultats conservés.\n';
+            fullResponse += fallback;
+            streamCallback?.(fallback);
+          }
+          break;
+        }
+
         streamResult = await this._streamAndContinue(
           agent,
           id,
@@ -389,6 +434,12 @@ export const chatMethods = {
       if (displayContent.trim()) assistantEntry.displayContent = displayContent;
       if (thinking.trim()) assistantEntry.thinking = thinking;
       if (nativeToolTrace.length > 0) assistantEntry.nativeToolTrace = nativeToolTrace;
+      if (toolBudgetReached) assistantEntry.interruption = 'tool-budget';
+      if (messageMeta?.type === 'workflow-action') {
+        assistantEntry.taskId = messageMeta.taskId;
+        assistantEntry.workflowMode = messageMeta.mode;
+        assistantEntry.workflowStatus = messageMeta.currentStatus;
+      }
       if (streamResult.durationMs > 0) assistantEntry.durationMs = streamResult.durationMs;
       if (streamResult.outputTokens > 0) assistantEntry.outputTokens = streamResult.outputTokens;
       agent.conversationHistory.push(assistantEntry);
@@ -459,7 +510,20 @@ export const chatMethods = {
         project: agent.project || null,
         thinking: '',
       });
-      saveAgent(agent);
+      const saved = await saveAgent(agent);
+      if (saved === false) {
+        streamCallback?.(
+          '\n⚠️ Échec de sauvegarde : cet historique pourrait être perdu au redémarrage.\n'
+        );
+        this._emit('agent:updated', this._sanitize(agent));
+      }
+
+      if (toolBudgetReached) {
+        this._releaseChat(id, isTopLevel);
+        if (abortController.signal.aborted) throw new Error('Agent stopped by user');
+        if (messageMeta?.type === 'workflow-action') throw new ToolBudgetReachedError();
+        return fullResponse;
+      }
 
       const responseForParsing = this._cleanMarkdown(fullResponse);
       // A run that produced tokens but no parseable text is a silent dead end:
@@ -494,6 +558,8 @@ export const chatMethods = {
       this._releaseChat(id, isTopLevel);
       return fullResponse;
     } catch (err: any) {
+      // Already persisted and released. The workflow handles this as incomplete.
+      if (err instanceof ToolBudgetReachedError) throw err;
       // ── Rate limit: mark task as error and schedule retry ──
       if (err.isRateLimit) {
         const delayMs = Math.max(0, err.retryAt - Date.now());
@@ -1113,9 +1179,10 @@ export const chatMethods = {
     // conversationHistory, since those follow-up calls are not workflow-action
     // messages.
     if (isWorkflowAction) {
-      // No history — just system prompt + the action prompt (added below)
+      const resume = interruptedWorkflowHistory(agent.conversationHistory, messageMeta);
+      messages.push(...resume);
       console.log(
-        `📋 [Workflow Action] "${agent.name}": mode=${messageMeta.mode} — no history (one-shot)`
+        `📋 [Workflow Action] "${agent.name}": mode=${messageMeta.mode} — ${resume.length} interrupted turns resumed`
       );
     } else if (managesContext) {
       // Model manages its own context — only include history relevant to the current task.
@@ -1210,6 +1277,9 @@ export const chatMethods = {
     const userMsg: any = { role: 'user', content: userMessage };
     if (images && images.length > 0) userMsg.images = images;
     messages.push(userMsg);
+    if (!isCliRunner(agent)) {
+      messages.splice(0, messages.length, ...replayNativeToolHistory(messages));
+    }
 
     // Safety token check: only during task execution, non-managed context.
     // Chat mode scopes to last task start — no token-based compaction.
@@ -1242,6 +1312,9 @@ export const chatMethods = {
         const rebuildMsg: any = { role: 'user', content: userMessage };
         if (images && images.length > 0) rebuildMsg.images = images;
         messages.push(rebuildMsg);
+        if (!isCliRunner(agent)) {
+          messages.splice(0, messages.length, ...replayNativeToolHistory(messages));
+        }
       }
     }
 
@@ -1383,7 +1456,8 @@ export const chatMethods = {
     llmConfig: any,
     streamCallback: any,
     abortController: AbortController,
-    activeTaskId: string | null = null
+    activeTaskId: string | null = null,
+    options: { toolsEnabled?: boolean; maxTokens?: number } = {}
   ): Promise<{
     fullResponse: string;
     thinkingBuffer: string;
@@ -1433,7 +1507,10 @@ export const chatMethods = {
     // so the chat history must not reflow them as markdown/text.
     const responseStartedAt = Date.now();
 
-    const safeMaxTokens = this._safeMaxTokens(messages, agent, llmConfig);
+    const safeMaxTokens = Math.min(
+      this._safeMaxTokens(messages, agent, llmConfig),
+      options.maxTokens ?? Infinity
+    );
 
     this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, safeMaxTokens);
 
@@ -1463,7 +1540,7 @@ export const chatMethods = {
       maxTokens: safeMaxTokens,
       llmConfig,
       isContinuation: false,
-      tools: useCliRunner ? [] : NATIVE_TOOL_DEFINITIONS,
+      tools: useCliRunner || options.toolsEnabled === false ? [] : NATIVE_TOOL_DEFINITIONS,
     });
     fullResponse += first.text;
     thinkingBuffer += first.thinking;
@@ -1489,7 +1566,10 @@ export const chatMethods = {
       });
 
       finishReason = null;
-      const contMaxTokens = this._safeMaxTokens(messages, agent, llmConfig);
+      const contMaxTokens = Math.min(
+        this._safeMaxTokens(messages, agent, llmConfig),
+        options.maxTokens ?? Infinity
+      );
       this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, contMaxTokens);
       const contContextTokens = this._estimateTokens(messages);
       const cont = await this._consumeStream(provider, messages, {
@@ -1505,7 +1585,7 @@ export const chatMethods = {
         maxTokens: contMaxTokens,
         llmConfig,
         isContinuation: true,
-        tools: useCliRunner ? [] : NATIVE_TOOL_DEFINITIONS,
+        tools: useCliRunner || options.toolsEnabled === false ? [] : NATIVE_TOOL_DEFINITIONS,
       });
       fullResponse += cont.text;
       thinkingBuffer += cont.thinking;

@@ -225,6 +225,8 @@ export interface ConversationMessage {
   durationMs?: number;
   /** Assistant entries only, and only when > 0. */
   outputTokens?: number;
+  /** The turn stopped at its tool limit and needs a continuation. */
+  interruption?: 'tool-budget';
   /** Copied from messageMeta, but NO caller in api/src ever supplies it and no
    *  consumer reads it. Element shape is unknowable from the code, hence
    *  `unknown[]` rather than `any[]`. */
@@ -352,6 +354,8 @@ export interface AgentProjectContext {
  */
 export interface Agent {
   id: string;
+  /** Runtime warning when the latest database save failed. */
+  persistenceError?: string;
   batchId: string | null;
   /** 1-based member index; set on convertToBatch. */
   batchIndex: number | null;

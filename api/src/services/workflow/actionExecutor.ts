@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { ToolBudgetReachedError } from '../agentManager/nativeToolHistory.js';
 import { waitForProjectSwitch } from '../agentManager/crud.js';
 /**
  * ActionExecutor — executes individual workflow actions.
@@ -950,7 +951,28 @@ async function executeRunAgent(
       }
 
       return result;
-    } catch (err) {
+    } catch (caught) {
+      let err = caught;
+      if (err instanceof ToolBudgetReachedError) {
+        const attempts = (agentManager._decideNoDecisionCounts.get(task.id) || 0) + 1;
+        agentManager._decideNoDecisionCounts.set(task.id, attempts);
+        if (attempts < MAX_DECIDE_NO_DECISION) {
+          await agentManager._saveExecutionLog(
+            task.agentId,
+            task.id,
+            agent.id,
+            execStartMsgIdx,
+            execStartedAt,
+            false,
+            mode
+          );
+          return { executed: false, skipped: true, reason: 'tool-budget' };
+        }
+        agentManager._decideNoDecisionCounts.delete(task.id);
+        err = new Error(
+          'Tool limit reached on four consecutive turns. Work is incomplete; resume from the saved results or narrow the task.'
+        );
+      }
       // Distinguish a user-triggered Stop from a real failure. stopAgent() aborts
       // the in-flight stream and llmProviders throws "Agent stopped by user",
       // which propagates up here. Without this check, a user pressing Stop on a
@@ -1166,7 +1188,12 @@ async function _runSimpleMode(
   console.log(announce(task, agent.name));
 
   try {
-    const result = await agentManager.sendMessage(agent.id, prompt, () => {});
+    const result = await agentManager.sendMessage(agent.id, prompt, () => {}, 0, {
+      type: 'workflow-action',
+      mode: modeName,
+      taskId: task.id,
+      currentStatus: task.status,
+    });
     await apply(agentManager, task, result, agent.name);
     await agentManager._saveExecutionLog(
       task.agentId,
@@ -1178,6 +1205,7 @@ async function _runSimpleMode(
       modeName
     );
   } catch (err) {
+    if (err instanceof ToolBudgetReachedError) throw err;
     console.error(`[ActionExecutor] ${modeName} failed:`, errorMessage(err));
     await agentManager._saveExecutionLog(
       task.agentId,
@@ -1207,7 +1235,12 @@ async function _runRefineMode(
   const buf = { text: '' };
 
   await _withAgentStream(agentManager, agent.id, async () => {
-    const workflowMeta = { type: 'workflow-action', mode: 'refine', taskId: task.id };
+    const workflowMeta = {
+      type: 'workflow-action',
+      mode: 'refine',
+      taskId: task.id,
+      currentStatus: task.status,
+    };
     const result = await agentManager.sendMessage(
       agent.id,
       `[Auto-Transition] ${prompt}`,

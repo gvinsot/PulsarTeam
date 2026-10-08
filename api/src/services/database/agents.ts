@@ -11,6 +11,7 @@ type PersistableAgent = {
   id: string;
   ownerId?: string | null;
   boardId?: string | null;
+  persistenceError?: string;
 };
 
 /**
@@ -135,15 +136,27 @@ export async function getAgentById(id: string): Promise<Agent | null> {
  * persisted `true` would be reloaded with nothing left to clear it (e.g. the
  * "Switching repository…" overlay stuck forever after a deploy mid-clone).
  */
-const TRANSIENT_AGENT_FIELDS = ['projectSwitching'] as const;
+const TRANSIENT_AGENT_FIELDS = ['projectSwitching', 'persistenceError'] as const;
 
 /** JSON for the `data` column, without the runtime-only fields. */
 export function serializeAgentData(agent: PersistableAgent): string {
-  return JSON.stringify(agent, function (this: unknown, key: string, value: unknown) {
+  const json = JSON.stringify(agent, function (this: unknown, key: string, value: unknown) {
     if (this === agent && (TRANSIENT_AGENT_FIELDS as readonly string[]).includes(key)) {
       return undefined;
     }
     return value;
+  });
+  // JSON permits NUL and lone UTF-16 surrogates; PostgreSQL JSONB rejects them.
+  // Tool output (including binary file reads) can contain either. Decode only
+  // affected JSON string tokens, including keys, so literal "\\u0000" source
+  // text is preserved and valid surrogate pairs / emoji remain intact.
+  return json.replace(/"(?:[^"\\]|\\.)*"/g, token => {
+    if (!/\\u(?:0000|d[89a-f])/i.test(token)) return token;
+    const value: string = JSON.parse(token);
+    const safe = value
+      .replaceAll('\0', '\uFFFD')
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+    return safe === value ? token : JSON.stringify(safe);
   });
 }
 
@@ -158,8 +171,13 @@ export async function saveAgent(agent: PersistableAgent) {
        ON CONFLICT (id) DO UPDATE SET data = $2, owner_id = $3, board_id = $4, updated_at = NOW()`,
       [agent.id, serializeAgentData(agent), agent.ownerId || null, agent.boardId || null]
     );
+    delete agent.persistenceError;
+    return true;
   } catch (err) {
-    console.error('Failed to save agent:', errorMessage(err));
+    agent.persistenceError =
+      'Échec de sauvegarde : cet historique pourrait être perdu au redémarrage.';
+    console.error(`Failed to save agent ${agent.id}:`, errorMessage(err));
+    return false;
   }
 }
 

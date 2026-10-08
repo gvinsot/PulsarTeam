@@ -10,6 +10,7 @@
 
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { ToolBudgetReachedError } from '../agentManager/nativeToolHistory.js';
 import { makeTaskDbFake } from './helpers/taskDbFake.js';
 import type { WorkflowColumn } from '../workflow/taskStateMachine.js';
 import type { TaskHistoryEntry } from '../database/tasks.js';
@@ -268,6 +269,7 @@ const { AgentManager } = await import('../agentManager.js');
 const { setCurrentEnvironmentFromHost } = await import('../../lib/environment.js');
 setCurrentEnvironmentFromHost('pulsar.example');
 const { processColumnEntry, reconcileStaleActionRunning } = await import('../workflow/index.js');
+const { executeAction } = await import('../workflow/actionExecutor.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -843,6 +845,51 @@ test('chain-continuation advances columns immediately, without waiting for the p
     );
   } finally {
     restore();
+  }
+});
+
+test('interrupted workflow actions never apply a partial answer or count as success', async () => {
+  for (const mode of ['decide', 'refine', 'title', 'set_type'] as const) {
+    const mgr = await setup([{ name: 'Security', role: 'assistant', runner: 'sandbox' }]);
+    const { task } = createTask(mgr, 'Audit still incomplete', 'step1');
+    const logSuccess: boolean[] = [];
+    mgr._saveExecutionLog = async (_owner, _task, _agent, _idx, _started, success) => {
+      assert.equal(typeof success, 'boolean');
+      logSuccess.push(success === true);
+    };
+    mgr.sendMessage = async (_id, _message, _stream, _depth, meta) => {
+      assert.equal(meta.type, 'workflow-action');
+      assert.equal(meta.taskId, task.id);
+      throw new ToolBudgetReachedError();
+    };
+    const action = {
+      type: 'run_agent' as const,
+      mode,
+      role: 'assistant',
+      instructions: 'Audit and decide',
+    };
+    const context = {
+      agentManager: mgr,
+      io: mockIo,
+      ownerId: null,
+      workflow: { columns: TEST_WORKFLOW.columns, transitions: [] },
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      assert.deepEqual(await executeAction(action, task, context), {
+        executed: false,
+        skipped: true,
+        reason: 'tool-budget',
+      });
+    }
+    const last = await executeAction(action, task, context);
+    assert.equal(last.executed, false);
+    assert.equal(last.error, true, 'repeated exhaustion must not retry forever');
+    assert.match(last.message || '', /Work is incomplete/);
+    assert.deepEqual(logSuccess, [false, false, false, false]);
+    assert.equal(taskRows.get(task.id)?.text, 'Audit still incomplete');
+    assert.equal(taskRows.get(task.id)?.title, null);
+    assert.equal(taskRows.get(task.id)?.taskType, null);
+    assert.equal(taskRows.get(task.id)?.status, 'step1');
   }
 });
 

@@ -479,6 +479,27 @@ export default function ChatTab({
             ))}
           </div>
         )}
+        {agent.persistenceError && (
+          <p role="alert" className="mb-3 text-sm text-red-300">
+            {agent.persistenceError}
+          </p>
+        )}
+        {!sending && !isBusy && history.at(-1)?.interruption === 'tool-budget' && (
+          <div className="mb-3 flex items-center justify-between gap-3 text-sm text-amber-300">
+            <span>Limite atteinte — travail à poursuivre</span>
+            <button
+              type="button"
+              onClick={() =>
+                onSend(
+                  'Poursuis le travail inachevé à partir des résultats des outils conservés. Ne recommence pas les vérifications déjà effectuées ; termine les étapes restantes et donne ta conclusion.'
+                )
+              }
+              className="rounded-lg bg-amber-500/15 px-3 py-2 hover:bg-amber-500/25"
+            >
+              Continuer
+            </button>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <button
             onClick={onClear}

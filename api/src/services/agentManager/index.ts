@@ -277,7 +277,8 @@ export interface AgentManager {
     llmConfig: any,
     streamCallback: any,
     abortController: AbortController,
-    activeTaskId?: string | null
+    activeTaskId?: string | null,
+    options?: { toolsEnabled?: boolean; maxTokens?: number }
   ): Promise<{
     fullResponse: string;
     thinkingBuffer: string;

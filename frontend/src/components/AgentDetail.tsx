@@ -298,20 +298,23 @@ export default function AgentDetail({
     }
   }, [agent?.status]);
 
-  const handleSend = async () => {
-    const hasImages = pendingImages.length > 0;
-    if ((!message.trim() && !hasImages) || sendingRef.current) return;
+  const handleSend = async (text?: string) => {
+    const hasImages = text === undefined && pendingImages.length > 0;
+    const outgoing = text ?? message;
+    if ((!outgoing.trim() && !hasImages) || sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
-    const msg = message.trim() || (hasImages ? '(image)' : '');
+    const msg = outgoing.trim() || (hasImages ? '(image)' : '');
     const imagesToSend = hasImages
       ? pendingImages.map(img => ({ data: img.data, mediaType: img.mediaType }))
       : null;
     const imagePreviewsForHistory = hasImages
       ? pendingImages.map(img => ({ data: img.data, mediaType: img.mediaType }))
       : undefined;
-    setMessage('');
-    setPendingImages([]);
+    if (text === undefined) {
+      setMessage('');
+      setPendingImages([]);
+    }
 
     if (socket) {
       // Each REQ_CHAT carries a unique messageId so the server can dedup
@@ -387,6 +390,11 @@ export default function AgentDetail({
           histEntry,
           { role: 'assistant', content: result.response, timestamp: new Date().toISOString() },
         ]);
+        // Fetch the durable turn metadata too (interruption, save warning).
+        // HTTP-only clients must offer the same continuation as socket clients.
+        const fresh = await api.getAgent(agent.id);
+        setFullAgent(fresh);
+        setHistory(fresh.conversationHistory || []);
       } catch (err) {
         console.error(err);
         if (showToast) showToast("Échec d'envoi du message.", 'error', 6000);
