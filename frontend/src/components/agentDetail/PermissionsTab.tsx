@@ -5,7 +5,6 @@ import {
   Globe,
   HardDrive,
   Terminal,
-  User,
   FolderLock,
   KeyRound,
   Eye,
@@ -27,7 +26,6 @@ import type {
   TaskSocketPayload,
   AgentPermissionsExecution,
   AgentPermissionsFilesystem,
-  AgentPermissionsLinuxUser,
   AgentPermissionsNetwork,
   AgentToolHookRule,
 } from '../../types';
@@ -36,20 +34,16 @@ import type {
  * The permissions blob this tab edits: AgentPermissions with every section and
  * every grant present, because buildPerms() merges the agent's stored (and
  * entirely optional) permissions over DEFAULT_PERMISSIONS below. `Required<…>`
- * of the four exported section interfaces is what "merged over the defaults"
+ * of the three exported section interfaces is what "merged over the defaults"
  * means in the type system.
  */
 interface EditablePermissions {
-  linuxUser: Required<AgentPermissionsLinuxUser>;
   network: Required<AgentPermissionsNetwork>;
   filesystem: Required<AgentPermissionsFilesystem>;
   execution: Required<AgentPermissionsExecution>;
 }
 
 const DEFAULT_PERMISSIONS: EditablePermissions = {
-  linuxUser: {
-    runAsRoot: false,
-  },
   network: {
     internetAccess: true,
     allowedDomains: [],
@@ -386,9 +380,6 @@ const BUILTIN_RULE_IDS = new Set(BUILTIN_RULES.map(r => r.id));
 // round-trip via api.updateAgent.
 function buildPerms(agent: Agent): EditablePermissions {
   return {
-    ...DEFAULT_PERMISSIONS,
-    ...agent.permissions,
-    linuxUser: { ...DEFAULT_PERMISSIONS.linuxUser, ...agent.permissions?.linuxUser },
     network: { ...DEFAULT_PERMISSIONS.network, ...agent.permissions?.network },
     filesystem: { ...DEFAULT_PERMISSIONS.filesystem, ...agent.permissions?.filesystem },
     execution: { ...DEFAULT_PERMISSIONS.execution, ...agent.permissions?.execution },
@@ -559,23 +550,6 @@ function PermissionsSecurityPanel({ agent, onRefresh }: { agent: Agent; onRefres
           )}
         </button>
       </div>
-
-      {/* Linux User */}
-      <PermissionCard
-        icon={User}
-        title="Linux User"
-        description="Controls the user identity inside the agent's container. Running as a non-root user limits the agent's ability to modify system files."
-      >
-        <PermissionRow
-          label="Run as root"
-          description="Allows the agent to execute commands with root privileges"
-        >
-          <ToggleSwitch
-            enabled={perms.linuxUser.runAsRoot}
-            onChange={v => update('linuxUser', 'runAsRoot', v)}
-          />
-        </PermissionRow>
-      </PermissionCard>
 
       {/* Network Access */}
       <PermissionCard
@@ -884,12 +858,8 @@ function PermissionsSecurityPanel({ agent, onRefresh }: { agent: Agent; onRefres
         <h4 className="text-xs font-medium text-dark-400 mb-2">Active Configuration Summary</h4>
         <div className="grid grid-cols-2 gap-2 text-[11px]">
           <div className="flex items-center gap-1.5">
-            <div
-              className={`w-1.5 h-1.5 rounded-full ${perms.linuxUser.runAsRoot ? 'bg-red-500' : 'bg-emerald-500'}`}
-            />
-            <span className="text-dark-400">
-              User: {perms.linuxUser.runAsRoot ? 'root' : 'agent (default)'}
-            </span>
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="text-dark-400">User: agent (non-root)</span>
           </div>
           <div className="flex items-center gap-1.5">
             <div

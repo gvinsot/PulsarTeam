@@ -108,20 +108,18 @@ def _noop_configure(agent_user, agent_id):
     return None
 
 
-async def _no_agent_user(agent_id, owner_id=None):
-    return None
+async def _cached_agent_user(agent_id, owner_id=None):
+    return _agent_users[agent_id]
 
 
 _UNSET = object()
 
 
-def build_recipe(name, tmp_path, monkeypatch, uid=None, llm=_UNSET, agent_id=None):
+def build_recipe(name, tmp_path, monkeypatch, uid=20001, llm=_UNSET, agent_id=None):
     """Return the `prepare_interactive` recipe for backend `name`.
 
-    `uid` controls the per-agent UID the CLI subprocess would drop to: `None`
-    means runAsRoot (the parent's UID). Claude's launch command depends on this
-    (it drops `--dangerously-skip-permissions` when it would run as root), so
-    the Claude-specific tests pass a non-root UID explicitly.
+    `uid` controls the per-agent UID the CLI subprocess would drop to.
+    Invalid UIDs must fail before a launch recipe is returned.
 
     `llm` overrides the per-agent LLM config `_BACKENDS` pins for this backend;
     pass None to build the "Default LLM" recipe (no `--model`, the CLI picks its
@@ -132,7 +130,7 @@ def build_recipe(name, tmp_path, monkeypatch, uid=None, llm=_UNSET, agent_id=Non
     llm = default_llm if llm is _UNSET else llm
     module = importlib.import_module(mod_name)
     agent_id = agent_id or f"agent-{name}"
-    _agent_users[agent_id] = {"home": str(tmp_path), "uid": uid, "gid": uid}
+    _agent_users[agent_id] = {"username": "agent_test", "home": str(tmp_path), "uid": uid, "gid": uid}
     try:
         if name == "claude-code":
             agent_user = {
@@ -157,11 +155,10 @@ def build_recipe(name, tmp_path, monkeypatch, uid=None, llm=_UNSET, agent_id=Non
             monkeypatch.setattr(backend, "_ensure_auth", _gate)
             return asyncio.run(backend.prepare_interactive(agent_id, owner_id="owner-1"))
 
-        # cli_backend-based runners: ensure_agent_user → None (runAsRoot), HOME
-        # is taken from the _agent_users cache, MCP/instruction writers stubbed.
+        # Use an isolated account, with MCP/instruction writers stubbed.
         for mod in {module, cli_backend_module}:
             if hasattr(mod, "ensure_agent_user"):
-                monkeypatch.setattr(mod, "ensure_agent_user", _no_agent_user)
+                monkeypatch.setattr(mod, "ensure_agent_user", _cached_agent_user)
         backend = getattr(module, cls_name)()
         backend._configure_mcp = _noop_configure
         backend._configure_instructions = _noop_configure

@@ -87,7 +87,7 @@ Manages the plugins and MCP integrations attached to the agent.
 
 Sandbox security gates for what the agent is allowed to do at runtime.
 
-- **Linux user** — read-only display of the Linux UID assigned to the agent; toggle for `runAsRoot` (admin-only on most installs).
+- **Linux user** — agents always run with an isolated non-root UID/GID. Root execution cannot be enabled in permissions; legacy root grants are removed on migration and ignored by runners.
 - **Network** — toggle for internet access; allow-list of domains.
 - **Filesystem** — toggle read/write to the workspace; list of restricted paths.
 - **Execution** — toggle shell access; toggle "skip dangerous prompts" (allows the agent to bypass user confirmation prompts in its inner Claude Code shell).

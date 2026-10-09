@@ -383,8 +383,8 @@ class OpenCodeBackend(CliBackend):
         # they're switchable in the opencode TUI; the Settings-selected model
         # (if any) stays the default.
         managed = _inject_local_models(managed, model)
-        # Always resolve the agent's HOME from the cache, even when running as
-        # root (effective_user=None from linuxUser.runAsRoot). Without this the
+        # Resolve the agent's HOME from the cache when not passed explicitly.
+        # Without this the
         # provider config file is never written and opencode receives only
         # `--model vllm/...` with no endpoint/apiKey, so the connection fails.
         home_dir, _, _ = resolve_agent_home(agent_user, agent_id)
@@ -430,7 +430,7 @@ class OpenCodeBackend(CliBackend):
             disable_autoupdate=True,
         )
         if merged and merged != existing_json:
-            # When the spawn keeps its parent UID (root via runAsRoot), don't
+            # When the spawn keeps its parent UID (global administrative calls), don't
             # chown the file to the agent UID — root needs to read it back,
             # and chown after creation could lock it away from the real spawn.
             uid = agent_user.get("uid") if agent_user else None

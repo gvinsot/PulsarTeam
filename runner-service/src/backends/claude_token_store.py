@@ -938,15 +938,17 @@ def get_subprocess_kwargs(agent_user: dict = None) -> dict:
 
     Requires the parent process to have ambient CAP_SETUID/CAP_SETGID — granted
     by the entrypoint via setpriv. If the agent record doesn't carry a dedicated
-    UID (e.g. legacy code path) we return an empty dict and the subprocess runs
-    as the parent's UID.
+    UID, refuse the launch. Calls without an agent are reserved for global
+    administrative operations.
 
     Note: uses ``preexec_fn`` rather than ``user``/``group`` because uvloop's
     ``subprocess_exec`` (used by FastAPI/uvicorn) does not accept those kwargs
     even though stdlib asyncio supports them since Python 3.9.
     """
-    if not agent_user:
+    if agent_user is None:
         return {}
+    from agent_user import require_agent_user
+    require_agent_user(agent_user)
     uid = agent_user.get("uid")
     gid = agent_user.get("gid")
     parent_uid = os.getuid()

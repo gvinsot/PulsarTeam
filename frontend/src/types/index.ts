@@ -112,7 +112,6 @@ export type {
   AgentMcpAuthUpdate,
   AgentCredentialRef,
   AgentCredentialsUpdate,
-  AgentPermissionsLinuxUser,
   AgentPermissionsNetwork,
   AgentPermissionsFilesystem,
   AgentPermissionsExecution,

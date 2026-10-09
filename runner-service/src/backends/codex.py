@@ -271,8 +271,8 @@ class CodexBackend(CliBackend):
         if model:
             cmd += ["--model", model]
 
-        # Env: minimal sanitized env (keyed on agent_user even when runAsRoot
-        # nulls effective_user). CODEX_HOME is implicit via the HOME of the
+        # Env: minimal sanitized env keyed on agent_user.
+        # CODEX_HOME is implicit via the HOME of the
         # dropped UID (see ensure_agent_user).
         env = sanitize_env(os.environ, agent_user)
 

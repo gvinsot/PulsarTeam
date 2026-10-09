@@ -22,21 +22,18 @@ def _noop_configure(agent_user, agent_id):
     return None
 
 
-async def _no_agent_user(agent_id, owner_id=None):
-    return None
+async def _cached_agent_user(agent_id, owner_id=None):
+    return _agent_users[agent_id]
 
 
 def _prepare(backend_module, backend, agent_id, tmp_path, monkeypatch):
-    """Run prepare_interactive with agent-user provisioning stubbed out:
-    ensure_agent_user returns None (as under linuxUser.runAsRoot) and the
-    agent HOME comes from the _agent_users cache, like the _agent_env tests
-    in the sibling suites."""
+    """Build a recipe using a provisioned non-root agent account."""
     for mod in {backend_module, cli_backend_module}:
         if hasattr(mod, "ensure_agent_user"):
-            monkeypatch.setattr(mod, "ensure_agent_user", _no_agent_user)
+            monkeypatch.setattr(mod, "ensure_agent_user", _cached_agent_user)
     backend._configure_mcp = _noop_configure
     backend._configure_instructions = _noop_configure
-    _agent_users[agent_id] = {"home": str(tmp_path), "uid": None, "gid": None}
+    _agent_users[agent_id] = {"username": "agent_test", "home": str(tmp_path), "uid": 20001, "gid": 20001}
     try:
         return asyncio.run(backend.prepare_interactive(agent_id))
     finally:
@@ -55,7 +52,7 @@ def test_opencode_recipe_shape(tmp_path, monkeypatch):
     assert recipe["cmd"][recipe["cmd"].index("--model") + 1] == "vllm/qwen"
     assert isinstance(recipe["cwd"], str) and recipe["cwd"]
     assert recipe["env"]["HOME"] == str(tmp_path)
-    assert recipe["preexec_fn"] is None
+    assert callable(recipe["preexec_fn"])
 
 
 def test_openclaw_recipe_shape(tmp_path, monkeypatch):
@@ -69,7 +66,7 @@ def test_openclaw_recipe_shape(tmp_path, monkeypatch):
     assert "--local" in recipe["cmd"]  # OPENCLAW_LOCAL defaults to true
     assert isinstance(recipe["cwd"], str) and recipe["cwd"]
     assert recipe["env"]["HOME"] == str(tmp_path)
-    assert recipe["preexec_fn"] is None
+    assert callable(recipe["preexec_fn"])
 
 
 def test_hermes_recipe_includes_files_watch(tmp_path, monkeypatch):
@@ -82,7 +79,7 @@ def test_hermes_recipe_includes_files_watch(tmp_path, monkeypatch):
     assert recipe["cmd"][:2] == ["hermes", "chat"]
     assert "--yolo" in recipe["cmd"]  # dangerousSkipPermissions defaults on
     assert isinstance(recipe["cwd"], str) and recipe["cwd"]
-    assert recipe["preexec_fn"] is None
+    assert callable(recipe["preexec_fn"])
     assert recipe["files_watch_paths"] == [
         os.path.join(str(tmp_path), ".hermes", "config.yaml"),
         os.path.join(str(tmp_path), ".hermes", ".env"),
@@ -102,7 +99,7 @@ def test_aider_recipe_shape(tmp_path, monkeypatch):
     assert recipe["cmd"][recipe["cmd"].index("--model") + 1] == "openai/gpt-4o"
     assert "--yes-always" in recipe["cmd"]
     assert isinstance(recipe["cwd"], str) and recipe["cwd"]
-    assert recipe["preexec_fn"] is None
+    assert callable(recipe["preexec_fn"])
 
 
 def test_codex_recipe_includes_creds_watch(tmp_path, monkeypatch):
@@ -115,7 +112,7 @@ def test_codex_recipe_includes_creds_watch(tmp_path, monkeypatch):
     assert recipe["cmd"][0] == "codex"
     assert "--dangerously-bypass-approvals-and-sandbox" in recipe["cmd"]
     assert isinstance(recipe["cwd"], str) and recipe["cwd"]
-    assert recipe["preexec_fn"] is None
+    assert callable(recipe["preexec_fn"])
     assert recipe["creds_watch_path"].endswith("auth.json")
     assert callable(recipe["creds_on_change"])
     assert callable(recipe["creds_dedup_key"])
@@ -128,8 +125,8 @@ def test_claude_recipe_refreshes_auth_before_spawning(tmp_path, monkeypatch):
         "username": "agent_claude",
         "owner_id": "owner-1",
         "home": str(tmp_path),
-        "uid": None,
-        "gid": None,
+        "uid": 20001,
+        "gid": 20001,
     }
     calls = []
 

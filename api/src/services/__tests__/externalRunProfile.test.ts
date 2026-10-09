@@ -77,7 +77,6 @@ function makeAgent(overrides: Record<string, unknown> = {}) {
     permissions: {
       network: { internetAccess: true, allowedDomains: ['github.com'] },
       execution: { shellAccess: true, dangerousSkipPermissions: true },
-      linuxUser: { runAsRoot: true },
       filesystem: { writeAccess: true },
     },
     credentials: { STRIPE_KEY: 'sk_live_secret' },

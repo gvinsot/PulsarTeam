@@ -132,7 +132,7 @@ class HistoryCaptureState(Enum):
 #
 # tmux runs as the agent's dropped UID (preexec_fn), so its socket lives under
 # /tmp/tmux-<uid>/<socket> — naturally isolated per agent UID. We still key the
-# session name on agent_id so the runAsRoot (shared UID) case stays correct.
+# session name on agent_id so the shared administrative UID case stays correct.
 # tmux is a hard requirement (baked into the runner image): start() raises
 # when it is unavailable.
 _TMUX_BIN = "tmux"

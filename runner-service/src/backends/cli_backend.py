@@ -17,7 +17,7 @@ from typing import AsyncIterator, Optional
 from config import (
     RUNNER_MODEL, CLI_CWD, TIMEOUT, PROJECTS_DIR, VERBOSE, logger,
 )
-from agent_user import get_agent_project_dir, ensure_agent_user, resolve_agent_home
+from agent_user import require_agent_user, get_agent_project_dir, ensure_agent_user, resolve_agent_home
 from .base import RunnerBackend
 from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_config_store import PersistedConfigMixin
@@ -252,21 +252,9 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
     def _resolve_effective_user(
         self, agent_id: Optional[str], agent_user: Optional[dict],
     ) -> Optional[dict]:
-        """Honor the linuxUser.runAsRoot toggle.
-
-        When the toggle is on, return None so the spawn inherits the parent
-        process UID (root in our deployment). When off (default), keep the
-        dedicated per-agent UID resolved by ensure_agent_user.
-        """
-        perms = self._get_permissions(agent_id) or {}
-        run_as_root = bool((perms.get("linuxUser") or {}).get("runAsRoot", False))
-        if run_as_root:
-            if agent_user:
-                logger.info(
-                    f"[Agent {agent_id[:12] if agent_id else 'unknown'}] "
-                    "linuxUser.runAsRoot=true — spawning as root (UID drop disabled)"
-                )
-            return None
+        """Always use the isolated account, including for legacy root permissions."""
+        if agent_id:
+            require_agent_user(agent_user)
         return agent_user
 
     # ── Lifecycle ─────────────────────────────────────────────────────────

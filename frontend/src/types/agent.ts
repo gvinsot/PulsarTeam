@@ -271,11 +271,6 @@ export interface AgentCredentialRef {
  */
 export type AgentCredentialsUpdate = Record<string, string>;
 
-/** Linux-user grants inside AgentPermissions. Shape from api/src/schemas/agents.ts:49. */
-export interface AgentPermissionsLinuxUser {
-  runAsRoot?: boolean;
-}
-
 /** Network grants inside AgentPermissions. */
 export interface AgentPermissionsNetwork {
   internetAccess?: boolean;
@@ -299,12 +294,11 @@ export interface AgentPermissionsExecution {
  * Sandbox/runner capability grants for one agent; null on Agent until the user
  * saves the Permissions tab once. Shape from api/src/schemas/agents.ts:49.
  *
- * The four sections are named interfaces rather than inline anonymous objects so
+ * The three sections are named interfaces rather than inline anonymous objects so
  * a consumer can type a single section — PermissionsTab edits them one at a time —
  * and so this file stays consistent with every other sub-shape in the module.
  */
 export interface AgentPermissions {
-  linuxUser?: AgentPermissionsLinuxUser;
   network?: AgentPermissionsNetwork;
   filesystem?: AgentPermissionsFilesystem;
   execution?: AgentPermissionsExecution;

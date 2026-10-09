@@ -87,8 +87,8 @@ def resolve_agent_home(
 ) -> tuple[Optional[str], Optional[int], Optional[int]]:
     """Resolve (home, uid, gid) for an agent, falling back to the runtime
     `_agent_users` cache when `agent_user` is None or incomplete —
-    linuxUser.runAsRoot spawns pass effective_user=None but the per-agent
-    HOME still exists. Returns (None, None, None) when no HOME is known;
+    the per-agent HOME may already exist before a caller resolves its user.
+    Returns (None, None, None) when no HOME is known;
     callers must guard on `home` before using uid/gid."""
     home_user = agent_user
     if (not home_user or not home_user.get("home")) and agent_id:
@@ -132,12 +132,19 @@ def _chown_home_walk(home_dir: str, agent_uid: int, agent_gid: int) -> None:
 
 # --- Agent user management ----------------------------------------------------
 
+def require_agent_user(agent_user: Optional[dict]) -> None:
+    """Fail closed rather than launch an agent with the server's privileges."""
+    uid = (agent_user or {}).get("uid")
+    gid = (agent_user or {}).get("gid", uid)
+    if type(uid) is not int or uid <= 0 or type(gid) is not int or gid <= 0:
+        raise RuntimeError("Agent execution requires a non-root UID and GID")
+
+
 async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
     """Create an isolated home directory for the given agent ID.
 
-    Instead of creating Linux users (requires root), we create separate
-    home directories and override HOME/USER env vars. CLI tools use $HOME
-    to find their config files, so this provides effective isolation.
+    Allocate a dedicated non-root UID/GID and a private HOME. Provisioning
+    errors abort the launch instead of inheriting the server's privileges.
     """
     if not agent_id:
         return None
@@ -200,21 +207,15 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
             # Hand ownership to the agent's UID and lock down the HOME so other
             # agents (or anything else running in this container) cannot peek.
             # Per-inode try/except + lchown (don't follow symlinks): a transient
-            # socket or broken symlink left by a previous CLI run must not abort
-            # the whole setup and force a fallback to the parent (root) UID,
-            # otherwise the next spawn runs claude as root and the CLI refuses
-            # --dangerously-skip-permissions.
+            # socket or broken symlink left by a previous CLI run can be skipped.
+            # Failure to secure the HOME itself must abort the launch.
             try:
                 os.lchown(home_dir, agent_uid, agent_gid)
                 os.chmod(home_dir, 0o700)
             except PermissionError as e:
-                logger.warning(
-                    f"[Agent User] chown {home_dir} -> uid={agent_uid} failed: {e}. "
-                    "The server is missing CAP_CHOWN — falling back to parent UID. "
-                    "Per-agent filesystem isolation is DEGRADED."
-                )
-                agent_uid = os.getuid()
-                agent_gid = os.getgid()
+                raise RuntimeError(
+                    f"Cannot isolate agent home {home_dir}: CAP_CHOWN is required"
+                ) from e
             else:
                 if already_isolated:
                     # Fast path (restart): the tree is already owned by this
@@ -245,7 +246,7 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
             return user_info
         except Exception as e:
             logger.error(f"[Agent User] Failed to create home for agent {agent_id}: {e}")
-            return None
+            raise RuntimeError(f"Failed to initialize isolated user for agent {agent_id}") from e
 
 
 # --- Agent project management -------------------------------------------------

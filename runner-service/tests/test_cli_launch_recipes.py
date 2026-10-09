@@ -33,9 +33,7 @@ def test_launch_recipe_contract(spec, tmp_path, monkeypatch):
     the CLI can write its config/credentials into, and the preexec_fn key present
     (the PTY spawn reads it to drop privileges to the per-agent UID).
 
-    HOME's exact value is backend-specific (runAsRoot resolves to /root for some
-    runners, to the per-agent home for others) — the per-backend home wiring is
-    pinned in test_prepare_interactive; here we only require a usable HOME."""
+    Every agent recipe keeps its isolated HOME."""
     recipe = build_recipe(spec["name"], tmp_path, monkeypatch)
 
     assert isinstance(recipe["cwd"], str) and recipe["cwd"]
@@ -44,12 +42,11 @@ def test_launch_recipe_contract(spec, tmp_path, monkeypatch):
     assert "preexec_fn" in recipe
 
 
-def test_claude_drops_skip_permissions_when_running_as_root(tmp_path, monkeypatch):
-    # The Claude CLI hard-refuses --dangerously-skip-permissions under euid=0,
-    # so the backend must drop it when there is no per-agent UID to drop to —
-    # otherwise the CLI exits at startup and the terminal never loads.
-    recipe = build_recipe("claude-code", tmp_path, monkeypatch, uid=None)
-    assert "--dangerously-skip-permissions" not in recipe["cmd"]
+@pytest.mark.parametrize("spec", CLIS, ids=lambda s: s["name"])
+@pytest.mark.parametrize("uid", [None, 0, -1])
+def test_launch_rejects_missing_or_root_identity(spec, uid, tmp_path, monkeypatch):
+    with pytest.raises(RuntimeError, match="non-root UID and GID"):
+        build_recipe(spec["name"], tmp_path, monkeypatch, uid=uid)
 
 
 def test_claude_keeps_skip_permissions_with_agent_uid(tmp_path, monkeypatch):

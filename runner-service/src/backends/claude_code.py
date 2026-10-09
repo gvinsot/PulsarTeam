@@ -20,7 +20,7 @@ from config import (
     OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI,
     logger,
 )
-from agent_user import ensure_agent_user, get_agent_project_dir
+from agent_user import require_agent_user, ensure_agent_user, get_agent_project_dir
 from .base import RunnerBackend
 from .claude_token_store import (
     get_agent_env, get_subprocess_kwargs,
@@ -247,7 +247,7 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
             else:
                 save_token(access, refresh_token=refresh, expires_in=expires_in)
 
-        # In runAsRoot mode effective_user is None and the CLI writes to
+        # For a global terminal effective_user is None and the CLI writes to
         # /root/.claude/.credentials.json. Watch that too — `_persist_creds`
         # falls through to `save_token` (global store, persisted under
         # /app/data which IS volumed).
@@ -271,7 +271,7 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
         # Live-sync of what the user changes inside the TUI (`/model`,
         # `/effort`, `/theme`): saved to team-api so the next stateless spawn
         # restores it. Keyed on the PER-AGENT home (effective_user), not the
-        # `home` above, which falls back to /root in runAsRoot mode.
+        # `home` above, which falls back to /root for global terminals.
         recipe.update(self._config_persistence_extras(agent_id, effective_user))
         # Token accounting for terminal-driven turns: a task injected into this
         # PTY never produces an HTTP `usage` block, so the budget screen only
@@ -380,21 +380,9 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
     def _resolve_effective_user(
         self, agent_id: Optional[str], agent_user: Optional[dict],
     ) -> Optional[dict]:
-        """Honor the linuxUser.runAsRoot toggle from the agent's permissions.
-
-        When the toggle is on, return None so the spawn inherits the server's
-        root UID (no preexec_fn drop, no per-agent HOME isolation). When off
-        (default), return the resolved agent_user unchanged.
-        """
-        perms = self._get_permissions(agent_id) or {}
-        run_as_root = bool((perms.get("linuxUser") or {}).get("runAsRoot", False))
-        if run_as_root:
-            if agent_user:
-                logger.info(
-                    f"[Agent {agent_id[:12] if agent_id else 'unknown'}] "
-                    "linuxUser.runAsRoot=true — spawning claude as root (UID drop disabled)"
-                )
-            return None
+        """Always use the isolated account, including for legacy root permissions."""
+        if agent_id:
+            require_agent_user(agent_user)
         return agent_user
 
     def _apply_permissions_to_settings(
@@ -417,7 +405,7 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
           - network.internetAccess=False       → deny WebFetch/WebSearch + curl/wget/git/etc.
           - network.allowedDomains=[a, b, ...] → allow WebFetch(domain:a/b/...) + deny WebFetch
 
-        Skipped when there's no per-agent HOME (e.g. runAsRoot=true) — the CLI
+        Skipped when there's no per-agent HOME (e.g. a global terminal) — the CLI
         will then read the server's global settings unchanged.
         """
         if not agent_user:
@@ -570,7 +558,7 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
         # --mcp-config; --strict-mcp-config makes it the SINGLE source so the
         # Pulsar Gateway (task control + dynamic MCP proxy) is guaranteed present
         # and no stray project .mcp.json bypasses it. Skipped when there is no
-        # per-agent HOME (runAsRoot / global terminal) or the file was not written.
+        # per-agent HOME (global terminal) or the file was not written.
         home = (agent_user or {}).get("home")
         if home:
             mcp_cfg = claude_mcp_config_path(home)
@@ -701,11 +689,7 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
 
     async def _prepare_spawn(self, agent_id: Optional[str], agent_user: Optional[dict]) -> Optional[dict]:
         """Per-spawn HOME/config prep shared by run_sync, stream_events and
-        prepare_interactive. Returns the effective user (None in runAsRoot
-        mode)."""
-        # linuxUser.runAsRoot=true: skip the per-agent UID drop and let claude
-        # run as the server's root UID. Off by default — when off, we keep the
-        # dedicated agent UID resolved by ensure_agent_user.
+        prepare_interactive. Returns the isolated agent user."""
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         await run_blocking(configure_claude_mcp, effective_user, agent_id)
         await run_blocking(configure_claude_instructions, effective_user, agent_id)

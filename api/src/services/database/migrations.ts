@@ -348,6 +348,10 @@ const MIGRATIONS: Migration[] = [
     `CREATE UNIQUE INDEX IF NOT EXISTS uniq_tasks_running_agent ON tasks (action_running_agent_id)
      WHERE action_running IS TRUE AND deleted_at IS NULL`,
   ]),
+  sqlMigration('202610090001_remove_agent_root_permission', 'remove agent root permission', [
+    `UPDATE agents SET data = data #- '{permissions,linuxUser}'
+     WHERE data->'permissions' ? 'linuxUser'`,
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

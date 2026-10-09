@@ -55,11 +55,6 @@ export const createAgentSchema = z.object({
   boardId: z.string().uuid(),
   permissions: z
     .object({
-      linuxUser: z
-        .object({
-          runAsRoot: z.boolean().optional(),
-        })
-        .optional(),
       network: z
         .object({
           internetAccess: z.boolean().optional(),
