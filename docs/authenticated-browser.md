@@ -100,8 +100,12 @@ replace the server-owned page, including while sharing is paused.
   options) and same-origin iframes. `format` picks `text`, `aria` or `both` (default).
 - `browser_navigate`: open an HTTPS page on the exact shared origin and read it.
 - `browser_scroll`: scroll the page and read more content.
-- `browser_screenshot`: JPEG of the viewport, or of the page up to 4000 px with
-  `full_page`. Agents on a model without image support receive a text notice instead.
+- `browser_screenshot`: JPEG of the viewport, or with `full_page` of the whole page in
+  4000 px sections (`section` 1, 2, …; the result reports `section` and `sections`).
+  Agents on a model without image support receive a text notice instead.
+- `browser_save_pdf`: render the page as a PDF (`media`: `screen`, the default, keeps
+  the on-screen look at 1280 px; `print` uses the site's A4 print stylesheet) and
+  attach it to the agent's current task. No current task, no PDF. 10 MB limit.
 
 A read waits until the text is stable, no fetch/XHR is in flight (requests older than
 5 s count as long polls and are ignored) and, if given, the `wait_for` text is present.

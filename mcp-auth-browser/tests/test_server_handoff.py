@@ -81,6 +81,8 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
               <script>customElements.define('x-card', class extends HTMLElement {
                 connectedCallback() { this.attachShadow({mode: 'open'}).innerHTML = '<p>Shadow balance 42</p>'; }
               });</script></main></body></html>'''
+        elif path == '/tall':
+            body = '<html><title>Statement</title><body style="margin:0"><main style="height:9000px">Long statement</main></body></html>'
         elif path == '/frame':
             body = '<html><body><p>Framed invoice 7</p></body></html>'
         elif path == '/late':
@@ -185,6 +187,27 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.status_code, 401)
         with self.assertRaises(HTTPException):
             await server.execute(server.Command(scope='board:a', operation='screenshot'))
+
+    async def test_tall_page_screenshot_is_paginated_and_pdf_renders(self):
+        await self.import_page('/tall')
+        cmd = dict(scope='board:a', operation='screenshot', full_page=True)
+        first = await server.execute(server.Command(**cmd))
+        self.assertEqual((first['section'], first['sections'], first['pageHeight']), (1, 3, 9000))
+        last = await server.execute(server.Command(**cmd, section=3))
+        self.assertEqual(last['section'], 3)
+        self.assertTrue(base64.b64decode(last['image']).startswith(b'\xff\xd8'))
+        with self.assertRaises(HTTPException) as error:
+            await server.execute(server.Command(**cmd, section=4))
+        self.assertEqual(error.exception.status_code, 400)
+        with self.assertRaises(HTTPException):
+            await server.execute(server.Command(scope='board:a', operation='screenshot', section=2))
+        for media in ['screen', 'print']:
+            doc = await server.execute(server.Command(scope='board:a', operation='pdf', media=media))
+            self.assertTrue(base64.b64decode(doc['pdf']).startswith(b'%PDF'))
+            self.assertEqual(doc['title'], 'Statement')
+        # Media emulation is restored: later reads see the screen layout again.
+        page = server.sessions['board:a'].active_page()
+        self.assertTrue(await page.evaluate("() => matchMedia('screen').matches"))
 
     async def test_empty_import_is_never_ready(self):
         with patch.object(page_state, 'READ_TIMEOUT', 0.4), self.assertRaises(HTTPException) as error:

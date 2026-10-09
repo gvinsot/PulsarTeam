@@ -26,6 +26,8 @@ from page_state import NetworkTracker, read_page, shared_url
 
 MAX_SESSIONS = 6
 SCREENSHOT_MAX_HEIGHT = 4000
+# Same cap as a task attachment (api lib/taskAttachments.ts MAX_ATTACHMENT_BYTES).
+PDF_MAX_BYTES = 10 * 1024 * 1024
 SESSION_SECONDS = 8 * 3600
 IDLE_SECONDS = 30 * 60
 HUMAN_OPS = {"frame", "click", "text", "key", "wheel", "back", "home", "activate", "takeover", "disconnect"}
@@ -75,7 +77,7 @@ class Command(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: str = Field(pattern=r"^(agent|board):[a-zA-Z0-9_-]{1,200}$")
     operation: Literal["status", "start", "frame", "click", "text", "key", "wheel", "back", "home",
-                       "activate", "takeover", "disconnect", "read", "navigate", "scroll",
+                       "activate", "takeover", "disconnect", "read", "navigate", "scroll", "pdf",
                        "screenshot", "clearance", "prepare_import", "import"]
     session_id: str | None = Field(default=None, max_length=100)
     controller: str | None = Field(default=None, max_length=200)
@@ -93,8 +95,12 @@ class Command(BaseModel):
     format: Literal["text", "aria", "both"] = "both"
     wait_for: str = Field(default="", max_length=200)
     wait_ms: int = Field(default=0, ge=0, le=20000)
-    # `screenshot` only: the whole page instead of the viewport (height-capped).
+    # `screenshot` only: the whole page instead of the viewport, as numbered
+    # sections of SCREENSHOT_MAX_HEIGHT px.
     full_page: bool = False
+    section: int = Field(default=1, ge=1, le=100)
+    # `pdf` only: render with the screen look or the site's print stylesheet.
+    media: Literal["screen", "print"] = "screen"
 
 
 class Session:
@@ -574,13 +580,41 @@ async def execute(cmd: Command):
             # come first: a sign-in screen is never captured.
             data = await snapshot(session, cmd)
             options = {"type": "jpeg", "quality": 70}
+            paging = {}
             if cmd.full_page:
-                height = await page.evaluate("() => document.documentElement.scrollHeight")
+                # A tall page is cut into sections of SCREENSHOT_MAX_HEIGHT px,
+                # fetched one call at a time so no image is too big to read.
+                height = max(1, int(await page.evaluate(
+                    "() => document.documentElement.scrollHeight")))
+                sections = -(-height // SCREENSHOT_MAX_HEIGHT)
+                if cmd.section > sections:
+                    raise HTTPException(400, f"The page has {sections} section(s)")
+                top = (cmd.section - 1) * SCREENSHOT_MAX_HEIGHT
                 options |= {"full_page": True,
-                            "clip": {"x": 0, "y": 0, "width": 1280,
-                                     "height": max(1, min(int(height), SCREENSHOT_MAX_HEIGHT))}}
+                            "clip": {"x": 0, "y": top, "width": 1280,
+                                     "height": min(SCREENSHOT_MAX_HEIGHT, height - top)}}
+                paging = {"section": cmd.section, "sections": sections, "pageHeight": height}
+            elif cmd.section != 1:
+                raise HTTPException(400, "Sections apply to full-page screenshots only")
             image = await page.screenshot(**options)
             return {"image": base64.b64encode(image).decode(), "mimeType": "image/jpeg",
+                    "url": data["url"], "title": data["title"], "settled": data["settled"], **paging}
+        elif cmd.operation == "pdf":
+            data = await snapshot(session, cmd)
+            # "screen" keeps what the user sees, at the viewport width (print
+            # stylesheets often hide content); "print" uses the site's A4 layout.
+            if cmd.media == "screen":
+                await page.emulate_media(media="screen")
+                options = {"width": "1280px", "height": "1810px"}
+            else:
+                options = {"format": "A4"}
+            try:
+                document = await page.pdf(print_background=True, **options)
+            finally:
+                await page.emulate_media(media=None)
+            if len(document) > PDF_MAX_BYTES:
+                raise HTTPException(413, "The PDF exceeds the attachment size limit")
+            return {"pdf": base64.b64encode(document).decode(), "size": len(document),
                     "url": data["url"], "title": data["title"], "settled": data["settled"]}
         return await snapshot(session, cmd)
 

@@ -331,7 +331,7 @@ const mcpMounts: Array<[string, (req: any, res: any) => any]> = [
   ['/api/gandi-dns/mcp', createGandiDnsMcpHandler(mcpManager)],
   ['/api/auto-learn/mcp', createAutoLearnMcpHandler()],
   ['/api/browser/mcp', createBrowserMcpHandler()],
-  ['/api/auth-browser/mcp', createAuthBrowserMcpHandler()],
+  ['/api/auth-browser/mcp', createAuthBrowserMcpHandler(agentManager)],
   // Internal Swarm API MCP endpoint (JWT auth — used by agents via mcpManager)
   ['/api/swarm-api/mcp', createSwarmApiMcpHandler(agentManager)],
   // Pulsar Gateway MCP — the single always-on MCP injected into CLI runners
