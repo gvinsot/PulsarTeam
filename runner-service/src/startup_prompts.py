@@ -137,9 +137,11 @@ BYPASS_PERMS_RE = re.compile(
 # the standalone script), so only its "(runs" prefix is matched — the heading
 # also changed across releases, so it isn't required. `\s*` everywhere
 # tolerates the cursor-positioned layout that ANSI-stripping compacts.
+# The match requires the "Skip until next version" row (option 3, the one we
+# pick) so a partially painted frame never triggers a keystroke early.
 CODEX_UPDATE_RE = re.compile(
     r"(update\s*now\s*\(\s*runs"
-    r".{0,400}?skip)",
+    r".{0,400}?skip\s*until\s*next\s*version)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -168,15 +170,16 @@ class StartupPrompt:
 
 # Table order is match priority (checked first to last).
 STARTUP_PROMPTS: tuple[StartupPrompt, ...] = (
-    # Codex's update prompt: option 2 is "Skip". The digit selects AND
+    # Codex's update prompt: option 3 is "Skip until next version", so the
+    # prompt stays quiet until a newer release ships. The digit selects AND
     # confirms on its own (UpdatePromptScreen.select), so no Enter follows — a
     # trailing Enter would leak into the next screen (the trust dialog).
     StartupPrompt(
         key="codex_update",
         pattern=CODEX_UPDATE_RE,
-        keys=(b"2",),
+        keys=(b"3",),
         description="codex update",
-        keys_label="2 (Skip)",
+        keys_label="3 (Skip until next version)",
     ),
     # OpenCode's update prompt: move Left to "No", confirm after a render tick.
     StartupPrompt(

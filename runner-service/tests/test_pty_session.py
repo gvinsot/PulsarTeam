@@ -250,10 +250,11 @@ def test_auto_answers_codex_update_prompt(monkeypatch):
         A new version of Codex is available.
         1. Update now (runs `npm install -g @openai/codex`)
         2. Skip
+        3. Skip until next version
         """
     )
 
-    assert written == [b"2"]
+    assert written == [b"3"]
     assert "codex_update" in session._auto_answered
 
 
@@ -268,12 +269,13 @@ def test_auto_answers_codex_update_prompt_once(monkeypatch):
     prompt = (
         b"1. Update now (runs `npm install -g @openai/codex`)\r\n"
         b"2. Skip\r\n"
+        b"3. Skip until next version\r\n"
     )
     session._maybe_auto_answer_startup_prompt(prompt)
     session._last_auto_answer_at = time.monotonic() - 10
     session._maybe_auto_answer_startup_prompt(prompt)
 
-    assert written == [b"2"]
+    assert written == [b"3"]
 
 
 def test_auto_answers_codex_trust_directory_prompt(monkeypatch):

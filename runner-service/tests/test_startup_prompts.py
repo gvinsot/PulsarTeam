@@ -71,10 +71,10 @@ def _prompt(key):
     return next(p for p in STARTUP_PROMPTS if p.key == key)
 
 
-def test_codex_update_prompt_answers_skip():
+def test_codex_update_prompt_answers_skip_until_next_version():
     prompt = _prompt("codex_update")
     assert prompt.pattern.search(CODEX_UPDATE_SCREEN)
-    assert prompt.keys == (b"2",)
+    assert prompt.keys == (b"3",)
 
 
 def test_codex_update_prompt_matches_compacted_and_other_installers():
