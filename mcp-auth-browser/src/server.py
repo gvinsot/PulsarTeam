@@ -22,9 +22,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from playwright.async_api import async_playwright
 
 from egress import PublicProxy, https_origin, public_addresses
-from page_state import read_page, shared_url
+from page_state import NetworkTracker, read_page, shared_url
 
 MAX_SESSIONS = 6
+SCREENSHOT_MAX_HEIGHT = 4000
 SESSION_SECONDS = 8 * 3600
 IDLE_SECONDS = 30 * 60
 HUMAN_OPS = {"frame", "click", "text", "key", "wheel", "back", "home", "activate", "takeover", "disconnect"}
@@ -75,7 +76,7 @@ class Command(BaseModel):
     scope: str = Field(pattern=r"^(agent|board):[a-zA-Z0-9_-]{1,200}$")
     operation: Literal["status", "start", "frame", "click", "text", "key", "wheel", "back", "home",
                        "activate", "takeover", "disconnect", "read", "navigate", "scroll",
-                       "clearance", "prepare_import", "import"]
+                       "screenshot", "clearance", "prepare_import", "import"]
     session_id: str | None = Field(default=None, max_length=100)
     controller: str | None = Field(default=None, max_length=200)
     url: str = Field(default="", max_length=4000)
@@ -88,6 +89,12 @@ class Command(BaseModel):
     # `clearance` only: Cloudflare cookies and the user agent they are bound to.
     cookies: list | None = Field(default=None, max_length=5)
     user_agent: str = Field(default="", max_length=512)
+    # Agent reads: what to return, and what to wait for before reading.
+    format: Literal["text", "aria", "both"] = "both"
+    wait_for: str = Field(default="", max_length=200)
+    wait_ms: int = Field(default=0, ge=0, le=20000)
+    # `screenshot` only: the whole page instead of the viewport (height-capped).
+    full_page: bool = False
 
 
 class Session:
@@ -104,6 +111,7 @@ class Session:
         self.page_state = "loading"
         self.navigation_blocked = False
         self.imported = False
+        self.network = None
 
     def expired(self):
         now = time.time()
@@ -208,6 +216,7 @@ class Session:
         self.page.on("dialog", lambda dialog: dialog.dismiss())
         self.page.on("download", lambda download: download.cancel())
         self.page.set_default_timeout(10000)
+        self.network = NetworkTracker(self.page)
         await self.guard_redirects(self.page)
         self.context.on("page", new_page)
         if previous:
@@ -363,14 +372,17 @@ async def health():
     return {"ok": True, "configured": len(secret()) >= 32}
 
 
-async def snapshot(session):
+async def snapshot(session, cmd=None):
     page = session.active_page()
     if session.navigation_blocked:
         session.page_state = "login_required"
         session.phase = "reauth_required"
         raise HTTPException(401, "The website requires a new local login")
+    options = ({"fmt": cmd.format, "wait_for": cmd.wait_for, "wait_ms": cmd.wait_ms} if cmd
+               else {"extras": False})
+    network = session.network if page is session.page else None
     try:
-        data = await read_page(page, session.origin)
+        data = await read_page(page, session.origin, network, **options)
         if session.navigation_blocked:
             raise HTTPException(401, "The website requires a new local login")
     except HTTPException as error:
@@ -557,7 +569,20 @@ async def execute(cmd: Command):
         elif cmd.operation == "scroll":
             await page.mouse.wheel(0, cmd.delta)
             await page.wait_for_timeout(400)
-        return await snapshot(session)
+        elif cmd.operation == "screenshot":
+            # The same checks as a read (site, login page, rendered content)
+            # come first: a sign-in screen is never captured.
+            data = await snapshot(session, cmd)
+            options = {"type": "jpeg", "quality": 70}
+            if cmd.full_page:
+                height = await page.evaluate("() => document.documentElement.scrollHeight")
+                options |= {"full_page": True,
+                            "clip": {"x": 0, "y": 0, "width": 1280,
+                                     "height": max(1, min(int(height), SCREENSHOT_MAX_HEIGHT))}}
+            image = await page.screenshot(**options)
+            return {"image": base64.b64encode(image).decode(), "mimeType": "image/jpeg",
+                    "url": data["url"], "title": data["title"], "settled": data["settled"]}
+        return await snapshot(session, cmd)
 
 
 @app.post("/command")

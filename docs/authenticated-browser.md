@@ -95,9 +95,20 @@ replace the server-owned page, including while sharing is paused.
 ## Tools and limitations
 
 - `browser_status`: check session availability, sharing status and expiration.
-- `browser_read`: read visible page text and links on the same origin.
+- `browser_read`: read the page: visible text (including open shadow DOM), same-origin
+  links, the accessibility tree (`aria`: roles, checked boxes, field values, selected
+  options) and same-origin iframes. `format` picks `text`, `aria` or `both` (default).
 - `browser_navigate`: open an HTTPS page on the exact shared origin and read it.
 - `browser_scroll`: scroll the page and read more content.
+- `browser_screenshot`: JPEG of the viewport, or of the page up to 4000 px with
+  `full_page`. Agents on a model without image support receive a text notice instead.
+
+A read waits until the text is stable, no fetch/XHR is in flight (requests older than
+5 s count as long polls and are ignored) and, if given, the `wait_for` text is present.
+`wait_ms` raises the 8 s default up to 20 s. A page still changing at the deadline is
+returned with `settled: false`. Password field values are redacted from every result;
+a page with a visible password field, including a screenshot request, is refused as a
+login page. Third-party iframes are never read.
 
 There are no agent tools for arbitrary JavaScript, cookie or storage export,
 clicking, or submitting forms. Websites still execute their own JavaScript, and

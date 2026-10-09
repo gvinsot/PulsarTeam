@@ -62,7 +62,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.s = server.Session("alice", "https://site.test", ["https://login.test"])
         self.page = SimpleNamespace(url="https://site.test/feed", is_closed=lambda: False,
                                     evaluate=AsyncMock(return_value={"text": "private page"}),
-                                    screenshot=AsyncMock(return_value=b"image"),
+                                    screenshot=AsyncMock(return_value=b"image"), frames=[],
+                                    locator=lambda _: SimpleNamespace(aria_snapshot=AsyncMock(return_value="- main")),
                                     goto=AsyncMock(), close=AsyncMock())
         self.s.page = self.page
         self.s.context = SimpleNamespace(pages=[self.page])
@@ -85,7 +86,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         await self.expect_denied(self.cmd("activate"), 403)
         await self.expect_denied(self.cmd("activate", controller="bob", session_id=self.s.id), 403)
         await server.execute(self.cmd("activate", controller="alice", session_id=self.s.id))
-        self.assertEqual(await server.execute(self.cmd("read")), {"text": "private page"})
+        self.assertEqual((await server.execute(self.cmd("read")))["text"], "private page")
         await server.execute(self.cmd("takeover", controller="alice", session_id=self.s.id))
         await self.expect_denied(self.cmd("read"), 409)
 

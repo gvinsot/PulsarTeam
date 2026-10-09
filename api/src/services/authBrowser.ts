@@ -17,6 +17,13 @@ export interface BrowserStatus {
   expiresAt?: number;
 }
 
+/** How a read renders the page (worker field names). */
+export interface BrowserReadOptions {
+  format?: 'text' | 'aria' | 'both';
+  wait_for?: string;
+  wait_ms?: number;
+}
+
 export function browserConfigured() {
   return readSecret('AUTH_BROWSER_KEY').length >= 32;
 }
@@ -93,13 +100,18 @@ export const UNSOLVED_CHALLENGE =
 export async function navigateBrowser<T extends object>(
   scope: BrowserScope,
   url: string,
-  solve = solveCloudflare
+  solve = solveCloudflare,
+  read: BrowserReadOptions = {}
 ): Promise<T & { challenge?: boolean }> {
-  const page = await browserCommand<T & { challenge?: boolean }>(scope, 'navigate', { url });
+  const page = await browserCommand<T & { challenge?: boolean }>(scope, 'navigate', {
+    ...read,
+    url,
+  });
   if (!page.challenge) return page;
   const clearance = await solve(new URL(url).origin);
   if (!clearance) return page;
   return browserCommand<T & { challenge?: boolean }>(scope, 'clearance', {
+    ...read,
     url,
     cookies: clearance.cookies,
     user_agent: clearance.userAgent,

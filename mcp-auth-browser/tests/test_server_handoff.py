@@ -1,4 +1,6 @@
 """Real Chromium regressions for a single local-to-server session handoff."""
+import asyncio
+import base64
 import os
 import sys
 import unittest
@@ -65,6 +67,32 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
             return
         elif path == '/login':
             body = '<html><body>Sign in with Google<input type="password"></body></html>'
+        elif path == '/form':
+            body = '''<html><title>Preferences</title><body><main>
+              <label><input type="checkbox" checked> Weekly digest</label>
+              <label><input type="checkbox"> Marketing emails</label>
+              <div role="checkbox" aria-checked="true" aria-label="Custom alerts"></div>
+              <label>City <input value="Lyon"></label>
+              <input type="password" hidden value="hunter2-secret">
+              <p>Echo hunter2-secret</p>
+              <x-card></x-card>
+              <iframe src="/frame"></iframe>
+              <iframe src="https://elsewhere.test/"></iframe>
+              <script>customElements.define('x-card', class extends HTMLElement {
+                connectedCallback() { this.attachShadow({mode: 'open'}).innerHTML = '<p>Shadow balance 42</p>'; }
+              });</script></main></body></html>'''
+        elif path == '/frame':
+            body = '<html><body><p>Framed invoice 7</p></body></html>'
+        elif path == '/late':
+            body = '''<html><title>Late</title><body><nav>Menu</nav><main id="m"></main><script>
+              fetch('/api/data').then(r => r.text()).then(t => { document.getElementById('m').innerText = t; });
+              </script></body></html>'''
+        elif path == '/api/data':
+            await asyncio.sleep(1.5)
+            await route.fulfill(content_type='text/plain', body='Quarterly revenue table')
+            return
+        elif request.url.startswith('https://elsewhere.test'):
+            body = '<html><body>Third-party widget</body></html>'
         else:
             body = '<html><title>Next</title><body><main>Next private page</main></body></html>'
         await route.fulfill(content_type='text/html', body=body)
@@ -117,6 +145,46 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(session.context.pages), 1)
         await server.execute(server.Command(scope='board:a', controller='alice',
             session_id=status['sessionId'], operation='activate'))
+
+    async def test_read_shows_form_state_shadow_dom_and_same_site_frames(self):
+        await self.import_page('/form')
+        page = await server.execute(server.Command(scope='board:a', operation='read'))
+        self.assertRegex(page['aria'], r'checkbox "Weekly digest" \[checked\]')
+        self.assertNotRegex(page['aria'], r'checkbox "Marketing emails" \[checked\]')
+        self.assertRegex(page['aria'], r'checkbox "Custom alerts" \[checked\]')
+        self.assertIn('Lyon', page['aria'])
+        self.assertIn('Shadow balance 42', page['text'])
+        self.assertEqual([f['url'] for f in page['frames']], [ORIGIN + '/frame'])
+        self.assertIn('Framed invoice 7', page['frames'][0]['text'])
+        self.assertNotIn('Third-party widget', str(page))
+        self.assertNotIn('hunter2-secret', str(page))
+        self.assertTrue(page['settled'])
+        text_only = await server.execute(server.Command(scope='board:a', operation='read', format='text'))
+        self.assertNotIn('aria', text_only)
+
+    async def test_read_waits_for_late_content_and_wait_for_text(self):
+        await self.import_page('/next')
+        # The menu renders at once; the data arrives 1.5 s later through fetch.
+        page = await server.execute(server.Command(scope='board:a', operation='navigate', url=ORIGIN + '/late'))
+        self.assertIn('Quarterly revenue table', page['text'])
+        page = await server.execute(server.Command(scope='board:a', operation='read',
+            wait_for='never shown', wait_ms=1500))
+        self.assertFalse(page['settled'])
+        self.assertEqual(page['waitFor'], {'text': 'never shown', 'found': False})
+
+    async def test_agent_screenshot_is_an_image_of_the_shared_page_only(self):
+        await self.import_page('/form')
+        shot = await server.execute(server.Command(scope='board:a', operation='screenshot'))
+        self.assertEqual(shot['mimeType'], 'image/jpeg')
+        self.assertTrue(base64.b64decode(shot['image']).startswith(b'\xff\xd8'))
+        self.assertEqual(shot['url'], ORIGIN + '/form')
+        full = await server.execute(server.Command(scope='board:a', operation='screenshot', full_page=True))
+        self.assertTrue(base64.b64decode(full['image']).startswith(b'\xff\xd8'))
+        with self.assertRaises(HTTPException) as error:
+            await server.execute(server.Command(scope='board:a', operation='navigate', url=ORIGIN + '/expired'))
+        self.assertEqual(error.exception.status_code, 401)
+        with self.assertRaises(HTTPException):
+            await server.execute(server.Command(scope='board:a', operation='screenshot'))
 
     async def test_empty_import_is_never_ready(self):
         with patch.object(page_state, 'READ_TIMEOUT', 0.4), self.assertRaises(HTTPException) as error:

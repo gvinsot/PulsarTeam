@@ -445,3 +445,44 @@ test('a rejected request after tool execution fails once, without blind retries'
   assert.equal(turns, 2);
   assert.equal(agent.status, 'error');
 });
+
+async function screenshotTurn(supportsImages: boolean) {
+  const { manager, agent } = await setup();
+  manager.resolveLlmConfig = () => ({
+    provider: 'mistral',
+    model: 'test',
+    contextLength: 131072,
+    supportsImages,
+  });
+  manager._processToolCalls = async (_id: string, tools: any[]) =>
+    tools.map(tool => ({
+      toolCallId: tool.id,
+      success: true,
+      result: '{"url":"https://site.test/"}',
+      images: [{ data: 'aGk=', mediaType: 'image/jpeg' }],
+    }));
+  const prompts: any[] = [];
+  manager._streamAndContinue = async (_a: any, _id: string, messages: any[]) => {
+    prompts.push(structuredClone(messages));
+    return prompts.length === 1
+      ? response('', [{ id: 'shot', name: 'mcp_call', arguments: { tool: 'browser_screenshot' } }])
+      : response('Seen.');
+  };
+  await manager.sendMessage(agent.id, 'Look at the page', () => {});
+  return { agent, followUp: prompts[1].at(-1) };
+}
+
+test('tool images reach a vision model once and are not stored in the history trace', async () => {
+  const { agent, followUp } = await screenshotTurn(true);
+  assert.equal(followUp.role, 'user');
+  assert.deepEqual(followUp.images, [{ data: 'aGk=', mediaType: 'image/jpeg' }]);
+  const trace = agent.conversationHistory.at(-1).nativeToolTrace[0];
+  assert.equal(trace.result.images, undefined);
+  assert.equal(trace.result.imageCount, 1);
+});
+
+test('a model without image support is told the image is invisible to it', async () => {
+  const { followUp } = await screenshotTurn(false);
+  assert.equal(followUp.images, undefined);
+  assert.match(followUp.content, /cannot see/);
+});

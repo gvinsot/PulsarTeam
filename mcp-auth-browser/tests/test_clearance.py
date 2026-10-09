@@ -63,7 +63,9 @@ class ClearanceFlowTests(unittest.IsolatedAsyncioTestCase):
     def page(self, challenge):
         return SimpleNamespace(url="https://site.test/private", is_closed=lambda: False,
                                goto=AsyncMock(return_value=response(challenge)),
-                               evaluate=AsyncMock(return_value={"text": "private page"}))
+                               evaluate=AsyncMock(return_value={"text": "private page"}),
+                               locator=lambda _: SimpleNamespace(aria_snapshot=AsyncMock(return_value="- main")),
+                               frames=[])
 
     def cmd(self, operation, **args):
         return server.Command(scope="agent:a", operation=operation, url="https://site.test/private", **args)
@@ -74,7 +76,7 @@ class ClearanceFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_clearance_keeps_user_session_and_adopts_solver_agent(self):
         result = await server.execute(self.cmd("clearance", cookies=CLEARANCE, user_agent=UA))
-        self.assertEqual(result, {"text": "private page"})
+        self.assertEqual(result["text"], "private page")
         storage, user_agent = self.rebuilt
         self.assertEqual(user_agent, UA)
         self.assertEqual([(c["name"], c["value"]) for c in storage["cookies"]],
