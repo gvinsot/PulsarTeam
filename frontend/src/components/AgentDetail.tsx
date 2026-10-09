@@ -286,7 +286,10 @@ export default function AgentDetail({
   // Auto-scroll chat
   useEffect(() => {
     if (autoScroll) {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      // Smooth scrolling on every streamed chunk queues overlapping
+      // animations that stall long chats; jump instantly while streaming.
+      const streaming = streamBuffer !== undefined || !!thinking;
+      chatEndRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth' });
     }
   }, [history, streamBuffer, thinking, autoScroll]);
 

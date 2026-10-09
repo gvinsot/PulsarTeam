@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import ChatMessage from './ChatMessage';
 import { RichAssistantContent } from './ChatMessage';
+import { CHAT_WINDOW_SIZE, chatWindowStart, terminalTail } from './chatWindow';
 import { api } from '../../api';
 import { SttSession, TtsPlayer } from '../../lib/externalVoiceClient';
 import type { Agent, ChatImage, ConversationMessage } from '../../types';
@@ -62,7 +63,7 @@ function TerminalView({ text, className = '' }: { text: string; className?: stri
       onScroll={onScroll}
       className={`text-xs text-dark-400 font-mono whitespace-pre max-h-[40vh] overflow-auto scrollbar-thin-dark ${className}`}
     >
-      {text}
+      {terminalTail(text)}
     </div>
   );
 }
@@ -117,6 +118,17 @@ export default function ChatTab({
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [reloading, setReloading] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(CHAT_WINDOW_SIZE);
+  // ChatMessage is memoized; hand it a stable callback that always forwards to
+  // the latest onTruncate so a parent re-render doesn't invalidate every row.
+  const onTruncateRef = useRef(onTruncate);
+  onTruncateRef.current = onTruncate;
+  const stableOnTruncate = useCallback((index: number) => onTruncateRef.current?.(index), []);
+
+  // A different agent starts with the default window again.
+  useEffect(() => {
+    setVisibleCount(CHAT_WINDOW_SIZE);
+  }, [agent?.id]);
 
   // ── STT / TTS state ──────────────────────────────────────────────────
   // Voice services are global (Admin Settings). We probe availability once
@@ -323,6 +335,8 @@ export default function ChatTab({
     streamBuffer && history.length > 0 && history[history.length - 1].role === 'assistant'
       ? history.slice(0, -1)
       : history;
+  const windowStart = chatWindowStart(displayHistory.length, visibleCount);
+  const visibleHistory = windowStart > 0 ? displayHistory.slice(windowStart) : displayHistory;
 
   // Shared ingestion for picked and pasted image files. One onAddImages call
   // per file — readers complete asynchronously and out of order.
@@ -367,15 +381,32 @@ export default function ChatTab({
           </div>
         )}
 
-        {displayHistory.map((msg, i) => (
-          <ChatMessage
-            key={i}
-            message={msg}
-            index={i}
-            isLast={i === displayHistory.length - 1}
-            onTruncate={onTruncate}
-          />
-        ))}
+        {windowStart > 0 && (
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => setVisibleCount(c => c + CHAT_WINDOW_SIZE)}
+              className="px-3 py-1.5 text-xs text-dark-400 hover:text-indigo-300 bg-dark-800 hover:bg-dark-700 border border-dark-700 rounded-lg transition-colors"
+            >
+              Show {Math.min(windowStart, CHAT_WINDOW_SIZE)} earlier messages ({windowStart} hidden)
+            </button>
+          </div>
+        )}
+
+        {visibleHistory.map((msg, j) => {
+          // Keys and indexes stay absolute so truncation targets the right
+          // message whatever the window size.
+          const i = windowStart + j;
+          return (
+            <ChatMessage
+              key={i}
+              message={msg}
+              index={i}
+              isLast={i === displayHistory.length - 1}
+              onTruncate={onTruncate ? stableOnTruncate : undefined}
+            />
+          );
+        })}
 
         {/* Thinking indicator (shown during reasoning before/alongside text) */}
         {thinking && !streamBuffer && (

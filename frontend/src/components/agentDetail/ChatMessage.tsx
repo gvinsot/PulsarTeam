@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -8,6 +8,7 @@ import type { ConversationMessage } from '../../types';
 const markdownRemarkPlugins = [remarkGfm];
 import { cleanToolSyntax } from './cleanToolSyntax';
 import ToolResultMessage from './ToolResultMessage';
+import { sameRenderedMessage } from './chatWindow';
 import { reconstructWrappedOAuthUrlsInText } from './claudeOAuthLinks';
 
 /** One slice of assistant text: either plain markdown or a parsed @delegate() call. */
@@ -190,7 +191,30 @@ function TruncateButton({
   );
 }
 
-export default function ChatMessage({
+// Collapsed reasoning above this size is only mounted once expanded.
+const LAZY_THINKING_CHARS = 4_000;
+
+/**
+ * Stored reasoning can be a whole CLI transcript. Large ones are only mounted
+ * in the DOM when the user actually expands them.
+ */
+function ThinkingDetails({ text, defaultOpen }: { text: string; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <details
+      className="mb-2 text-sm text-dark-300"
+      open={open}
+      onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer text-xs text-amber-400">Thinking</summary>
+      {(open || text.length <= LAZY_THINKING_CHARS) && (
+        <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">{text}</pre>
+      )}
+    </details>
+  );
+}
+
+function ChatMessage({
   message,
   index,
   isLast,
@@ -288,12 +312,7 @@ export default function ChatMessage({
           </div>
         )}
         {!isUser && message.thinking && (
-          <details className="mb-2 text-sm text-dark-300" open={!message.displayContent}>
-            <summary className="cursor-pointer text-xs text-amber-400">Thinking</summary>
-            <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">
-              {message.thinking}
-            </pre>
-          </details>
+          <ThinkingDetails text={message.thinking} defaultOpen={!message.displayContent} />
         )}
         <div className="markdown-content text-sm text-dark-200">
           {isUser ? (
@@ -339,3 +358,12 @@ export default function ChatMessage({
     </div>
   );
 }
+
+export default memo(
+  ChatMessage,
+  (prev, next) =>
+    prev.index === next.index &&
+    prev.isLast === next.isLast &&
+    prev.onTruncate === next.onTruncate &&
+    sameRenderedMessage(prev.message, next.message)
+);
