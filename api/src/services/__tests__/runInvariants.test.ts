@@ -63,6 +63,11 @@ const { isAgentBusy } = await import('../workflow/agentSelector.js');
 const { getTaskSignal, setAwaitingCompletion, clearTaskSignals } =
   await import('../agentManager/tasks.js');
 const { resolveAgentCurrentTask } = await import('../agentManager/currentTask.js');
+// Every module is loaded here, before the first test is registered: a top-level
+// await still pending while tests run (a dynamic import racing the module-mock
+// loader hooks) fails the whole file once the event loop drains.
+const { stopTaskExecution } = await import('../taskControl.js');
+const { reconcileStaleActionRunning } = await import('../workflow/workflowEngine.js');
 
 const mockIo = {
   emit() {},
@@ -437,9 +442,6 @@ test("an agent's current task is its live run, or its only assignment — never 
 });
 
 // ── Review round 2 ──────────────────────────────────────────────────────────
-
-const { stopTaskExecution } = await import('../taskControl.js');
-const { reconcileStaleActionRunning } = await import('../workflow/workflowEngine.js');
 
 test('a resumed condition chain is not re-gated by conditions its own actions changed', async () => {
   WORKFLOW.columns = [{ id: 'backlog' }, { id: 'review' }, { id: 'done' }];
