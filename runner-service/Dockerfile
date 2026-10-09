@@ -132,6 +132,17 @@ RUN CGO_ENABLED=0 go install golang.org/x/tools/gopls@latest && \
     CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@latest && \
     CGO_ENABLED=0 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
+# Rust (dev tool inside agent workspaces)
+# The toolchain is NOT in the image (~760 MB): rust_toolchain.sh provisions it
+# at startup into the per-node `rust-toolchain` volume mounted at /opt/rust,
+# once per node. Until that finishes (or without the volume) cargo is simply
+# absent from PATH. Only the system deps -sys crates need (openssl) live here.
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/rust && chmod 0755 /opt/rust
+ENV RUSTUP_HOME=/opt/rust/current/rustup
+ENV PATH="/opt/rust/current/cargo/bin:$PATH"
+
 # Install Docker CLI (for agents that manage containers)
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list \
@@ -152,8 +163,8 @@ RUN pip install --break-system-packages pytest black
 # Copy server code (modular Python files) and entrypoint
 COPY runner-service/src/*.py .
 COPY runner-service/src/backends/*.py ./backends/
-COPY runner-service/src/entrypoint.sh .
-RUN chmod +x entrypoint.sh
+COPY runner-service/src/entrypoint.sh runner-service/src/rust_toolchain.sh ./
+RUN chmod +x entrypoint.sh rust_toolchain.sh
 
 # Verify installations
 RUN echo "=== Python ===" && python --version && \

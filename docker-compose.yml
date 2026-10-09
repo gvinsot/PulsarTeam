@@ -188,6 +188,7 @@ services:
       # all re-injected at spawn. A global (no-owner) token must come from the
       # CLAUDE_CODE_OAUTH_TOKEN env. Only the Android SDK cache is kept.
       - claudecode-android-cache:/opt/android-sdk
+      - rust-toolchain:/opt/rust
     cap_drop:
       - ALL
     cap_add:
@@ -245,6 +246,8 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    volumes:
+      - rust-toolchain:/opt/rust
     cap_drop:
       - ALL
     cap_add:
@@ -303,6 +306,8 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    volumes:
+      - rust-toolchain:/opt/rust
     cap_drop:
       - ALL
     cap_add:
@@ -372,6 +377,8 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    volumes:
+      - rust-toolchain:/opt/rust
     cap_drop:
       - ALL
     cap_add:
@@ -439,6 +446,8 @@ services:
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    volumes:
+      - rust-toolchain:/opt/rust
     cap_drop:
       - ALL
     cap_add:
@@ -494,6 +503,8 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    volumes:
+      - rust-toolchain:/opt/rust
     cap_drop:
       - ALL
     cap_add:
@@ -549,6 +560,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - sandbox-data:/app/data
+      - rust-toolchain:/opt/rust
     cap_drop:
       - ALL
     cap_add:
@@ -719,6 +731,9 @@ services:
     restart: unless-stopped
 
 volumes:
+  # Rust toolchain, provisioned once per node by runner-service/src/rust_toolchain.sh
+  # and shared read-only by every runner of that node (kept out of the image).
+  rust-toolchain:
   pgdata:
   claudecode-android-cache:
   # CLI runner *-data volumes removed — those runners are stateless now

@@ -102,5 +102,12 @@ echo "  Projects dir: ${PROJECTS_DIR:-/projects}"
 # because we are NOT trying to elevate privileges via exec — we are dropping
 # privileges per-subprocess via setresuid. The container itself has cap_drop
 # ALL plus a small allowlist, so "root" inside has no real escape paths.
+# ─── Rust toolchain (shared per-node volume) ──────────────────────────────
+# Provisioned in the background so a first-time download on a fresh node never
+# delays the server. Double fork: the provisioner is orphaned to tini (`-s`)
+# instead of becoming an un-waited child of the python process exec'd below.
+# Failures only cost Rust support, never the runner — see rust_toolchain.sh.
+( ( ./rust_toolchain.sh || echo "[rust-toolchain] WARNING: provisioning failed — Rust unavailable" ) & )
+
 echo "Starting FastAPI server on port ${PORT:-8000}..."
 exec python server.py
