@@ -4,10 +4,15 @@ import {
   interruptedWorkflowHistory,
   TOOL_BUDGET_NOTICE,
   ToolBudgetReachedError,
+  DEFAULT_CONTEXT_TOKENS,
+  toolResultMaxChars,
+  toolResultContent,
+  capToolResultContent,
 } from './nativeToolHistory.js';
 // ─── Chat: sendMessage, _cleanMarkdown, _buildSystemPrompt, _assembleMessages,
 //     _streamAndContinue, _processPostResponseActions ──
 import { createProvider } from '../llmProviders.js';
+import type { LlmRequestError } from './compaction.js';
 import { isCliRunner } from '../runners.js';
 import {
   saveAgent,
@@ -36,6 +41,11 @@ import {
   byRecency,
   RECENT_TASKS_LIMIT,
 } from './promptSections.js';
+
+/** _safeMaxTokens never goes below this, even when the window is full. */
+const OUTPUT_FLOOR_TOKENS = 1024;
+/** Output budget truncation keeps free so an over-full turn can still answer. */
+const MIN_USEFUL_OUTPUT_TOKENS = 8192;
 
 /** Render a tool-only turn as short assistant text. Used as the history content
  * when the model called tools and wrote no prose — an empty assistant message
@@ -338,22 +348,31 @@ export const chatMethods = {
         const hasTerminal = toolResults.some((result: any) => result.isTerminal);
         if (hasTerminal) break;
 
+        const maxResultChars = toolResultMaxChars(
+          llmConfig.contextLength || DEFAULT_CONTEXT_TOKENS,
+          streamResult.toolCalls.length
+        );
+        const resultSizes: string[] = [];
         for (const call of streamResult.toolCalls) {
           const result = resultsByCallId.get(call.id) || {
             success: false,
             error: `No result returned for native tool call ${call.name}.`,
           };
+          const content = toolResultContent(result, Infinity);
+          const bounded = capToolResultContent(content, maxResultChars);
+          resultSizes.push(
+            `${call.name}=${content.length}${bounded.length < content.length ? `→${bounded.length}` : ''}`
+          );
           messages.push({
             role: 'tool',
             toolCallId: call.id,
             toolError: !result.success,
-            content: JSON.stringify({
-              success: Boolean(result.success),
-              result: result.result || null,
-              error: result.success ? null : result.error || 'Tool execution failed.',
-            }),
+            content: bounded,
           });
         }
+        console.log(
+          `🔧 [Tools] "${agent.name}" round ${nativeToolRound} result sizes (chars): ${resultSizes.join(', ')}`
+        );
 
         if (nativeToolRound === MAX_NATIVE_TOOL_ROUNDS - 5) {
           messages.push({
@@ -613,14 +632,17 @@ export const chatMethods = {
 
       // ── Reactive compaction: context exceeded → compact and retry once (task mode only) ──
       // In chat mode, full history must be preserved — context errors propagate to the user.
+      // A workflow action is not chat: its task may never have been "started"
+      // (startedAt unset in verify/review columns), yet it must not die on a
+      // context overflow its own tool results caused.
       if (
         this._isContextExceededError(err.message) &&
         !agent._compactionRetried &&
         !managesContext &&
-        isTaskExecution
+        (isTaskExecution || messageMeta?.type === 'workflow-action')
       ) {
         console.log(
-          `🗜️  [Reactive Compact] "${agent.name}": context exceeded — compacting and retrying`
+          `🗜️  [Reactive Compact] "${agent.name}": context exceeded (${err.message}) — compacting and retrying`
         );
         agent._compactionRetried = true;
         this.addActionLog(
@@ -665,9 +687,17 @@ export const chatMethods = {
       // ── Transient stream error → retry with backoff ──
       const isUserStop = err.message === 'Agent stopped by user';
       const isAuthError = err.status === 401 || err.status === 403;
+      // A rejected request (400, 404, 422…) fails the same way when resent.
+      const isClientError =
+        typeof err.status === 'number' &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 408 &&
+        err.status !== 429;
       const isTransient =
         !isUserStop &&
         !isAuthError &&
+        !isClientError &&
         !err.isRateLimit &&
         !this._isContextExceededError(err.message);
       const MAX_STREAM_RETRIES = 3;
@@ -1097,6 +1127,8 @@ export const chatMethods = {
     }
 
     const contextLimit = earlyLlmConfig.contextLength || agent.contextLength || 8192;
+    // Same default as the request itself (_streamAndContinue), not the 8192 above.
+    const replayContext = earlyLlmConfig.contextLength || DEFAULT_CONTEXT_TOKENS;
     const { maxRecent, compactTrigger, compactReset, safetyRatio } =
       this._compactionThresholds(contextLimit);
 
@@ -1278,7 +1310,7 @@ export const chatMethods = {
     if (images && images.length > 0) userMsg.images = images;
     messages.push(userMsg);
     if (!isCliRunner(agent)) {
-      messages.splice(0, messages.length, ...replayNativeToolHistory(messages));
+      messages.splice(0, messages.length, ...replayNativeToolHistory(messages, replayContext));
     }
 
     // Safety token check: only during task execution, non-managed context.
@@ -1313,7 +1345,7 @@ export const chatMethods = {
         if (images && images.length > 0) rebuildMsg.images = images;
         messages.push(rebuildMsg);
         if (!isCliRunner(agent)) {
-          messages.splice(0, messages.length, ...replayNativeToolHistory(messages));
+          messages.splice(0, messages.length, ...replayNativeToolHistory(messages, replayContext));
         }
       }
     }
@@ -1507,12 +1539,40 @@ export const chatMethods = {
     // so the chat history must not reflow them as markdown/text.
     const responseStartedAt = Date.now();
 
-    const safeMaxTokens = Math.min(
-      this._safeMaxTokens(messages, agent, llmConfig),
+    const contextLength = llmConfig.contextLength || DEFAULT_CONTEXT_TOKENS;
+    const desiredMaxTokens = Math.min(
+      llmConfig.maxTokens || agent.maxTokens || 4096,
       options.maxTokens ?? Infinity
     );
+    const capMaxTokens = () =>
+      Math.min(this._safeMaxTokens(messages, agent, llmConfig), options.maxTokens ?? Infinity);
+    // Provider errors carry no request size; attach it (see _classifyLlmRequestError).
+    const consume = async (
+      context: { contextTokens: number; maxTokens: number } & Record<string, unknown>
+    ) => {
+      try {
+        return await this._consumeStream(provider, messages, context);
+      } catch (err) {
+        throw this._classifyLlmRequestError(
+          err as LlmRequestError,
+          context.contextTokens,
+          context.maxTokens,
+          contextLength
+        );
+      }
+    };
 
-    this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, safeMaxTokens);
+    // Truncating to keep only the 1024-token floor free leaves a reasoning
+    // model nothing to answer with: it spends the floor thinking, stops on
+    // finish_reason=length, and the turn dies. Reserve a usable budget.
+    let safeMaxTokens = capMaxTokens();
+    const outputReserve = Math.max(
+      safeMaxTokens,
+      Math.min(desiredMaxTokens, MIN_USEFUL_OUTPUT_TOKENS)
+    );
+    if (this._truncateMessagesToFit(messages, contextLength, outputReserve)) {
+      safeMaxTokens = capMaxTokens();
+    }
 
     // Estimate context size (tokens in the messages array sent to the LLM)
     const estimatedContextTokens = this._estimateTokens(messages);
@@ -1527,7 +1587,7 @@ export const chatMethods = {
       agent.runnerSessions = {};
     const initialRunnerSessionId: string | undefined = agent.runnerSessions[sessionKey];
 
-    const first = await this._consumeStream(provider, messages, {
+    const first = await consume({
       agent,
       id,
       useCliRunner,
@@ -1551,28 +1611,46 @@ export const chatMethods = {
     // ── Auto-continuation ──
     const MAX_CONTINUATIONS = 3;
     let continuationCount = 0;
+    let lastMaxTokens = safeMaxTokens;
     while (finishReason === 'length' && continuationCount < MAX_CONTINUATIONS) {
+      // Stopped at the floor because the window is full, not because the
+      // answer is long: a continuation only adds to that context. Report it
+      // as a context error so the caller compacts instead.
+      if (lastMaxTokens <= OUTPUT_FLOOR_TOKENS && desiredMaxTokens > OUTPUT_FLOOR_TOKENS) {
+        throw new Error(
+          `Context window saturated: ~${this._estimateTokens(messages)} input tokens leave only ${lastMaxTokens} output tokens (context ${contextLength})`
+        );
+      }
       continuationCount++;
       console.log(
         `🔄 [Continuation ${continuationCount}/${MAX_CONTINUATIONS}] "${agent.name}": response was truncated (finish_reason=length), requesting continuation...`
       );
       if (streamCallback) streamCallback(`\n⏳ *Response truncated, continuing...*\n`);
 
-      messages.push({ role: 'assistant', content: fullResponse });
-      messages.push({
-        role: 'user',
-        content:
-          'Your previous response was cut off because it exceeded the maximum output length. Continue EXACTLY from where you stopped. Do not repeat anything you already wrote — just output the remaining content.',
-      });
+      // An empty assistant message (all output went to reasoning) is
+      // rejected by providers such as Mistral — ask for the answer instead.
+      const pushed = fullResponse ? 2 : 1;
+      if (fullResponse) {
+        messages.push({ role: 'assistant', content: fullResponse });
+        messages.push({
+          role: 'user',
+          content:
+            'Your previous response was cut off because it exceeded the maximum output length. Continue EXACTLY from where you stopped. Do not repeat anything you already wrote — just output the remaining content.',
+        });
+      } else {
+        messages.push({
+          role: 'user',
+          content:
+            'Your previous response was cut off before you wrote any answer: the output limit was spent on reasoning. Keep your reasoning short and answer now.',
+        });
+      }
 
       finishReason = null;
-      const contMaxTokens = Math.min(
-        this._safeMaxTokens(messages, agent, llmConfig),
-        options.maxTokens ?? Infinity
-      );
-      this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, contMaxTokens);
+      const contMaxTokens = capMaxTokens();
+      this._truncateMessagesToFit(messages, contextLength, contMaxTokens);
+      lastMaxTokens = contMaxTokens;
       const contContextTokens = this._estimateTokens(messages);
-      const cont = await this._consumeStream(provider, messages, {
+      const cont = await consume({
         agent,
         id,
         useCliRunner,
@@ -1592,8 +1670,7 @@ export const chatMethods = {
       totalOutputTokens += cont.outputTokens;
       finishReason = cont.finishReason;
       toolCalls = cont.toolCalls;
-      messages.pop();
-      messages.pop();
+      messages.splice(-pushed, pushed);
     }
 
     if (continuationCount > 0 && finishReason === 'length') {

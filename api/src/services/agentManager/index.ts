@@ -20,7 +20,7 @@ import { toolsMethods } from './tools.js';
 import { parsingMethods } from './parsing.js';
 import { tasksMethods } from './tasks.js';
 import { workflowMethods } from './workflow.js';
-import { compactionMethods } from './compaction.js';
+import { compactionMethods, type LlmRequestError } from './compaction.js';
 import { defaultAgentListProjection } from './projection.js';
 
 /** One entry of a `getLastMessages` payload: a stored conversation message plus
@@ -476,6 +476,12 @@ export interface AgentManager {
   _estimateTokens(messages: any[]): number;
   _safeMaxTokens(messages: any[], agent: any, llmConfig?: any): number;
   _isContextExceededError(errMsg: string): boolean;
+  _classifyLlmRequestError(
+    err: LlmRequestError,
+    estimatedInput: number,
+    maxTokens: number,
+    contextLength: number
+  ): LlmRequestError;
   _parseRateLimitReset(text: string): { retryAt: number; resetLabel: string } | null;
   _truncateMessagesToFit(
     messages: any[],

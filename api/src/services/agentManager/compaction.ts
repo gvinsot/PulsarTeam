@@ -2,6 +2,9 @@
 import { createProvider } from '../llmProviders.js';
 import { saveAgent } from '../database.js';
 
+/** A provider SDK error: HTTP status when the request reached the server. */
+export type LlmRequestError = Error & { status?: number; cause?: unknown };
+
 /** @this {import('./index.js').AgentManager} */
 export const compactionMethods = {
   /**
@@ -52,6 +55,30 @@ export const compactionMethods = {
       return capped;
     }
     return desiredMaxTokens;
+  },
+
+  /** Give a provider 4xx the context it lacks. Some providers reject an
+   * over-full request with a bare "400 status code (no body)", which matches
+   * no context keyword: near the window it is reported as a context error (so
+   * reactive compaction applies), otherwise with the request size attached. */
+  _classifyLlmRequestError(
+    this: { _isContextExceededError(errMsg: string): boolean },
+    err: LlmRequestError,
+    estimatedInput: number,
+    maxTokens: number,
+    contextLength: number
+  ): LlmRequestError {
+    const status = err?.status;
+    if (typeof status !== 'number' || status < 400 || status >= 500) return err;
+    if ([401, 403, 408, 429].includes(status) || this._isContextExceededError(err.message)) {
+      return err;
+    }
+    const nearWindow = estimatedInput + maxTokens >= contextLength * 0.75;
+    const detail = `HTTP ${status} for ~${estimatedInput} input + ${maxTokens} output tokens (context ${contextLength})`;
+    const message = nearWindow
+      ? `LLM request rejected, context window likely exceeded — ${detail}: ${err.message}`
+      : `LLM request rejected — ${detail}: ${err.message}`;
+    return Object.assign(new Error(message), { status, cause: err });
   },
 
   _isContextExceededError(this: any, errMsg: string): boolean {
@@ -125,7 +152,10 @@ export const compactionMethods = {
     contextLimit: number,
     reserveOutputTokens: number = 1024
   ): boolean {
-    const target = contextLimit - reserveOutputTokens - Math.ceil(contextLimit * 0.1);
+    // Same 15% margin as _safeMaxTokens: with a smaller one, a truncated
+    // context still leaves _safeMaxTokens below the reserve and the request
+    // goes out at the 1024-token floor.
+    const target = contextLimit - reserveOutputTokens - Math.ceil(contextLimit * 0.15);
     let estimated = this._estimateTokens(messages);
     if (estimated <= target) return false;
 

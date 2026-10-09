@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { AgentManager } from '../agentManager.js';
 import { chatMethods } from '../agentManager/chat.js';
 import {
+  capToolResultContent,
   interruptedWorkflowHistory,
   replayNativeToolHistory,
+  toolResultMaxChars,
   ToolBudgetReachedError,
 } from '../agentManager/nativeToolHistory.js';
 import { serializeAgentData } from '../database/agents.js';
@@ -269,4 +271,177 @@ test('history replay pairs every call and result, preserving falsy results and o
   assert.equal(replay[3].toolError, true);
   replay[4].content = 'truncated';
   assert.deepEqual(history, before);
+});
+
+test('an oversized tool result keeps its head and tail within the per-result budget', () => {
+  const max = toolResultMaxChars(131072);
+  assert.equal(max, Math.floor(131072 * 0.12 * 3));
+  assert.ok(toolResultMaxChars(131072, 10) < max, 'a round of many results shares a budget');
+  assert.equal(toolResultMaxChars(0), max, 'unset context falls back to the default window');
+
+  const big = 'H'.repeat(300_000) + 'T'.repeat(300_000);
+  const capped = capToolResultContent(big, max);
+  assert.ok(capped.length <= max);
+  assert.ok(capped.startsWith('HHH') && capped.endsWith('TTT'));
+  assert.match(capped, /tool output truncated: 600000 chars/);
+  assert.equal(capToolResultContent('small', max), 'small');
+});
+
+test('a huge tool result is bounded before it reaches the model, and replay is bounded too', async () => {
+  const { manager, agent } = await setup();
+  manager._processToolCalls = async (_id: string, tools: any[]) =>
+    tools.map(tool => ({ toolCallId: tool.id, success: true, result: 'x'.repeat(600_000) }));
+  const prompts: any[] = [];
+  manager._streamAndContinue = async (_a: any, _id: string, messages: any[]) => {
+    prompts.push(structuredClone(messages));
+    return prompts.length === 1
+      ? response('', [{ id: 'logs', name: 'run_command', arguments: { command: 'cat big.log' } }])
+      : response('Logs checked.');
+  };
+  assert.equal(await manager.sendMessage(agent.id, 'Check logs', () => {}), 'Logs checked.');
+  const toolMessage = prompts[1].find((m: any) => m.role === 'tool');
+  assert.ok(toolMessage.content.length <= toolResultMaxChars(131072));
+  assert.match(toolMessage.content, /tool output truncated/);
+
+  // The durable trace still holds the full result; its replay must not.
+  manager._streamAndContinue = async (_a: any, _id: string, messages: any[]) => {
+    const replayed = messages.find((m: any) => m.role === 'tool');
+    assert.ok(replayed.content.length <= toolResultMaxChars(131072));
+    return response('Next.');
+  };
+  assert.equal(await manager.sendMessage(agent.id, 'Next', () => {}), 'Next.');
+});
+
+function streamContext(manager: any, results: any[]) {
+  const calls: any[] = [];
+  manager._consumeStream = async (_provider: any, messages: any[], context: any) => {
+    calls.push({ messages: structuredClone(messages), context });
+    return results[calls.length - 1];
+  };
+  return calls;
+}
+
+function streamResult(text: string, finishReason: string, thinking = '') {
+  return { text, thinking, toolCalls: [], outputTokens: 1, finishReason };
+}
+
+const vllmConfig = {
+  provider: 'vllm',
+  endpoint: 'http://unused',
+  model: 'test',
+  maxTokens: 128000,
+  contextLength: 131072,
+};
+
+test('a continuation after a reasoning-only cut never sends an empty assistant message', async () => {
+  const { manager, agent } = await setup();
+  const calls = streamContext(manager, [
+    streamResult('', 'length', 'long reasoning'),
+    streamResult('answer', 'stop'),
+  ]);
+  const messages = [{ role: 'user', content: 'decide' }];
+  const out = await chatMethods._streamAndContinue.call(
+    manager,
+    agent,
+    agent.id,
+    messages,
+    vllmConfig,
+    () => {},
+    new AbortController()
+  );
+  assert.equal(out.fullResponse, 'answer');
+  const sent = calls[1].messages;
+  assert.ok(!sent.some((m: any) => m.role === 'assistant' && !m.content));
+  assert.match(sent.at(-1).content, /before you wrote any answer/);
+  assert.deepEqual(messages, [{ role: 'user', content: 'decide' }], 'continuation prompts removed');
+});
+
+test('an over-full context is truncated to leave a usable output budget', async () => {
+  const { manager, agent } = await setup();
+  const calls = streamContext(manager, [streamResult('ok', 'stop')]);
+  const messages = [
+    { role: 'system', content: 'sys' },
+    { role: 'tool', content: 'x'.repeat(540_000) },
+  ];
+  await chatMethods._streamAndContinue.call(
+    manager,
+    agent,
+    agent.id,
+    messages,
+    vllmConfig,
+    () => {},
+    new AbortController()
+  );
+  // ~8192, less the few tokens of the "[truncated …]" notice.
+  assert.ok(calls[0].context.maxTokens >= 8000, `maxTokens=${calls[0].context.maxTokens}`);
+});
+
+test('a length stop at the output floor is reported as a context error, not continued', async () => {
+  const { manager, agent } = await setup();
+  const calls = streamContext(manager, [streamResult('', 'length', 'thinking')]);
+  manager._truncateMessagesToFit = () => false; // nothing left to truncate
+  await assert.rejects(
+    chatMethods._streamAndContinue.call(
+      manager,
+      agent,
+      agent.id,
+      [{ role: 'user', content: 'x'.repeat(400_000) }],
+      vllmConfig,
+      () => {},
+      new AbortController()
+    ),
+    (err: any) => manager._isContextExceededError(err.message)
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('a bodyless 4xx near the window is classified as a context error', async () => {
+  const { manager } = await setup();
+  const bare: any = Object.assign(new Error('400 status code (no body)'), { status: 400 });
+  const near = manager._classifyLlmRequestError(bare, 117000, 1024, 131072);
+  assert.ok(manager._isContextExceededError(near.message));
+  assert.equal(near.status, 400);
+  const far = manager._classifyLlmRequestError(bare, 2000, 4096, 131072);
+  assert.ok(!manager._isContextExceededError(far.message));
+  assert.match(far.message, /~2000 input \+ 4096 output tokens/);
+  const auth: any = Object.assign(new Error('401'), { status: 401 });
+  assert.equal(manager._classifyLlmRequestError(auth, 117000, 1024, 131072), auth);
+});
+
+test('a context error after tool execution compacts and retries a workflow action once', async () => {
+  const { manager, agent, calls } = await setup();
+  let compactions = 0;
+  manager._compactHistory = async () => {
+    compactions++;
+  };
+  let turns = 0;
+  manager._streamAndContinue = async () => {
+    turns++;
+    if (turns === 1)
+      return response('', [{ id: `r${turns}`, name: 'read_file', arguments: { path: 'a' } }]);
+    if (turns === 2) throw new Error('LLM request rejected, context window likely exceeded');
+    return response('Verified.');
+  };
+  const meta = { type: 'workflow-action', taskId: 't', mode: 'decide', currentStatus: 'verify' };
+  assert.equal(await manager.sendMessage(agent.id, 'Verify', () => {}, 0, meta), 'Verified.');
+  assert.equal(compactions, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(agent._compactionRetried, undefined);
+});
+
+test('a rejected request after tool execution fails once, without blind retries', async () => {
+  const { manager, agent } = await setup();
+  let turns = 0;
+  manager._streamAndContinue = async () => {
+    turns++;
+    if (turns === 1)
+      return response('', [{ id: 'r', name: 'read_file', arguments: { path: 'a' } }]);
+    throw Object.assign(new Error('LLM request rejected — HTTP 422'), { status: 422 });
+  };
+  await assert.rejects(
+    manager.sendMessage(agent.id, 'Verify', () => {}),
+    /HTTP 422/
+  );
+  assert.equal(turns, 2);
+  assert.equal(agent.status, 'error');
 });
