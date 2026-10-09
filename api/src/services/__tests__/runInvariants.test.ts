@@ -15,6 +15,13 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTaskDbFake } from './helpers/taskDbFake.js';
 
+// Shrink the execution wait's real-time polling (read when agentManager/tasks
+// loads, below): with the production cadence the CLI drain test alone slept
+// ~9 s, and this file was the last child still running long after the others.
+process.env.CLI_AUTH_PROBE_INTERVAL_MS ??= '50';
+process.env.CLI_DRAIN_POLL_MS ??= '50';
+process.env.VERDICT_POLL_SLICE_MS ??= '50';
+
 const realDb = await import('../database.js');
 const { rows, exports: taskDbFake } = makeTaskDbFake();
 mock.module('../database.js', {

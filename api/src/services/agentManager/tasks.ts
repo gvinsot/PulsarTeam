@@ -113,9 +113,14 @@ async function bindAgentRunner(manager: any, agent: any): Promise<void> {
   });
 }
 
+function envInt(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 // Cadence at which the reminder loop re-checks the task verdict while it waits
 // out a reminder interval (signals are in-memory; the DB read is one row).
-const VERDICT_POLL_SLICE_MS = 3000;
+const VERDICT_POLL_SLICE_MS = envInt('VERDICT_POLL_SLICE_MS', 3000);
 
 /** The per-board status sets kept by _refreshWorkflowManagedStatuses. */
 interface StatusSetsHolder {
@@ -125,10 +130,6 @@ interface StatusSetsHolder {
   _reassigningStatuses?: Set<string>;
 }
 
-function envInt(name: string, fallback: number): number {
-  const n = Number(process.env[name]);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
 // A CLI whose PTY printed nothing for this long is waiting at its prompt.
 const CLI_QUIET_SECONDS = envInt('CLI_QUIET_SECONDS', 6);
 // How long a finished terminal run may hold its agent while the CLI wraps up.
@@ -136,7 +137,9 @@ const CLI_DRAIN_MAX_MS = envInt('CLI_DRAIN_MAX_MS', 10 * 60_000);
 // After a Stop: re-interrupt a CLI still printing after this, give up after that.
 const CLI_DRAIN_REINTERRUPT_MS = 20_000;
 const CLI_DRAIN_STOP_MAX_MS = 60_000;
-const CLI_DRAIN_POLL_MS = 2_000;
+const CLI_DRAIN_POLL_MS = envInt('CLI_DRAIN_POLL_MS', 2_000);
+// Interval between the terminal auth-error probes right after a CLI prompt.
+const CLI_AUTH_PROBE_INTERVAL_MS = envInt('CLI_AUTH_PROBE_INTERVAL_MS', 3_000);
 // Terminal-independent commit sweep cadence while a CLI run is watched.
 const COMMIT_SWEEP_INTERVAL_MS = envInt('COMMIT_SWEEP_INTERVAL_MS', 60_000);
 
@@ -1769,9 +1772,8 @@ export const tasksMethods = {
     startStatus: string | undefined
   ): Promise<string | null> {
     const AUTH_PROBE_ATTEMPTS = 8;
-    const AUTH_PROBE_INTERVAL_MS = 3000;
     for (let i = 0; i < AUTH_PROBE_ATTEMPTS; i++) {
-      await new Promise(resolve => setTimeout(resolve, AUTH_PROBE_INTERVAL_MS));
+      await new Promise(resolve => setTimeout(resolve, CLI_AUTH_PROBE_INTERVAL_MS));
       const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
       if (verdict) return verdict;
       const authErr = await this._checkTerminalAuthError(executorId);
