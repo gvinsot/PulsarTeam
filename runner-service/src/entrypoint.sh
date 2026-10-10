@@ -108,6 +108,8 @@ echo "  Projects dir: ${PROJECTS_DIR:-/projects}"
 # instead of becoming an un-waited child of the python process exec'd below.
 # Failures only cost Rust support, never the runner — see rust_toolchain.sh.
 ( ( ./rust_toolchain.sh || echo "[rust-toolchain] WARNING: provisioning failed — Rust unavailable" ) & )
+# Same for Flutter/Android (android_toolchain.sh) — a much longer first run.
+( ( ./android_toolchain.sh || echo "[android-toolchain] WARNING: provisioning failed — Flutter/Android unavailable" ) & )
 
 echo "Starting FastAPI server on port ${PORT:-8000}..."
 exec python server.py

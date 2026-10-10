@@ -143,6 +143,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libs
 ENV RUSTUP_HOME=/opt/rust/current/rustup
 ENV PATH="/opt/rust/current/cargo/bin:$PATH"
 
+# Flutter + Android (dev tool inside agent workspaces)
+# Same model as Rust: JDK, Flutter SDK and Android SDK/NDK (~6.5 GB) are
+# provisioned by android_toolchain.sh into the per-node
+# `android-toolchain` volume at /opt/android, never baked in here. Only the
+# tools flutter shells out to (unzip/zip) and the `toolchain` group that owns
+# the shared, agent-writable tree (agent_user.TOOLCHAIN_GID) live in the image.
+# GRADLE_OPTS caps the daemon heap: Flutter's template asks for -Xmx8G, the
+# whole runner limit.
+RUN apt-get update && apt-get install -y --no-install-recommends unzip zip \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 19999 toolchain \
+    && mkdir -p /opt/android && chmod 0755 /opt/android
+ENV JAVA_HOME=/opt/android/current/jdk \
+    ANDROID_HOME=/opt/android/current/sdk \
+    ANDROID_SDK_ROOT=/opt/android/current/sdk \
+    GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx3g -Dorg.gradle.daemon.idletimeout=600000"
+ENV PATH="/opt/android/current/bin:/opt/android/current/sdk/platform-tools:/opt/android/current/jdk/bin:$PATH"
+
 # Install Docker CLI (for agents that manage containers)
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list \
@@ -163,8 +181,8 @@ RUN pip install --break-system-packages pytest black
 # Copy server code (modular Python files) and entrypoint
 COPY runner-service/src/*.py .
 COPY runner-service/src/backends/*.py ./backends/
-COPY runner-service/src/entrypoint.sh runner-service/src/rust_toolchain.sh ./
-RUN chmod +x entrypoint.sh rust_toolchain.sh
+COPY runner-service/src/entrypoint.sh runner-service/src/rust_toolchain.sh runner-service/src/android_toolchain.sh ./
+RUN chmod +x entrypoint.sh rust_toolchain.sh android_toolchain.sh
 
 # Verify installations
 RUN echo "=== Python ===" && python --version && \

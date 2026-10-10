@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import agent_user
 from backends.claude_code import ClaudeCodeBackend
+from agent_user import TOOLCHAIN_GID, _ensure_passwd_entry
 from backends.claude_token_store import get_subprocess_kwargs
 from backends.codex import CodexBackend
 from backends.hermes import HermesBackend
@@ -72,4 +73,15 @@ def test_privilege_drop_sets_groups_before_uid(monkeypatch):
     for name in ("setgroups", "setgid", "setuid"):
         monkeypatch.setattr(os, name, lambda value, name=name: calls.append((name, value)))
     get_subprocess_kwargs({"uid": 20001, "gid": 20001})["preexec_fn"]()
-    assert calls == [("setgroups", [20001]), ("setgid", 20001), ("setuid", 20001)]
+    assert calls == [("setgroups", [20001, TOOLCHAIN_GID]), ("setgid", 20001), ("setuid", 20001)]
+
+
+def test_passwd_entry_added_once(tmp_path):
+    passwd = tmp_path / "passwd"
+    passwd.write_text("root:x:0:0:root:/root:/bin/bash")
+    for _ in range(2):
+        _ensure_passwd_entry("agent_x", 20001, 20001, "/app/data/agents/agent_x", str(passwd))
+    assert passwd.read_text().splitlines() == [
+        "root:x:0:0:root:/root:/bin/bash",
+        "agent_x:x:20001:20001::/app/data/agents/agent_x:/bin/bash",
+    ]

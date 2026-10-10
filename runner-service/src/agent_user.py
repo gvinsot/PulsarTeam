@@ -38,6 +38,13 @@ _AGENT_UID_BASE = 20000
 _AGENT_UID_MAX = 60000
 _AGENT_UID_RANGE = _AGENT_UID_MAX - _AGENT_UID_BASE
 
+# Supplementary group shared by every agent UID. It owns the per-node toolchain
+# trees that agents must WRITE into — the Flutter/Android SDK in /opt/android
+# (see android_toolchain.sh): flutter updates its own bin/cache and Gradle
+# installs missing SDK packages on demand. Matches `groupadd -g` in the
+# Dockerfile; just below _AGENT_UID_BASE so it never collides with an agent GID.
+TOOLCHAIN_GID = 19999
+
 
 def _allocate_agent_uid(agent_id: str) -> int:
     """Deterministic UID, in [_AGENT_UID_BASE, _AGENT_UID_MAX), keyed by the
@@ -103,6 +110,30 @@ def resolve_agent_home(
 def _sanitize_agent_id(agent_id: str) -> str:
     sanitized = re.sub(r'[^a-zA-Z0-9]', '', agent_id)[:24]
     return f"agent_{sanitized}" if sanitized else "agent_default"
+
+
+def _ensure_passwd_entry(
+    username: str, uid: int, gid: int, home: str, passwd_path: str = "/etc/passwd",
+) -> None:
+    """Give the agent UID an /etc/passwd entry pointing at its HOME.
+
+    Some tools ignore $HOME and resolve the home through getpwuid(): the JVM's
+    `user.home` is "?" without an entry, so Gradle and the Android Gradle
+    plugin write `?/.gradle` and `?/.android/debug.keystore` inside the project
+    and `flutter build apk` fails. ssh and getpass do the same. Best-effort:
+    a missing entry only costs those tools, never the launch."""
+    try:
+        with open(passwd_path, "r+", encoding="utf-8") as f:
+            content = f.read()
+            for entry in content.splitlines():
+                fields = entry.split(":")
+                if len(fields) > 2 and fields[2] == str(uid):
+                    return
+            if content and not content.endswith("\n"):
+                f.write("\n")
+            f.write(f"{username}:x:{uid}:{gid}::{home}:/bin/bash\n")
+    except OSError as e:
+        logger.warning(f"[Agent User] cannot add passwd entry for uid {uid}: {e}")
 
 
 def _chown_home_walk(home_dir: str, agent_uid: int, agent_gid: int) -> None:
@@ -240,6 +271,7 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
                     # Walking tens of thousands of files would freeze every
                     # coroutine (terminals, /health) — run it in a worker thread.
                     await asyncio.to_thread(_chown_home_walk, home_dir, agent_uid, agent_gid)
+            _ensure_passwd_entry(username, agent_uid, agent_gid, home_dir)
             user_info = {"username": username, "uid": agent_uid, "gid": agent_gid, "home": home_dir, "owner_id": owner_id}
             _agent_users[agent_id] = user_info
             logger.info(f"[Agent User] Created isolated home for agent {agent_id[:12]} at {home_dir} (uid={agent_uid}, owner={owner_id})")

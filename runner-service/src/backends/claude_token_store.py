@@ -947,7 +947,7 @@ def get_subprocess_kwargs(agent_user: dict = None) -> dict:
     """
     if agent_user is None:
         return {}
-    from agent_user import require_agent_user
+    from agent_user import TOOLCHAIN_GID, require_agent_user
     require_agent_user(agent_user)
     uid = agent_user.get("uid")
     gid = agent_user.get("gid")
@@ -959,7 +959,8 @@ def get_subprocess_kwargs(agent_user: dict = None) -> dict:
     def _drop_privs() -> None:
         # Runs in the forked child before exec().
         try:
-            os.setgroups([target_gid])
+            # TOOLCHAIN_GID: write access to the shared Flutter/Android SDK.
+            os.setgroups([target_gid, TOOLCHAIN_GID])
         except (PermissionError, OSError):
             # Best-effort; supplementary groups require CAP_SETGID.
             pass

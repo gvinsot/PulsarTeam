@@ -100,6 +100,9 @@ ENV_ALLOWLIST = {
     "CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS",
     "GOPATH", "GOROOT", "GOPROXY",
     "CARGO_HOME", "RUSTUP_HOME",
+    # Flutter / Android (per-node toolchain, see android_toolchain.sh)
+    "JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT",
+    "GRADLE_OPTS",
     # Runner internals (needed by Claude Code CLI)
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     "CLAUDE_CODE_OAUTH_TOKEN",

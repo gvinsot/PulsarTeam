@@ -286,9 +286,9 @@ services:
       # seed_credentials_file), MCP/settings are rewritten, projects re-cloned.
       # A node move therefore needs no re-auth for owner-scoped agents. A global
       # (no-owner) token, if used, must be supplied via the CLAUDE_CODE_OAUTH_TOKEN
-      # secret above. Only the large, owner-agnostic Android SDK cache is kept.
-      - claudecode-android-cache:/opt/android-sdk
+      # secret above. Only the per-node toolchain volumes below are kept.
       - rust-toolchain:/opt/rust
+      - android-toolchain:/opt/android
     cap_drop:
       - ALL
     cap_add:
@@ -366,6 +366,7 @@ services:
     volumes:
       - sandbox-data:/app/data
       - rust-toolchain:/opt/rust
+      - android-toolchain:/opt/android
     cap_drop:
       - ALL
     cap_add:
@@ -425,6 +426,7 @@ services:
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     volumes:
       - rust-toolchain:/opt/rust
+      - android-toolchain:/opt/android
     cap_drop:
       - ALL
     cap_add:
@@ -499,6 +501,7 @@ services:
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     volumes:
       - rust-toolchain:/opt/rust
+      - android-toolchain:/opt/android
     cap_drop:
       - ALL
     cap_add:
@@ -581,6 +584,7 @@ services:
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     volumes:
       - rust-toolchain:/opt/rust
+      - android-toolchain:/opt/android
     cap_drop:
       - ALL
     cap_add:
@@ -656,6 +660,7 @@ services:
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     volumes:
       - rust-toolchain:/opt/rust
+      - android-toolchain:/opt/android
     cap_drop:
       - ALL
     cap_add:
@@ -732,6 +737,7 @@ services:
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     volumes:
       - rust-toolchain:/opt/rust
+      - android-toolchain:/opt/android
     cap_drop:
       - ALL
     cap_add:
@@ -960,7 +966,10 @@ volumes:
   # and shared read-only by every runner of that node (kept out of the image).
   rust-toolchain:
     driver: local
-  claudecode-android-cache:
+  # Flutter + Android toolchain, provisioned once per node by
+  # runner-service/src/android_toolchain.sh (shared, agent-writable through the
+  # toolchain group; replaces the old claudecode-android-cache).
+  android-toolchain:
     driver: local
   office-data:
     driver: local
@@ -984,7 +993,7 @@ networks:
   proxy:
     external: true
   postgresqlcluster_internal:
-    external: true
+
   backend:
     driver: overlay
     attachable: true
