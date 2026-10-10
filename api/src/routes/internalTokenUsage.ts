@@ -3,7 +3,7 @@ import { recordTokenUsage, getPool } from '../services/database.js';
 import type { AgentManager } from '../services/agentManager/index.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { isCliRunner } from '../services/runners.js';
-import { noteCliActivity } from '../services/agentManager/cliActivity.js';
+import { noteCliModelActivity } from '../services/agentManager/cliActivity.js';
 
 /**
  * Internal endpoint that the runner-service uses to report token usage
@@ -49,7 +49,7 @@ export function internalTokenUsageRoutes(agentManager: AgentManager) {
         // Tokens consumed by a CLI runner mean its model is working right now
         // (the runner reports transcript growth every ~20 s) — keep it busy even
         // when its terminal is quiet or nobody has it open.
-        if (isCliRunner(agent)) noteCliActivity(agentManager, agent.id, 'Consuming tokens');
+        if (isCliRunner(agent)) noteCliModelActivity(agentManager, agent.id, 'Consuming tokens');
 
         const provider = (body.provider || agent.runner || 'cli').toString();
         // Runners often cannot name the model (subscription CLIs); fall back to

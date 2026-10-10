@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import errno
+import hashlib
 import pty
 import json
 import fcntl
@@ -89,6 +90,10 @@ DEFAULT_ROWS = 40
 TMUX_HISTORY_LIMIT = int(os.getenv("TERMINAL_TMUX_HISTORY_LIMIT", "20000"))
 HISTORY_REPLAY_LINES = int(os.getenv("TERMINAL_HISTORY_REPLAY_LINES", "5000"))
 READ_CHUNK = 4096
+# How often the visible screen is re-captured (only when the PTY printed since
+# the last capture) to tell real activity from no-op redraws — see
+# _sample_screen.
+SCREEN_SAMPLE_INTERVAL_SEC = float(os.getenv("TERMINAL_SCREEN_SAMPLE_SEC", "1.0"))
 
 # ── Execution-scoped history capture ────────────────────────────────────────
 #
@@ -629,6 +634,17 @@ class PtySession:
     # Last time the PTY produced output — the idle reaper uses it to spare
     # headless sessions whose CLI is still mid-task.
     _last_output_at: float = 0.0
+    # Last time the VISIBLE SCREEN TEXT changed. A TUI sitting at its prompt
+    # can keep writing bytes that change nothing on screen (cursor show/hide,
+    # mode toggles, focus/title sequences, identical repaints), and counting
+    # those as activity kept finished CLI agents "busy" forever. This is what
+    # status() reports as idle_seconds. Fed by _screen_watch_loop.
+    _last_screen_change_at: float = 0.0
+    _screen_digest: Optional[bytes] = None
+    # _last_output_at as of the last screen capture: output newer than this
+    # has not been classified yet.
+    _screen_sampled_output_at: float = 0.0
+    _screen_watch_task: Optional[asyncio.Task] = None
     _auto_answered: set[str] = field(default_factory=set)
     # Per-prompt retry counter for the screen-derived recipes (see
     # _maybe_auto_answer_startup_prompt).
@@ -1052,6 +1068,9 @@ class PtySession:
         # still be idle-reaped — arm the timer now; attach() cancels it on the
         # first real viewer, and the reaper spares sessions with recent output.
         self._last_output_at = time.monotonic()
+        self._last_screen_change_at = self._last_output_at
+        if self._tmux_session:
+            self._screen_watch_task = loop.create_task(self._screen_watch_loop())
         if not self._clients:
             self._schedule_idle_timer()
 
@@ -1797,6 +1816,55 @@ class PtySession:
             and not self._pane_dead_handled
         )
 
+    def _capture_screen_digest(self) -> Optional[bytes]:
+        """Digest of the visible pane text (no attributes), None on failure."""
+        if not self._tmux_session:
+            return None
+        try:
+            result = self._tmux_run(["capture-pane", "-p", "-t", self._tmux_session])
+        except Exception:
+            return None
+        if result.returncode != 0:
+            return None
+        return hashlib.blake2b(result.stdout, digest_size=16).digest()
+
+    async def _sample_screen(self) -> None:
+        """Classify the output printed since the last sample: did it change
+        what is on screen? Only then does it count as activity."""
+        output_at = self._last_output_at
+        if output_at <= self._screen_sampled_output_at:
+            return
+        digest = await asyncio.to_thread(self._capture_screen_digest)
+        self._screen_sampled_output_at = output_at
+        # A failed capture cannot prove the output was a no-op: count it.
+        if digest is None or digest != self._screen_digest:
+            self._last_screen_change_at = max(self._last_screen_change_at, output_at)
+        self._screen_digest = digest
+
+    async def _screen_watch_loop(self) -> None:
+        while not self._closed:
+            try:
+                await asyncio.sleep(SCREEN_SAMPLE_INTERVAL_SEC)
+                await self._sample_screen()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:  # never let a tmux hiccup kill the loop
+                logger.debug(f"[Terminal] screen sample failed for {self.agent_id}: {e}")
+
+    def activity_idle_seconds(self) -> Optional[float]:
+        """Seconds since the CLI last did something VISIBLE: the screen text
+        changed. Output not yet classified by the sampler counts as a change
+        (conservative: it is at most one sample interval old). None when the
+        PTY never printed."""
+        if not self._last_output_at:
+            return None
+        now = time.monotonic()
+        if not self._last_screen_change_at or self._last_output_at > self._screen_sampled_output_at:
+            last = max(self._last_output_at, self._last_screen_change_at)
+        else:
+            last = self._last_screen_change_at
+        return round(max(0.0, now - last), 1)
+
     def status(self) -> dict:
         return {
             "agent_id": self.agent_id,
@@ -1808,11 +1876,15 @@ class PtySession:
             "cols": self.cols,
             "rows": self.rows,
             "auth_error": self.auth_error,
-            # Seconds since the PTY last produced output — whether or not a
+            # Seconds since the CLI's screen last CHANGED — whether or not a
             # viewer is attached. The CLI TUIs redraw continuously while they
             # think or run a tool (spinner, elapsed timer), so this is what the
             # API uses to tell "still working" from "waiting at the prompt".
-            "idle_seconds": (
+            # Bytes that leave the screen unchanged do not count (see
+            # _last_screen_change_at).
+            "idle_seconds": self.activity_idle_seconds(),
+            # Raw: seconds since the PTY last produced any byte at all.
+            "output_idle_seconds": (
                 round(max(0.0, time.monotonic() - self._last_output_at), 1)
                 if self._last_output_at else None
             ),
@@ -1932,7 +2004,9 @@ class PtySession:
                 # Pure elapsed time is not idleness: a headless session (no
                 # viewer to cancel the timer) may have a workflow task mid-
                 # flight. Spare it while the CLI keeps producing output.
-                idle_for = time.monotonic() - self._last_output_at
+                idle_for = self.activity_idle_seconds()
+                if idle_for is None:
+                    idle_for = float("inf")
                 if idle_for < IDLE_TIMEOUT_SEC:
                     delay = IDLE_TIMEOUT_SEC - idle_for
                     continue
@@ -1992,6 +2066,9 @@ class PtySession:
         if self._usage_watch_task and not self._usage_watch_task.done():
             self._usage_watch_task.cancel()
             self._usage_watch_task = None
+        if self._screen_watch_task and not self._screen_watch_task.done():
+            self._screen_watch_task.cancel()
+            self._screen_watch_task = None
 
         # Kill the tmux session first: the real CLI lives in the tmux server
         # (not as a child of `self.proc`, which is only the attach client), so

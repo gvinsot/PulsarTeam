@@ -75,7 +75,13 @@ import type { Task, TaskWriteInput, TaskRecurrence } from '../database/tasks.js'
 import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
 import { getCurrentEnvironment, isEnvironmentLocked } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
-import { watchCliActivity, isCliRecentlyActive, noteCliActivity } from './cliActivity.js';
+import {
+  watchCliActivity,
+  isCliRecentlyActive,
+  isCliStalled,
+  noteCliActivity,
+  noteCliPromptInjected,
+} from './cliActivity.js';
 import { checkBoardAccess } from '../../middleware/authz.js';
 import { checkAgentAccess, type AgentAccessSubject } from '../../lib/agentAccess.js';
 import type { SessionClaims } from '../../middleware/session.js';
@@ -1563,15 +1569,19 @@ export const tasksMethods = {
   },
 
   /**
-   * Whether a CLI executor's terminal is quiet: no PTY output for CLI_QUIET_SECONDS.
-   * The CLI TUIs redraw continuously while they think or run a tool (spinner,
-   * elapsed timer), so silence means the CLI waits at its prompt. An unreachable
-   * runner counts as quiet — the paste would fail anyway.
+   * Whether a CLI executor's terminal is quiet: its screen did not change for
+   * CLI_QUIET_SECONDS. The CLI TUIs redraw continuously while they think or run
+   * a tool (spinner, elapsed timer), so a still screen means the CLI waits at its
+   * prompt. An unreachable runner counts as quiet — the paste would fail anyway.
+   * So does a STALLED CLI (no model activity for CLI_STALL_MS, see
+   * cliActivity.isCliStalled): a screen that keeps moving with nobody working
+   * must not hold the agent — and the board's next task — forever.
    */
   async _isCliQuiet(
     this: { _cliIdleSeconds(id: string): Promise<number | null> },
     executorId: string
   ): Promise<boolean> {
+    if (isCliStalled(executorId)) return true;
     const idle = await this._cliIdleSeconds(executorId);
     return idle === null || idle >= CLI_QUIET_SECONDS;
   },
@@ -1735,7 +1745,7 @@ export const tasksMethods = {
       if (terminalDriven && isCliRunner(executor) && this.executionManager?.sendTerminalInput) {
         await bindAgentRunner(this, executor);
         await this.executionManager.sendTerminalInput(executorId, prompt, { submit: true });
-        noteCliActivity(this, executorId, 'CLI prompt injected');
+        noteCliPromptInjected(this, executorId, 'CLI prompt injected');
       } else {
         await this.sendMessage(executorId, prompt, (chunk: any) => {
           this._emit('agent:stream:chunk', { agentId: executorId, chunk });
@@ -1985,7 +1995,7 @@ export const tasksMethods = {
     // The prompt was just pasted: the CLI is working NOW, whatever the wait below
     // concludes. Without this an early exit (task already moved, Stop during the
     // injection) left the agent "idle" — selectable — while its CLI worked.
-    if (terminalDriven) noteCliActivity(this, executorId, 'CLI task injected');
+    if (terminalDriven) noteCliPromptInjected(this, executorId, 'CLI task injected');
     let verdict: string;
     try {
       verdict = await this._awaitExecutionVerdict(

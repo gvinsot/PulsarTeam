@@ -12,7 +12,11 @@ import assert from 'node:assert/strict';
 import {
   CLI_ACTIVITY_IDLE_MS,
   CLI_ACTIVITY_HEARTBEAT_MS,
+  CLI_STALL_MS,
   noteCliActivity,
+  noteCliModelActivity,
+  noteCliPromptInjected,
+  isCliStalled,
   isCliRecentlyActive,
   watchCliActivity,
   _resetCliActivity,
@@ -144,4 +148,60 @@ test('unknown agents are ignored', () => {
   noteCliActivity(mgr, 'ghost');
   assert.equal(mgr.setStatus.mock.callCount(), 0);
   assert.equal(isCliRecentlyActive('ghost'), false);
+});
+
+// ── Stall rule ───────────────────────────────────────────────────────────────
+// Regression (prod, Probe board): a Codex agent whose terminal kept redrawing
+// after its turn ended stayed "busy" for good, so no next task was ever picked.
+
+test('a CLI whose screen keeps moving without model activity goes idle once stalled', async () => {
+  const { mgr, agent } = makeManager();
+  const stop = watchCliActivity(mgr, 'cli');
+  noteCliModelActivity(mgr, 'cli');
+  runnerIdle = 0.5; // the screen never stops changing
+
+  await advance(CLI_STALL_MS - CLI_ACTIVITY_HEARTBEAT_MS);
+  assert.equal(agent.status, 'busy', 'still within the stall window');
+  assert.equal(isCliStalled('cli'), false);
+
+  await advance(CLI_ACTIVITY_HEARTBEAT_MS + CLI_ACTIVITY_IDLE_MS + 10);
+  assert.ok(isCliStalled('cli'));
+  assert.equal(agent.status, 'idle');
+  assert.equal(isCliRecentlyActive('cli'), false);
+
+  // Console output relayed to a viewer does not bring it back…
+  noteCliActivity(mgr, 'cli');
+  assert.equal(agent.status, 'idle');
+  // …but tokens or a new prompt do.
+  noteCliModelActivity(mgr, 'cli');
+  assert.equal(agent.status, 'busy');
+  assert.equal(isCliStalled('cli'), false);
+  stop();
+});
+
+test('a new prompt restarts the stall clock', async () => {
+  const { mgr } = makeManager();
+  noteCliModelActivity(mgr, 'cli');
+  await advance(CLI_STALL_MS + 10);
+  assert.ok(isCliStalled('cli'));
+  noteCliPromptInjected(mgr, 'cli');
+  assert.equal(isCliStalled('cli'), false);
+});
+
+test('a CLI that never reported token usage is never called stalled', async () => {
+  const { mgr } = makeManager();
+  noteCliPromptInjected(mgr, 'cli');
+  await advance(CLI_STALL_MS * 2);
+  assert.equal(isCliStalled('cli'), false);
+});
+
+test('a stalled CLI busy flag nobody owns is released', async () => {
+  const { mgr, agent } = makeManager();
+  noteCliModelActivity(mgr, 'cli');
+  await advance(CLI_STALL_MS + CLI_ACTIVITY_IDLE_MS + 10);
+  assert.equal(agent.status, 'idle');
+  agent.status = 'busy'; // set by some other path, no idle timer pending
+  noteCliActivity(mgr, 'cli', 'CLI still active');
+  await advance(10);
+  assert.equal(agent.status, 'idle');
 });
