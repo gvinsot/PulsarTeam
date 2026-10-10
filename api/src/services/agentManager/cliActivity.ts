@@ -17,11 +17,25 @@
 // the reminder loop, which only holds off while the executor is busy, nudged it
 // mid-work. The quiet threshold is now much longer, and before going idle we
 // ask the runner whether the PTY is really quiet.
+//
+// The opposite failure — a CLI whose screen keeps moving although nothing is
+// happening — kept a finished agent "busy" forever, so no next task was ever
+// picked. Two guards against it: the runner's `idle_seconds` only counts
+// changes of the visible screen text (not no-op redraws), and a STALL rule: a
+// CLI whose model has not consumed a token for CLI_STALL_MS since its last
+// prompt is not working for us any more, whatever its screen does
+// (isCliStalled). Screen-derived activity is then ignored.
 
 /** Quiet period after which a CLI agent is considered idle again. */
 export const CLI_ACTIVITY_IDLE_MS = positiveInt(process.env.CLI_ACTIVITY_IDLE_MS, 30_000);
 /** Poll interval of the runner-side activity heartbeat during a watched task. */
 export const CLI_ACTIVITY_HEARTBEAT_MS = positiveInt(process.env.CLI_ACTIVITY_HEARTBEAT_MS, 5_000);
+
+/**
+ * No model activity (token usage reported by the runner) for this long since
+ * the last prompt → the CLI is stalled: its screen activity no longer counts.
+ */
+export const CLI_STALL_MS = positiveInt(process.env.CLI_STALL_MS, 15 * 60_000);
 
 function positiveInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
@@ -41,6 +55,76 @@ interface Watch {
 }
 const watches = new Map<string, Watch>();
 
+interface ModelActivity {
+  /** Last token-usage report; null until the runner reported one. */
+  lastTokenAt: number | null;
+  /** Last prompt pasted into the CLI. */
+  lastPromptAt: number;
+  /** A stall was already logged for the current episode. */
+  stallLogged: boolean;
+}
+const modelActivity = new Map<string, ModelActivity>();
+
+function modelState(agentId: string): ModelActivity {
+  let m = modelActivity.get(agentId);
+  if (!m) {
+    m = { lastTokenAt: null, lastPromptAt: 0, stallLogged: false };
+    modelActivity.set(agentId, m);
+  }
+  return m;
+}
+
+/**
+ * The CLI's model consumed tokens (the runner reports transcript growth): it is
+ * working right now. Marks the agent busy like any other activity.
+ */
+export function noteCliModelActivity(
+  agentManager: any,
+  agentId: string,
+  detail = 'Consuming tokens',
+  at: number = Date.now()
+): void {
+  if (!agentId) return;
+  const m = modelState(agentId);
+  m.lastTokenAt = Math.max(m.lastTokenAt ?? 0, at);
+  m.stallLogged = false;
+  noteCliActivity(agentManager, agentId, detail, at);
+}
+
+/** A prompt was just pasted into the CLI: a new turn starts (resets the stall clock). */
+export function noteCliPromptInjected(
+  agentManager: any,
+  agentId: string,
+  detail = 'CLI task injected',
+  at: number = Date.now()
+): void {
+  if (!agentId) return;
+  const m = modelState(agentId);
+  m.lastPromptAt = Math.max(m.lastPromptAt, at);
+  m.stallLogged = false;
+  noteCliActivity(agentManager, agentId, detail, at);
+}
+
+/**
+ * True when the CLI's model has not consumed a token for CLI_STALL_MS since its
+ * last prompt. Only judged once the runner has reported token usage for this
+ * agent at least once — a CLI without usage reporting is never called stalled.
+ */
+export function isCliStalled(agentId: string, now: number = Date.now()): boolean {
+  const m = modelActivity.get(agentId);
+  if (!m || m.lastTokenAt === null) return false;
+  const stalled = now - Math.max(m.lastTokenAt, m.lastPromptAt) >= CLI_STALL_MS;
+  if (stalled && !m.stallLogged) {
+    m.stallLogged = true;
+    console.warn(
+      `[CliActivity] ${agentId.slice(0, 8)}: no model activity for ${Math.round(
+        (now - Math.max(m.lastTokenAt, m.lastPromptAt)) / 1000
+      )}s — ignoring its terminal activity, treating the CLI as idle`
+    );
+  }
+  return stalled;
+}
+
 /**
  * Record CLI activity for `agentId` (at `at`, default now): mark it busy if it
  * isn't, and (re)arm the idle timer. Safe to call at a high rate.
@@ -54,6 +138,17 @@ export function noteCliActivity(
   if (!agentManager || !agentId) return;
   const agent = agentManager.agents?.get?.(agentId);
   if (!agent) return;
+  // A stalled CLI's screen/console activity is not work (see isCliStalled).
+  // Prompt and token signals reset the stall clock before getting here.
+  if (isCliStalled(agentId)) {
+    // Make sure a busy flag nobody else owns still gets released.
+    if (agent.status === 'busy' && !agent.currentTask && !activity.get(agentId)?.idleTimer) {
+      const stale = activity.get(agentId) || { lastActivityAt: 0, idleTimer: null };
+      activity.set(agentId, stale);
+      armIdleTimer(agentManager, agentId, stale);
+    }
+    return;
+  }
 
   const state = activity.get(agentId) || { lastActivityAt: 0, idleTimer: null };
   state.lastActivityAt = Math.max(state.lastActivityAt, at);
@@ -74,7 +169,9 @@ export function noteCliActivity(
 /** True when CLI activity was seen for `agentId` within the idle threshold. */
 export function isCliRecentlyActive(agentId: string, now: number = Date.now()): boolean {
   const state = activity.get(agentId);
-  return !!state && now - state.lastActivityAt < CLI_ACTIVITY_IDLE_MS;
+  return (
+    !!state && now - state.lastActivityAt < CLI_ACTIVITY_IDLE_MS && !isCliStalled(agentId, now)
+  );
 }
 
 function armIdleTimer(agentManager: any, agentId: string, state: ActivityState): void {
@@ -116,7 +213,7 @@ async function settleIdle(agentManager: any, agentId: string): Promise<void> {
     return;
   }
 
-  const idle = await runnerIdleSeconds(agentManager, agentId);
+  const idle = isCliStalled(agentId) ? null : await runnerIdleSeconds(agentManager, agentId);
   if (idle !== null) {
     const outputAt = Date.now() - idle * 1000;
     if (outputAt > state.lastActivityAt) state.lastActivityAt = outputAt;
@@ -197,4 +294,5 @@ export function _resetCliActivity(): void {
   for (const w of watches.values()) clearInterval(w.timer);
   activity.clear();
   watches.clear();
+  modelActivity.clear();
 }

@@ -690,3 +690,55 @@ def test_status_reports_idle_seconds_since_last_output():
 
     session._last_output_at = time.monotonic()
     assert session.status()["idle_seconds"] < 1
+
+
+def _screen_session(monkeypatch, screens):
+    """A session whose tmux pane shows `screens[0]` (mutable)."""
+    from subprocess import CompletedProcess
+    session = PtySession(agent_id="agent-s", cmd=["codex"], cwd="/tmp", env={})
+    session._tmux_session = "pt-agent-s"
+    monkeypatch.setattr(
+        session, "_tmux_run",
+        lambda args, **kw: CompletedProcess(args, 0, stdout=screens[0].encode(), stderr=b""),
+    )
+    return session
+
+
+@pytest.mark.asyncio
+async def test_output_that_leaves_the_screen_unchanged_is_not_activity(monkeypatch):
+    # Regression: a CLI idle at its prompt kept writing bytes that changed
+    # nothing on screen, so idle_seconds never grew and its agent stayed busy.
+    screens = ["› Ask Codex to do anything"]
+    session = _screen_session(monkeypatch, screens)
+    now = time.monotonic()
+    session._last_output_at = now - 100
+    session._last_screen_change_at = now - 100
+    await session._sample_screen()  # baseline frame
+
+    # A no-op repaint: bytes arrive, the screen text is identical.
+    session._last_output_at = time.monotonic()
+    assert session.status()["idle_seconds"] < 1, "unclassified output counts until sampled"
+    await session._sample_screen()
+    status = session.status()
+    assert status["idle_seconds"] >= 99
+    assert status["output_idle_seconds"] < 1
+
+    # The screen really changes (spinner tick, new text) → activity.
+    screens[0] = "• Working (3s • esc to interrupt)"
+    session._last_output_at = time.monotonic()
+    await session._sample_screen()
+    assert session.status()["idle_seconds"] < 1
+
+
+@pytest.mark.asyncio
+async def test_failed_screen_capture_counts_output_as_activity(monkeypatch):
+    from subprocess import CompletedProcess
+    session = PtySession(agent_id="agent-f", cmd=["codex"], cwd="/tmp", env={})
+    session._tmux_session = "pt-agent-f"
+    monkeypatch.setattr(
+        session, "_tmux_run", lambda args, **kw: CompletedProcess(args, 1, stdout=b"", stderr=b"")
+    )
+    session._last_screen_change_at = time.monotonic() - 100
+    session._last_output_at = time.monotonic()
+    await session._sample_screen()
+    assert session.status()["idle_seconds"] < 1

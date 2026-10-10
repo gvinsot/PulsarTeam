@@ -66,7 +66,7 @@ import {
   startTaskCommitRun,
   finishTaskCommitRun,
 } from '../agentManager/tools/gitReconcile.js';
-import { noteCliActivity } from '../agentManager/cliActivity.js';
+import { noteCliActivity, noteCliPromptInjected } from '../agentManager/cliActivity.js';
 import { getTaskSignal, setTaskSignal } from '../agentManager/tasks.js';
 import type { AgentManager } from '../agentManager/index.js';
 import type { Task } from '../database/tasks.js';
@@ -146,7 +146,7 @@ async function _runViaCliTerminal(
   // cancels the paste: the drain would only interrupt it 20 s later.
   if (getTaskSignal(task.id, 'stopped')) return 'stopped';
   await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
-  noteCliActivity(agentManager, agent.id, 'CLI task injected');
+  noteCliPromptInjected(agentManager, agent.id, 'CLI task injected');
   return agentManager._waitForExecutionComplete(
     task.agentId,
     task.id,
