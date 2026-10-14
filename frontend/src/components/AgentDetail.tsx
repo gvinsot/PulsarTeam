@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   X,
   MessageSquare,
@@ -15,6 +15,7 @@ import {
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
 import { useBoardRepos } from '../hooks/useBoardResources';
+import { refreshChatHistory } from '../hooks/refreshChatHistory';
 import type { Socket } from 'socket.io-client';
 import type {
   Agent,
@@ -188,15 +189,6 @@ export default function AgentDetail({
     };
   }, [liveAgent.id]);
 
-  const loadAgentHistory = useCallback(async () => {
-    const fresh = await api.getHistory(liveAgent.id);
-    const nextHistory = Array.isArray(fresh) ? fresh : [];
-    setHistory(nextHistory);
-    setFullAgent(prev =>
-      prev && prev.id === liveAgent.id ? { ...prev, conversationHistory: nextHistory } : prev
-    );
-  }, [liveAgent.id]);
-
   // Repo list sourced from the agent's board GitHub plugin OAuth — same list
   // as CreateTaskModal uses, so the chat picker isn't artificially restricted
   // to repos already referenced by an existing task on the board.
@@ -268,7 +260,7 @@ export default function AgentDetail({
     if (agent?.conversationHistory) {
       setHistory(agent.conversationHistory);
     }
-  }, [agent?.id, agent?.conversationHistory?.length]);
+  }, [agent?.id, agent?.conversationHistory]);
 
   useEffect(() => {
     const isStreaming = streamBuffer !== undefined;
@@ -276,12 +268,23 @@ export default function AgentDetail({
       hadStreamRef.current = true;
       return;
     }
-    if (!hadStreamRef.current || agent.status === 'busy') return;
-    hadStreamRef.current = false;
-    loadAgentHistory().catch(err => {
-      console.error('Failed to refresh conversation history:', err);
-    });
-  }, [agent.status, loadAgentHistory, streamBuffer]);
+    if (!hadStreamRef.current) return;
+    // Stream end (or its authoritative snapshot) is sufficient: the status
+    // event may be late or missed. Retry failures and ignore reads from an old
+    // turn after the effect is cleaned up by a new stream or agent switch.
+    return refreshChatHistory(
+      () => api.getHistory(liveAgent.id),
+      fresh => {
+        const nextHistory = Array.isArray(fresh) ? fresh : [];
+        setHistory(nextHistory);
+        setFullAgent(prev =>
+          prev && prev.id === liveAgent.id ? { ...prev, conversationHistory: nextHistory } : prev
+        );
+        hadStreamRef.current = false;
+      },
+      err => console.error('Failed to refresh conversation history:', err)
+    );
+  }, [liveAgent.id, streamBuffer]);
 
   // Auto-scroll chat
   useEffect(() => {
