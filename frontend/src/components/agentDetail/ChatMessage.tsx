@@ -10,6 +10,7 @@ import { cleanToolSyntax } from './cleanToolSyntax';
 import ToolResultMessage from './ToolResultMessage';
 import { sameRenderedMessage } from './chatWindow';
 import { reconstructWrappedOAuthUrlsInText } from './claudeOAuthLinks';
+import { openImageInNewTab, safeImageDataUrl } from '../../utils/safeImage';
 
 /** One slice of assistant text: either plain markdown or a parsed @delegate() call. */
 type DelegationSegment =
@@ -298,17 +299,19 @@ function ChatMessage({
         {/* Show attached images for user messages and tool results */}
         {message.images && message.images.length > 0 && (
           <div className="flex gap-2 mb-2 flex-wrap">
-            {message.images.map((img, i) => (
-              <img
-                key={i}
-                src={img.preview || `data:${img.mediaType};base64,${img.data}`}
-                alt={`Attached ${i + 1}`}
-                className="max-w-48 max-h-48 rounded-lg border border-dark-600 object-contain cursor-pointer hover:opacity-80 transition-opacity"
-                onClick={() =>
-                  window.open(img.preview || `data:${img.mediaType};base64,${img.data}`, '_blank')
-                }
-              />
-            ))}
+            {message.images.map((img, i) => {
+              const src = safeImageDataUrl(img);
+              if (!src) return null;
+              return (
+                <img
+                  key={i}
+                  src={src}
+                  alt={`Attached ${i + 1}`}
+                  className="max-w-48 max-h-48 rounded-lg border border-dark-600 object-contain cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => openImageInNewTab(img)}
+                />
+              );
+            })}
           </div>
         )}
         {!isUser && message.thinking && (

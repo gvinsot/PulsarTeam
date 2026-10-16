@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, AlertCircle, Terminal } from 'lucide-react';
 import type { ConversationMessage, MessageToolResult } from '../../types';
+import { openImageInNewTab, safeImageDataUrl } from '../../utils/safeImage';
 
 // ─── Rich Tool Output (git diff/show/log/status rendering) ─────────────────
 function isGitOutput(tool: string, args: string[], output: string) {
@@ -153,15 +154,19 @@ function ToolResultItem({ result }: { result: MessageToolResult }) {
         <>
           {result.images && result.images.length > 0 && (
             <div className="flex gap-2 mt-1 ml-3 flex-wrap">
-              {result.images.map((img, i) => (
-                <img
-                  key={i}
-                  src={`data:${img.mediaType};base64,${img.data}`}
-                  alt={`Tool result ${i + 1}`}
-                  className="max-w-64 max-h-64 rounded-lg border border-dark-600 object-contain cursor-pointer hover:opacity-80 transition-opacity"
-                  onClick={() => window.open(`data:${img.mediaType};base64,${img.data}`, '_blank')}
-                />
-              ))}
+              {result.images.map((img, i) => {
+                const src = safeImageDataUrl(img);
+                if (!src) return null;
+                return (
+                  <img
+                    key={i}
+                    src={src}
+                    alt={`Tool result ${i + 1}`}
+                    className="max-w-64 max-h-64 rounded-lg border border-dark-600 object-contain cursor-pointer hover:opacity-80 transition-opacity"
+                    onClick={() => openImageInNewTab(img)}
+                  />
+                );
+              })}
             </div>
           )}
           {output && (
