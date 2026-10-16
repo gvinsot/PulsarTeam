@@ -66,7 +66,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { createSwarmApiMcpHandler } from './services/swarmApiMcp.js';
 import { createPulsarGatewayMcpHandler } from './services/pulsarGatewayMcp.js';
 import { ensureApiKeysTable } from './services/apiKeyManager.js';
-import { authenticateApiKey, requireApiKeyScope } from './middleware/apiKeyAuth.js';
+import { requireApiKeyScope } from './middleware/apiKeyAuth.js';
 import { createAdminMcpHandler } from './services/mcp/adminMcp.js';
 import { createManagementMcpHandler } from './services/mcp/managementMcp.js';
 import { createInsertMcpHandler } from './services/mcp/insertMcp.js';
@@ -79,7 +79,6 @@ import { internalRunnerMcpRoutes } from './routes/internalRunnerMcp.js';
 import { internalRunnerInstructionsRoutes } from './routes/internalRunnerInstructions.js';
 import { internalTokenUsageRoutes } from './routes/internalTokenUsage.js';
 import { codexAuthRoutes } from './routes/codexAuth.js';
-import { swarmApiRoutes } from './routes/swarmApi.js';
 import { jiraRoutes } from './routes/jira.js';
 import { createJiraMcpHandler } from './services/jiraMcp.js';
 import { wordpressRoutes } from './routes/wordpress.js';
@@ -345,20 +344,9 @@ for (const [path, handler] of mcpMounts) {
   app.all(path, authenticateToken, handler);
 }
 
-// External Swarm API — secured by the LEGACY instance-wide API key (Bearer
-// token). Kept as its own handler instance (distinct from the internal-JWT
-// mount above) and outside the JWT-auth table because it uses
-// authenticateApiKey, which attaches no identity: that key names nobody, so
-// everything it reaches runs unscoped. It stays exactly as it was so existing
-// integrations keep working, and `validateApiKey` now accepts legacy rows ONLY
-// — a scoped key honoured here would escape its own scope.
-const swarmApiMcpHandler = createSwarmApiMcpHandler(agentManager);
-app.all('/api/swarm/mcp', authenticateApiKey, (req, res) => swarmApiMcpHandler(req, res));
-app.use('/api/swarm', authenticateApiKey, swarmApiRoutes(agentManager));
-
 // ── Scoped MCP surfaces — per-user, per-scope API keys ─────────────────────
 //
-// Unlike /api/swarm above, these resolve the key to its OWNER and re-read that
+// These resolve the key to its OWNER and re-read that
 // user from the database on every request, so every tool runs inside a real
 // tenant and a demotion or deletion restricts the key immediately. The ladder
 // is one-way: an `admin` key opens both mounts, a `management` key only the

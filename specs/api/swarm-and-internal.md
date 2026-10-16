@@ -1,35 +1,12 @@
 # Swarm API & internal routes
 
-Sources: `api/src/routes/swarmApi.ts`, `internalClaudeTokens.ts`, plus the inline MCP handlers in `api/src/index.ts`.
+Sources: `internalClaudeTokens.ts`, plus the inline MCP handlers in `api/src/index.ts`.
 
 ---
 
-## 1. External Swarm API — `/api/swarm/*`
+## 1. External Swarm API — removed
 
-Authenticated with a **user API key** (Bearer token). The key is created from the UI's API-key modal and stored hashed. The Swarm API is intended for programmatic integration with external automations (CI, schedulers, other LLM agents).
-
-### GET `/api/swarm/agents`
-List the user's agents.
-- **Query**: `project?`, `status?` (idle|busy|error).
-- **Response 200**: `{ count, agents: [...] }`.
-
-### GET `/api/swarm/agents/:id`
-Agent detail (resolves by ID or by `name`). Includes tasks and metrics.
-
-### GET `/api/swarm/boards`
-List the user's boards.
-- **Response 200**: `{ count, boards: [...] }`.
-
-### POST `/api/swarm/agents/:id/tasks`
-Queue a new task on an agent. The board is auto-resolved if there is exactly one; otherwise it must be provided.
-- **Body**: `{ task, project?, status?, board_id?, repo_full_name?, storage_path?, ... }`.
-- **Response 200**: `{ success, task, agent, board_id }`.
-
-### MCP transports
-
-| Endpoint | Description |
-|---|---|
-| `ALL /api/swarm/mcp` | JSON-RPC over HTTP — the canonical transport. |
+The external `/api/swarm/*` REST routes and the `/api/swarm/mcp` transport were opened only by the ownerless instance-wide ("legacy") API key. That key has been removed for good (migration `202610160001_remove_legacy_api_keys`), and the surface with it. External integrations use a personal scoped key instead — see [mcp-surfaces.md](mcp-surfaces.md).
 
 ---
 

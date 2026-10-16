@@ -1277,28 +1277,12 @@ PUT /api/settings/general/reminders
 
 ## API Keys
 
-Manage the external Swarm API key.
-
-### Get API Key Info
+Every key is personal and scoped (`admin`, `management`, or a board-bound `insert` key). There is no instance-wide key.
 
 ```
-GET /api/settings/api-key
-```
-
-Returns only the key prefix (masked).
-
-### Generate New API Key
-
-```
-POST /api/settings/api-key
-```
-
-Returns the full key **once** (cannot be retrieved again). Generating a new key revokes the previous one.
-
-### Revoke API Key
-
-```
-DELETE /api/settings/api-key
+GET    /api/settings/api-key/mine        # the caller's keys (metadata only)
+POST   /api/settings/api-key/mine        # { scope, name?, board_id?, allowed_columns? } — returns the key once
+DELETE /api/settings/api-key/mine/:id    # revoke one of the caller's keys
 ```
 
 ---
@@ -1493,54 +1477,17 @@ GET /api/leader-tools/project-summary
 
 ---
 
-## Swarm External API
-
-External REST API for programmatic access, CI/CD integration, and MCP clients. Authenticated via **API key** (`Authorization: Bearer <api-key>`).
-
-See [SWARM_API.md](SWARM_API.md) for detailed usage examples.
-
-### List Agents
-
-```
-GET /api/swarm/agents?project=my-project&status=idle
-```
-
-### Get Agent Status
-
-```
-GET /api/swarm/agents/:id
-```
-
-The `:id` accepts a UUID or agent name (case-insensitive).
-
-### Add Task
-
-```
-POST /api/swarm/agents/:id/tasks
-```
-
-**Body:**
-
-| Field     | Type   | Required | Description                     |
-|-----------|--------|----------|---------------------------------|
-| `task`    | string | yes      | Task description (1-5000 chars) |
-| `project` | string | yes      | Project name (1-200 chars)     |
-| `status`  | string | no       | `backlog` or `pending`          |
-
-**Response:** `201 Created`
-
----
-
 ## MCP Endpoints
 
-### Swarm MCP (Streamable HTTP)
+### Scoped MCP surfaces (Streamable HTTP)
 
 ```
-POST /api/swarm/mcp
-Authorization: Bearer <api-key>
+POST /api/mcp/admin        Authorization: Bearer <admin key>
+POST /api/mcp/management   Authorization: Bearer <management or admin key>
+POST /api/mcp/insert       Authorization: Bearer <insert key>
 ```
 
-JSON-RPC over HTTP. Tools: `list_agents`, `get_agent_status`, `add_task`.
+See `specs/api/mcp-surfaces.md`.
 
 ### Code Index MCP
 

@@ -20,9 +20,7 @@ import {
 /**
  * The tenant an MCP call runs in, from the authorized X-Agent-Id.
  *
- * `null` means "no agent context", which happens only on the external
- * API-key mount (/api/swarm/mcp in index.ts): that key is instance-wide by
- * design and is left unscoped so existing integrations keep working. Every
+ * `null` means "no agent context" (no X-Agent-Id header). Every
  * agent-driven call arrives with an agent id and is bounded by its board scope;
  * an id that no longer resolves to an agent scopes to NOTHING rather than to
  * everything.

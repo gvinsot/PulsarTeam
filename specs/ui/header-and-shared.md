@@ -27,13 +27,12 @@ When an `impersonatedBy` field is present on the user, an amber banner is render
 
 Renders: `frontend/src/components/ApiKeyModal.tsx`.
 
-Lets the current user generate and manage **their personal API key** used to authenticate the external Swarm API (`/api/swarm/*`) and the external MCP transports.
+Lets the current user manage **their personal scoped API keys** (see `specs/api/mcp-surfaces.md`), and browse the generated API documentation.
 
-- Shows the prefix and creation date of the existing key (if any).
-- **Show/hide** button reveals the full key (masked by default).
-- **Copy** button puts the key in the clipboard and shows a "Copied" indicator.
-- **Generate new key** rotates the key. The full new key is returned **once** by the API and shown here.
-- **Revoke** removes the key (two-click confirmation).
+- **Task insertion**: any number of `insert` keys, each bound to one board the user can edit (optionally narrowed to some columns).
+- **MCP keys**: one `management` and one `admin` key per user. **Create** / **Rotate** mints a key, returned **once** by the API and shown here with a **Copy** button; the previous key for that scope stops working immediately.
+- Each existing key shows its prefix and last use, with a **Revoke** button.
+- There is no instance-wide key any more: the ownerless legacy key has been removed.
 
 ---
 

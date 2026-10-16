@@ -22,21 +22,18 @@ const KEYS: Record<string, any> = {
     userId: 'user-a',
     scope: 'insert',
     boardId: 'board-support',
-    legacy: false,
   },
   'key-management': {
     id: 'k-mgmt',
     userId: 'user-a',
     scope: 'management',
     boardId: null,
-    legacy: false,
   },
   'key-shared': {
     id: 'k-shared',
     userId: 'user-a',
     scope: 'insert',
     boardId: 'board-shared',
-    legacy: false,
   },
 };
 const USERS: Record<string, any> = {
@@ -65,7 +62,6 @@ mock.module('../../services/apiKeyManager.js', {
     resolveApiKey: async (key: string) => KEYS[key] || null,
     scopeSatisfies,
     touchApiKey: async () => {},
-    validateApiKey: async () => false,
   },
 });
 

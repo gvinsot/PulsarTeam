@@ -3,7 +3,6 @@ import {
   resolveApiKey,
   scopeSatisfies,
   touchApiKey,
-  validateApiKey,
   type ApiKeyScope,
 } from '../services/apiKeyManager.js';
 import { getUserById } from '../services/database.js';
@@ -13,15 +12,8 @@ import type { SessionClaims } from './session.js';
 
 /**
  * Express middleware that authenticates requests via API key (Bearer token).
- *
- * ── The LEGACY path ─────────────────────────────────────────────────────────
- * `authenticateApiKey` guards `/api/swarm/*` and answers a boolean: the key is
- * valid or it is not. It attaches NO identity, because a legacy key has none —
- * it is the one ownerless instance-wide secret described in
- * services/apiKeyManager.ts. Everything it reaches therefore runs unscoped,
- * which is precisely why `validateApiKey` now accepts legacy rows ONLY: a
- * scoped key honoured here would hand its holder the whole instance and defeat
- * its own scope.
+ * Every key is owned by a user and scoped; the ownerless instance-wide
+ * ("legacy") key has been removed.
  *
  * ── The SCOPED path ─────────────────────────────────────────────────────────
  * `requireApiKeyScope(scope)` guards `/api/mcp/*`. It resolves the key to its
@@ -42,28 +34,6 @@ import type { SessionClaims } from './session.js';
  * /api/tasks relies on. Unsharing the board, or demoting the share to read,
  * therefore stops every insert key minted against it on its next use.
  */
-export async function authenticateApiKey(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<Response | void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'API key required. Use Authorization: Bearer <api-key>' });
-  }
-  const key = authHeader.slice(7);
-  try {
-    const valid = await validateApiKey(key);
-    if (!valid) {
-      return res.status(403).json({ error: 'Invalid API key' });
-    }
-  } catch (err) {
-    console.error('API key validation failed:', errorMessage(err));
-    return res.status(503).json({ error: 'Auth backend unavailable' });
-  }
-  next();
-}
-
 /** The key a scoped request came in on, for logging and per-tool checks. */
 declare global {
   namespace Express {
@@ -120,18 +90,6 @@ export async function authorizeScopedApiKey(
 
   if (!resolved) {
     return { ok: false, status: 403, error: 'Invalid API key' };
-  }
-
-  // A legacy key names no owner, so there is no tenant to run these tools in.
-  // Accepting it would reintroduce the ownerless instance-wide access this
-  // surface was built to replace.
-  if (resolved.legacy || !resolved.userId || !resolved.scope) {
-    return {
-      ok: false,
-      status: 403,
-      error:
-        'This endpoint requires a scoped API key. The instance-wide (legacy) key is not accepted here — mint a per-user key from Settings → API keys.',
-    };
   }
 
   if (!scopeSatisfies(resolved.scope, required)) {

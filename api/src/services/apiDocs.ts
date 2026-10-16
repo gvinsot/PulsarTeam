@@ -6,7 +6,7 @@
 // Nothing that can drift is written by hand here:
 //
 //   • request bodies are `z.toJSONSchema` of the zod schemas the routes
-//     validate with (`createTaskFieldsSchema`, `swarmCreateTaskSchema`);
+//     validate with (`createTaskFieldsSchema`);
 //   • the tool catalogue of each MCP surface is the `tools/list` answer of a
 //     REAL server instance, obtained over an in-memory MCP transport — exactly
 //     what a client holding a key would receive;
@@ -28,7 +28,6 @@ import { createManagementMcpServer } from './mcp/managementMcp.js';
 import { createInsertMcpServer } from './mcp/insertMcp.js';
 import { createTaskFieldsSchema } from './mcp/taskInsertion.js';
 import { TASK_VIEW_KEYS } from './mcp/taskOperations.js';
-import { swarmCreateTaskSchema } from '../routes/swarmApi.js';
 import { INSERT_RATE_LIMIT_PER_MINUTE } from '../routes/insertApi.js';
 
 /** One tool as `tools/list` publishes it. */
@@ -335,15 +334,13 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         '| Key | Opens |\n|---|---|\n' +
         '| `insert` | `/api/insert/*`, `/api/mcp/insert` — task creation on the one board it is bound to |\n' +
         '| `management` | `/api/mcp/management` |\n' +
-        '| `admin` | `/api/mcp/admin` and `/api/mcp/management` |\n' +
-        '| legacy (instance-wide) | `/api/swarm/*` only — deprecated |\n\n' +
-        'Keys never cross these lines: an `admin` key does not open the insert surface (it has no board), and no personal key opens `/api/swarm/*`.',
+        '| `admin` | `/api/mcp/admin` and `/api/mcp/management` |\n\n' +
+        'Keys never cross these lines: an `admin` key does not open the insert surface (it has no board).',
     },
     servers: [{ url: '/' }],
     tags: [
       { name: 'Insert', description: 'REST task creation with a board-bound `insert` key.' },
       { name: 'MCP', description: 'Model Context Protocol surfaces for AI clients.' },
-      { name: 'Legacy', description: 'Instance-wide key. Deprecated: migrate to a personal key.' },
     ],
     paths: {
       '/api/insert/board': {
@@ -458,99 +455,6 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         },
       },
       ...mcpPaths,
-      '/api/swarm/mcp': {
-        post: {
-          tags: ['Legacy'],
-          deprecated: true,
-          operationId: 'legacy_mcp',
-          summary: 'Instance-wide MCP, no tenant',
-          description:
-            'Streamable HTTP MCP reached with the legacy key. Its tools run with no tenant at all. Migrate to `/api/mcp/management` or `/api/mcp/insert`.',
-          security: [{ legacyKey: [] }],
-          'x-api-key-scope': 'legacy',
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': { schema: { $ref: '#/components/schemas/JsonRpcRequest' } },
-            },
-          },
-          responses: {
-            '200': {
-              description: 'JSON-RPC response, as an event stream.',
-              content: { 'text/event-stream': { schema: { type: 'string' } } },
-            },
-            ...keyErrors,
-          },
-        },
-      },
-      '/api/swarm/agents': {
-        get: {
-          tags: ['Legacy'],
-          deprecated: true,
-          operationId: 'legacy_list_agents',
-          summary: 'List every agent of the instance',
-          security: [{ legacyKey: [] }],
-          'x-api-key-scope': 'legacy',
-          parameters: [
-            { name: 'project', in: 'query', schema: { type: 'string' } },
-            {
-              name: 'status',
-              in: 'query',
-              schema: { type: 'string', enum: ['idle', 'busy', 'error'] },
-            },
-          ],
-          responses: { '200': { description: '`{ count, agents }`' }, ...keyErrors },
-        },
-      },
-      '/api/swarm/agents/{id}': {
-        get: {
-          tags: ['Legacy'],
-          deprecated: true,
-          operationId: 'legacy_get_agent',
-          summary: 'One agent, by id or name',
-          security: [{ legacyKey: [] }],
-          'x-api-key-scope': 'legacy',
-          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: {
-            '200': { description: 'Agent with its task list and metrics.' },
-            '404': errorResponse('No such agent.'),
-            ...keyErrors,
-          },
-        },
-      },
-      '/api/swarm/boards': {
-        get: {
-          tags: ['Legacy'],
-          deprecated: true,
-          operationId: 'legacy_list_boards',
-          summary: 'List every board of the instance',
-          security: [{ legacyKey: [] }],
-          'x-api-key-scope': 'legacy',
-          responses: { '200': { description: '`{ count, boards }`' }, ...keyErrors },
-        },
-      },
-      '/api/swarm/agents/{id}/tasks': {
-        post: {
-          tags: ['Legacy'],
-          deprecated: true,
-          operationId: 'legacy_add_task',
-          summary: 'Add a task to an agent',
-          description: 'Prefer `POST /api/insert/tasks` with an insert key.',
-          security: [{ legacyKey: [] }],
-          'x-api-key-scope': 'legacy',
-          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-          requestBody: {
-            required: true,
-            content: { 'application/json': { schema: bodySchema(swarmCreateTaskSchema) } },
-          },
-          responses: {
-            '201': { description: '`{ success, task, agent, board_id }`' },
-            '400': errorResponse('Validation failed.'),
-            '404': errorResponse('No such agent or board.'),
-            ...keyErrors,
-          },
-        },
-      },
     },
     components: {
       securitySchemes: {
@@ -560,7 +464,6 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         ),
         managementKey: bearer('Management', 'One per user; minting again rotates it.'),
         adminKey: bearer('Admin', 'One per user; also opens the management surface.'),
-        legacyKey: bearer('Legacy instance-wide', 'Names nobody; deprecated.'),
       },
       schemas: {
         CreateTaskInput: bodySchema(createTaskFieldsSchema),

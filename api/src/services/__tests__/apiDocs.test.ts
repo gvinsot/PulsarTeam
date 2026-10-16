@@ -23,7 +23,7 @@ const managers = { agentManager: {}, mcpManager: {}, skillManager: {} } as any;
 const ACTOR = { userId: 'u', username: 'u', role: 'basic', csrf: '' } as any;
 const doc: any = await buildOpenApiDocument(managers);
 
-/** `/api/swarm/agents/{id}` → `/api/swarm/agents/:id` */
+/** `/api/insert/tasks/{id}` → `/api/insert/tasks/:id` */
 const toExpressPath = (path: string) => path.replace(/\{(\w+)\}/g, ':$1');
 
 /** The guard each security scheme stands for, as the route inventory names it. */
@@ -31,7 +31,6 @@ const GUARD_OF_SCHEME: Record<string, string> = {
   insertKey: 'requireApiKeyScope(insert)',
   managementKey: 'requireApiKeyScope(management)',
   adminKey: 'requireApiKeyScope(admin)',
-  legacyKey: 'authenticateApiKey',
 };
 
 test('every documented operation is mounted, behind the guard its security names', async () => {

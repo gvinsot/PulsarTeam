@@ -96,7 +96,7 @@ Endpoints are grouped by domain. Each file lists method + path, auth model, requ
 - [api/plugins-and-mcp.md](api/plugins-and-mcp.md) — `/api/plugins/*`, `/api/agent-skills/*`, `/api/mcp-servers/*`
 - [api/integrations.md](api/integrations.md) — `/api/{github,gmail,gdrive,onedrive,outlook,slack,jira,wordpress,s3}/*` (status, OAuth, MCP endpoints)
 - [api/budget-and-llm.md](api/budget-and-llm.md) — `/api/budget/*`, `/api/llm-configs/*`
-- [api/swarm-and-internal.md](api/swarm-and-internal.md) — `/api/swarm/*` (external API-key API), `/api/internal/*`
+- [api/swarm-and-internal.md](api/swarm-and-internal.md) — `/api/internal/*`, internal MCP endpoints
 - [api/code-index.md](api/code-index.md) — `/api/code-index/*` (symbol & semantic search)
 - [api/misc.md](api/misc.md) — `/api/health`, `/api/settings/*`, `/api/realtime`, `/api/leader-tools`, `/api/contact`
 

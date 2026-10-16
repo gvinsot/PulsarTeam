@@ -1,25 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  X,
-  Key,
-  Copy,
-  RefreshCw,
-  Trash2,
-  Eye,
-  EyeOff,
-  Shield,
-  AlertTriangle,
-  BookOpen,
-} from 'lucide-react';
+import { X, Key, Copy, RefreshCw, Trash2, Shield, BookOpen } from 'lucide-react';
 import { api } from '../api';
-import type {
-  ApiKeyInfo,
-  LadderApiKeyScope,
-  LegacyApiKey,
-  ScopedApiKey,
-  ScopedApiKeyCreated,
-  ShowToastFn,
-} from '../types';
+import type { LadderApiKeyScope, ScopedApiKey, ScopedApiKeyCreated, ShowToastFn } from '../types';
 import InsertKeysSection from './apiKeys/InsertKeysSection';
 import ApiDocsPanel, { type ApiDocsSection } from './apiKeys/ApiDocsPanel';
 
@@ -68,11 +50,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   /** Where the Documentation tab should scroll when opened from a shortcut. */
   const [docsFocus, setDocsFocus] = useState<ApiDocsSection | null>(null);
 
-  const [keyInfo, setKeyInfo] = useState<ApiKeyInfo | null>(null);
-  /** The clear-text legacy key, shown once right after a generate. */
-  const [newKey, setNewKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
 
   // ── Scoped, per-user keys ────────────────────────────────────────────────
@@ -82,9 +60,6 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   const [freshInsert, setFreshInsert] = useState<ScopedApiKeyCreated | null>(null);
   const [minting, setMinting] = useState<LadderApiKeyScope | null>(null);
 
-  // ── Legacy keys still outstanding (admin only) ───────────────────────────
-  const [legacyKeys, setLegacyKeys] = useState<LegacyApiKey[]>([]);
-
   const reloadMyKeys = useCallback(async () => {
     setMyKeys((await api.listMyApiKeys()).keys);
   }, []);
@@ -92,21 +67,11 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   const loadKeyInfo = useCallback(async () => {
     try {
       setLoading(true);
-      const [info, mine] = await Promise.all([api.getApiKeyInfo(), api.listMyApiKeys()]);
-      setKeyInfo(info.apiKey);
-      setMyKeys(mine.keys);
+      setMyKeys((await api.listMyApiKeys()).keys);
     } catch {
       showToast?.('Failed to load API key info', 'error');
     } finally {
       setLoading(false);
-    }
-
-    // Admin-only, and the modal is open to everyone: a 403 here simply means
-    // the viewer is not an admin, which is not an error worth reporting.
-    try {
-      setLegacyKeys((await api.listLegacyApiKeys()).keys);
-    } catch {
-      setLegacyKeys([]);
     }
   }, [showToast]);
 
@@ -117,43 +82,6 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   const openDocs = (section: ApiDocsSection) => {
     setDocsFocus(section);
     setTab('docs');
-  };
-
-  const handleGenerate = async () => {
-    try {
-      const data = await api.generateApiKey();
-      setNewKey(data.key);
-      setKeyInfo({ id: data.id, prefix: data.prefix, created_at: new Date().toISOString() });
-      setShowKey(true);
-      await loadKeyInfo();
-      showToast?.('Legacy API key generated', 'success');
-    } catch {
-      showToast?.('Failed to generate API key', 'error');
-    }
-  };
-
-  const handleRevoke = async () => {
-    try {
-      await api.revokeApiKey();
-      setKeyInfo(null);
-      setNewKey(null);
-      setLegacyKeys([]);
-      showToast?.('Legacy API key revoked', 'success');
-    } catch {
-      showToast?.('Failed to revoke API key', 'error');
-    }
-  };
-
-  const handleRevokeLegacy = async () => {
-    try {
-      const { revoked } = await api.revokeLegacyApiKeys();
-      setLegacyKeys([]);
-      setKeyInfo(null);
-      setNewKey(null);
-      showToast?.(`Retired ${revoked} legacy key(s)`, 'success');
-    } catch {
-      showToast?.('Failed to retire legacy keys', 'error');
-    }
   };
 
   const handleMint = async (scope: LadderApiKeyScope) => {
@@ -193,8 +121,6 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
     }
   };
 
-  const mcpEndpoint = `${window.location.origin}/api/swarm/mcp`;
-  const hasLegacy = legacyKeys.length > 0 || !!keyInfo;
   const insertKeys = myKeys.filter(k => k.scope === 'insert');
 
   return (
@@ -262,54 +188,6 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
             />
           ) : (
             <div className="space-y-6">
-              {/* ── The legacy banner ─────────────────────────────────────── */}
-              {hasLegacy && (
-                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 space-y-2">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-amber-300">
-                        A legacy instance-wide key is still active
-                      </p>
-                      <p className="text-xs text-amber-200/80">
-                        It belongs to nobody, so everything it reaches runs with no tenant: whoever
-                        holds it sees every board, agent and task on the instance. It still opens{' '}
-                        <code className="text-amber-100">/api/swarm/*</code> so existing
-                        integrations keep working, and it is <strong>refused</strong> on{' '}
-                        <code className="text-amber-100">/api/mcp/*</code> and{' '}
-                        <code className="text-amber-100">/api/insert/*</code>. Move your
-                        integrations to a personal key below, then retire it.
-                      </p>
-                    </div>
-                  </div>
-                  {legacyKeys.length > 0 && (
-                    <div className="space-y-1.5 pl-6">
-                      {legacyKeys.map(k => (
-                        <div
-                          key={k.id}
-                          className="flex items-center gap-3 text-xs text-amber-200/70"
-                        >
-                          <code className="font-mono">{k.prefix}</code>
-                          <span>created {new Date(k.created_at).toLocaleDateString()}</span>
-                          <span>
-                            {k.last_used_at
-                              ? `last used ${new Date(k.last_used_at).toLocaleDateString()}`
-                              : 'never used'}
-                          </span>
-                        </div>
-                      ))}
-                      <button
-                        onClick={handleRevokeLegacy}
-                        className="mt-1 flex items-center gap-2 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-300 rounded-lg text-xs transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        Retire every legacy key
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* ── Insert keys ───────────────────────────────────────────── */}
               <div className="space-y-3">
                 <div>
@@ -430,101 +308,6 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
                       </div>
                     );
                   })
-                )}
-              </div>
-
-              {/* ── The legacy instance-wide key (admin panel) ────────────── */}
-              <div className="border-t border-dark-700 pt-4 space-y-3">
-                <div className="flex items-end justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-medium text-dark-300">
-                      Legacy instance-wide key (admin)
-                    </h3>
-                    <p className="text-xs text-dark-500 mt-1">
-                      Kept only so integrations built against{' '}
-                      <code className="text-dark-400">{mcpEndpoint}</code> and{' '}
-                      <code className="text-dark-400">/api/swarm/*</code> keep working. It is
-                      refused on every personal-key surface.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => openDocs('Legacy')}
-                    className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-dark-300 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
-                  >
-                    <BookOpen className="w-3.5 h-3.5" />
-                    Legacy endpoints
-                  </button>
-                </div>
-
-                {loading ? null : keyInfo ? (
-                  <div className="space-y-2">
-                    {newKey ? (
-                      <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
-                        <p className="text-xs text-emerald-400 mb-2 font-medium">
-                          Copy this key now — it won't be shown again.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <code className="flex-1 bg-dark-800 border border-dark-700 rounded px-2 py-1.5 text-sm font-mono text-dark-200 truncate">
-                            {showKey ? newKey : '••••••••••••••••••••••••'}
-                          </code>
-                          <button
-                            onClick={() => setShowKey(!showKey)}
-                            className="p-1.5 text-dark-400 hover:text-dark-100 rounded transition-colors"
-                          >
-                            {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                          <button
-                            onClick={() => handleCopy(newKey)}
-                            className={`p-1.5 rounded transition-colors ${
-                              copied ? 'text-emerald-400' : 'text-dark-400 hover:text-dark-100'
-                            }`}
-                          >
-                            <Copy className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-3 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2.5">
-                        <Key className="w-4 h-4 text-dark-400" />
-                        <code className="text-sm font-mono text-dark-300">{keyInfo.prefix}</code>
-                        <span className="text-xs text-dark-500 ml-auto">
-                          {new Date(keyInfo.created_at).toLocaleDateString()}
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleGenerate}
-                        className="flex items-center gap-2 px-3 py-2 bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg text-sm transition-colors"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Regenerate
-                      </button>
-                      <button
-                        onClick={handleRevoke}
-                        className="flex items-center gap-2 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-sm transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        Revoke
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-xs text-dark-400">
-                      No legacy key configured — which is the right state. Prefer a personal key
-                      above.
-                    </p>
-                    <button
-                      onClick={handleGenerate}
-                      className="flex items-center gap-2 px-3 py-2 bg-dark-700 hover:bg-dark-600 text-dark-300 rounded-lg text-xs transition-colors"
-                    >
-                      <Key className="w-3.5 h-3.5" />
-                      Generate a legacy key anyway
-                    </button>
-                  </div>
                 )}
               </div>
             </div>

@@ -11,35 +11,26 @@ const CURRENT_HASH_VERSION = 2;
 /**
  * Manages MCP API keys stored in PostgreSQL.
  *
- * ── Two kinds of row live in `api_keys` ─────────────────────────────────────
+ * ── Every row is SCOPED (`user_id` + `scope` both set) ──────────────────────
  *
- *  • LEGACY (`user_id IS NULL`, `scope IS NULL`). The original design: ONE
- *    instance-wide key, owned by nobody, that `validateApiKey` answered
- *    true/false for. Nothing downstream ever learned who was calling, so every
- *    tool it reached ran with no tenant at all. These rows still exist on
- *    deployments that minted one, and they still open `/api/swarm/*` so no
- *    integration breaks — but they are REFUSED by `requireApiKeyScope`, i.e.
- *    by every endpoint added after them. `listLegacyApiKeys` /
- *    `revokeLegacyApiKeys` exist so an operator can see and retire them.
+ * Keys are minted by the user themselves. The key names its owner and its tool
+ * set; it does NOT carry the owner's claims. `resolveApiKey` returns the owner
+ * id and the middleware re-reads the user row on every request, so a demotion
+ * or a deletion restricts the key on its very next use rather than whenever it
+ * happens to be rotated.
  *
- *  • SCOPED (`user_id` + `scope` both set). Minted by the user themselves. The
- *    key names its owner and its tool set; it does NOT carry the owner's
- *    claims. `resolveApiKey` returns the owner id and the middleware re-reads
- *    the user row on every request, so a demotion or a deletion restricts the
- *    key on its very next use rather than whenever it happens to be rotated.
+ *   – `admin` / `management`: one row per (user, scope), `board_id` NULL.
+ *   – `insert`: bound to ONE board (`board_id` set), opens only task creation
+ *     on that board. Several per user — one per integration — so each can be
+ *     revoked on its own. The owner's edit access to the board is re-checked
+ *     on every request too (middleware/apiKeyAuth.ts).
  *
- *      – `admin` / `management`: one row per (user, scope), `board_id` NULL.
- *      – `insert`: bound to ONE board (`board_id` set), opens only task
- *        creation on that board. Several per user — one per integration — so
- *        each can be revoked on its own. The owner's edit access to the board
- *        is re-checked on every request too (middleware/apiKeyAuth.ts).
+ * The original ownerless instance-wide ("legacy") key has been removed for
+ * good: migration 202610160001 deletes any such row, and a row that is not
+ * cleanly scoped (no owner, no scope, an insert key without its board, a
+ * ladder key WITH a board…) resolves to nothing and is refused everywhere.
  *
- *    A row that is neither cleanly legacy nor cleanly scoped (an owner without
- *    a scope, an insert key without its board, a ladder key WITH a board…)
- *    resolves to nothing at all: it is refused everywhere, including on
- *    `/api/swarm/*`, rather than being read as the ownerless instance-wide key.
- *
- * Storage scheme (v2), identical for both kinds:
+ * Storage scheme (v2):
  *   key_hash = HMAC-SHA256(api_key, server_secret)
  *
  * The server secret is read from API_KEY_SECRET (Docker secret or env). If
@@ -91,16 +82,12 @@ export function scopeSatisfies(granted: ApiKeyScope, required: ApiKeyScope): boo
 /** What `resolveApiKey` hands back. Never contains the owner's claims. */
 export interface ResolvedApiKey {
   id: string;
-  /** NULL only for a legacy row. */
-  userId: string | null;
-  /** NULL only for a legacy row. */
-  scope: ApiKeyScope | null;
+  userId: string;
+  scope: ApiKeyScope;
   /** The board an `insert` key is bound to; NULL for every other kind. */
   boardId: string | null;
   /** Column ids an `insert` key may write to; null = every column of its board. */
   allowedColumns: string[] | null;
-  /** True for the ownerless instance-wide key — see the module header. */
-  legacy: boolean;
 }
 
 /** Resolve the HMAC secret used to fingerprint API keys. */
@@ -160,78 +147,6 @@ export async function ensureApiKeysTable() {
   `);
 }
 
-/**
- * Get the current LEGACY API key metadata (prefix only, never the full key).
- *
- * Scoped keys are deliberately invisible here: this backs the instance-wide
- * key panel, and a user's personal keys are not an admin's to display.
- */
-export async function getApiKeyInfo() {
-  const pool = getPool();
-  if (!pool) return null;
-
-  const result = await pool.query(
-    `SELECT id, prefix, created_at FROM ${TABLE}
-     WHERE hash_version = $1 AND user_id IS NULL
-     ORDER BY created_at DESC LIMIT 1`,
-    [CURRENT_HASH_VERSION]
-  );
-  return result.rows[0] || null;
-}
-
-/**
- * Generate a new legacy (instance-wide, ownerless) API key, replacing the
- * previous one. Returns the full key — the only time it is visible in clear.
- *
- * The replacement DELETE is narrowed to `user_id IS NULL`: it used to clear the
- * whole table, which would now destroy every user's scoped keys as a side
- * effect of an admin rotating the shared one.
- */
-export async function generateNewApiKey() {
-  const pool = getPool();
-  if (!pool) throw new Error('Database not available');
-
-  // Compute everything that can throw (e.g. getHmacSecret with no secret
-  // configured) before the old key is deleted.
-  const key = generateApiKey();
-  const id = crypto.randomUUID();
-  const prefix = key.slice(0, 12) + '...' + key.slice(-4);
-  const keyHash = hmacKey(key);
-
-  // Singleton among legacy rows: replace any existing one. DELETE+INSERT must
-  // be atomic — if the INSERT fails after a committed DELETE, every external
-  // caller is locked out until an admin mints and redistributes a new key.
-  const replaceKey = async (q: {
-    query: (sql: string, params?: unknown[]) => Promise<unknown>;
-  }) => {
-    await q.query(`DELETE FROM ${TABLE} WHERE user_id IS NULL`);
-    await q.query(
-      `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version)
-       VALUES ($1, $2, $3, NOW(), $4)`,
-      [id, keyHash, prefix, CURRENT_HASH_VERSION]
-    );
-  };
-
-  if (typeof pool.connect === 'function') {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await replaceKey(client);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-  } else {
-    // Minimal pool implementations (test doubles) only expose query().
-    await replaceKey(pool);
-  }
-
-  return { id, key, prefix };
-}
-
 const INTERNAL_TOKEN_PREFIX = 'swarm_int_';
 const INTERNAL_TOKEN_TTL_MS = 5 * 60_000;
 
@@ -273,7 +188,6 @@ function resolveInternalToken(token: string): ResolvedApiKey | null {
       scope: data.s,
       boardId: null,
       allowedColumns: null,
-      legacy: false,
     };
   } catch {
     return null;
@@ -313,83 +227,25 @@ export async function resolveApiKey(key: string): Promise<ResolvedApiKey | null>
   const rawScope = matched.scope ?? null;
   const boardId = (matched.board_id as string | null) ?? null;
 
-  // Legacy means ALL THREE are absent — nothing else may be read as the
-  // ownerless instance-wide key, because that key opens /api/swarm/* unscoped.
-  if (!userId && rawScope === null && !boardId) {
-    return {
-      id: matched.id as string,
-      userId: null,
-      scope: null,
-      boardId: null,
-      allowedColumns: null,
-      legacy: true,
-    };
-  }
-
   // Scoped means every piece the scope needs is present, and nothing it does
   // not. An insert key names its board; a ladder key names none.
   const scoped =
     !!userId && isApiKeyScope(rawScope) && (rawScope === 'insert' ? !!boardId : !boardId);
   if (!scoped) {
-    // Half-written: refused everywhere rather than granted a default tool set
-    // or, worse, the instance-wide legacy surface.
+    // Ownerless or half-written: refused everywhere rather than granted a
+    // default tool set.
     return null;
   }
   return {
     id: matched.id as string,
-    userId,
+    userId: userId as string,
     scope: rawScope as ApiKeyScope,
     boardId: rawScope === 'insert' ? boardId : null,
     allowedColumns:
       rawScope === 'insert' && Array.isArray(matched.allowed_columns)
         ? (matched.allowed_columns as unknown[]).filter((c): c is string => typeof c === 'string')
         : null,
-    legacy: false,
   };
-}
-
-/**
- * Legacy true/false validation, for `/api/swarm/*` only.
- *
- * It answers true ONLY for a legacy row. A scoped key must not open the swarm
- * surface: those routes run with no tenant context at all (see
- * services/swarmApiMcp.ts `callerScope`), so honouring a `management` key there
- * would hand its holder the whole instance — the exact escalation the scoped
- * keys exist to prevent.
- */
-export async function validateApiKey(key: string): Promise<boolean> {
-  const resolved = await resolveApiKey(key);
-  return !!resolved && resolved.legacy;
-}
-
-/**
- * Delete the legacy API key (revoke the instance-wide access).
- * Scoped keys are untouched — see generateNewApiKey.
- */
-export async function revokeApiKey() {
-  const pool = getPool();
-  if (!pool) return;
-
-  await pool.query(`DELETE FROM ${TABLE} WHERE user_id IS NULL`);
-}
-
-/** Every legacy row still outstanding, so an operator can see what to retire. */
-export async function listLegacyApiKeys() {
-  const pool = getPool();
-  if (!pool) return [];
-  const result = await pool.query(
-    `SELECT id, prefix, created_at, last_used_at FROM ${TABLE}
-     WHERE user_id IS NULL ORDER BY created_at DESC`
-  );
-  return result.rows;
-}
-
-/** Retire every legacy row at once. Returns how many were removed. */
-export async function revokeLegacyApiKeys(): Promise<number> {
-  const pool = getPool();
-  if (!pool) return 0;
-  const result = await pool.query(`DELETE FROM ${TABLE} WHERE user_id IS NULL`);
-  return result.rowCount ?? 0;
 }
 
 /**

@@ -13,34 +13,26 @@ Before these surfaces, the only key-authenticated MCP endpoint was `/api/swarm/m
 - Consequently `routes/swarmApi.ts` and `services/swarmApiMcp.ts` never read `req.user` — the tools ran with **no tenant at all**, so whoever held the key enumerated every board, agent and task on the instance.
 - The key was admin-managed and shared, so revoking one integration's access revoked everybody's, and nothing was traceable to a person.
 
-`/api/mcp/admin` and `/api/mcp/management` replace that with keys that **name an owner** and **name a tool set**.
+`/api/mcp/admin` and `/api/mcp/management` replace that with keys that **name an owner** and **name a tool set**. The ownerless key, and the `/api/swarm/*` surface it opened, have since been removed for good (migration `202610160001_remove_legacy_api_keys` deletes any remaining row and makes `user_id` and `scope` `NOT NULL`).
 
 ---
 
 ## 2. API keys
 
-`api_keys` holds three kinds of row (migrations `202609010001_api_keys_user_scope`, `202609150001_api_keys_insert_scope`).
+`api_keys` holds two kinds of row (migrations `202609010001_api_keys_user_scope`, `202609150001_api_keys_insert_scope`, `202610160001_remove_legacy_api_keys`).
 
 | | `user_id` | `scope` | `board_id` | Accepted on | Managed from |
 |---|---|---|---|---|---|
-| **Legacy** | `NULL` | `NULL` | `NULL` | `/api/swarm/*` only | `GET`/`POST`/`DELETE /api/settings/api-key`, `GET`/`DELETE /api/settings/api-key/legacy` (admin) |
 | **Ladder** | set | `admin` \| `management` | `NULL` | `/api/mcp/admin`, `/api/mcp/management` | `GET`/`POST /api/settings/api-key/mine`, `DELETE /api/settings/api-key/mine/:id` (any user, own keys only) |
 | **Insert** | set | `insert` | set | `/api/insert/*`, `/api/mcp/insert` | same routes; `POST` takes `{ scope: 'insert', board_id, name }` and requires **edit** on the board |
 
-A row that is none of these exactly — an owner without a scope, an insert key without its board, a ladder key with one — resolves to **nothing** and is refused everywhere, `/api/swarm/*` included. It is never read as the legacy key.
+A row that is none of these exactly — an owner without a scope, an insert key without its board, a ladder key with one — resolves to **nothing** and is refused everywhere.
 
 Both are stored as `HMAC-SHA256(key, server_secret)`; the plaintext is returned exactly once, at mint time.
 
-### The two directions are deliberate
-
-- **A legacy key is refused on `/api/mcp/*`.** It names nobody, so there is no tenant to run the tools in. Accepting it "for compatibility" would reinstate the very unscoped access these surfaces replace.
-- **A scoped key is refused on `/api/swarm/*`.** That surface runs unscoped by design, so honouring a `management` key there would hand its holder the whole instance — the key would escape its own scope.
-
-Existing integrations therefore keep working, unchanged, and gain nothing new.
-
 ### One row per `(user, scope)` — ladder scopes only
 
-Minting a ladder scope you already hold **rotates** it: the previous key for that pair stops working immediately. Rotating or revoking the legacy key never touches anybody's scoped keys, and vice versa — each `DELETE` is narrowed by its owner predicate.
+Minting a ladder scope you already hold **rotates** it: the previous key for that pair stops working immediately. Each `DELETE` is narrowed by its owner predicate, so one user's rotation never touches another's keys.
 
 Insert keys are **not** unique: a user holds as many as they like — one per form, webhook or script — each revoked on its own. Minting one never replaces another, and rotating a ladder key never touches them. `board_id` cascades: deleting the board deletes its insert keys.
 
@@ -66,7 +58,6 @@ The key carries an **owner id and nothing else**. `requireApiKeyScope` re-reads 
 |---|---|
 | Missing or non-`Bearer` `Authorization` | `401` |
 | Unknown key | `403 { error: 'Invalid API key' }` |
-| Legacy key on a scoped endpoint | `403` — "requires a scoped API key" |
 | Scope below the rung the mount demands | `403` — `scope "management" does not grant "admin"` |
 | Owner deleted | `403` — "API key owner no longer exists" |
 | Insert key whose owner can no longer **edit** its board (unshared, share demoted to read) | `403` — "can no longer edit this key's board" |
@@ -234,7 +225,7 @@ curl -X POST 'https://<your-host>/api/insert/tasks' \
 
 The MCP transport is stateless Streamable HTTP: send `Accept: application/json, text/event-stream` (otherwise `406`); the answer comes back as an event stream.
 
-Keys are minted from the UI's **API keys & documentation** dialog, which also warns — with a banner — whenever a legacy instance-wide key is still outstanding, and offers to retire it.
+Keys are minted from the UI's **API keys & documentation** dialog.
 
 ---
 
@@ -242,7 +233,7 @@ Keys are minted from the UI's **API keys & documentation** dialog, which also wa
 
 | File | Covers |
 |---|---|
-| `api/src/services/__tests__/apiKeyManager.test.ts` | HMAC storage, timing-safe validation, the legacy/ladder/insert split, half-written rows refused everywhere, rotation, insert keys accumulating, cross-user revoke |
+| `api/src/services/__tests__/apiKeyManager.test.ts` | HMAC storage, timing-safe validation, the ladder/insert split, ownerless and half-written rows refused everywhere, rotation, insert keys accumulating, cross-user revoke |
 | `api/src/services/__tests__/apiKeyScopeMiddleware.test.ts` | The scope ladder, `insert` off the ladder both ways, live board-edit re-check, legacy refusal, live demotion/deletion, 401 vs 403 vs 503, guard naming |
 | `api/src/services/__tests__/scopedMcpSurfaces.test.ts` | Cross-tenant read / write / delegate / search, "not found" wording, role-gated tools, the exact tool list of each surface, insert server pinned to its board |
 | `api/src/services/__tests__/routeInventory.test.ts` | That every mount carries `requireApiKeyScope(<scope>)` and cannot be silently downgraded |

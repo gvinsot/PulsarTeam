@@ -105,17 +105,16 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - OAuth PKCE authentication with token persistence
 - Configurable model, max turns, and timeout
 
-### Swarm API (External Integration)
+### External Integration (personal API keys)
 
-- REST API for external systems to interact with the swarm (API key auth)
-- `GET /api/swarm/agents` — list agents with filters (project, status)
-- `GET /api/swarm/agents/:id` — detailed agent info
-- `POST /api/swarm/agents/:id/tasks` — submit tasks to agents
+- Every key is minted by a user and names its owner; there is no instance-wide key
+- `insert` keys: `POST /api/insert/tasks` and `/api/mcp/insert` — task creation on one board
+- `management` / `admin` keys: `/api/mcp/management` and `/api/mcp/admin` MCP surfaces
 
 ### Security
 
 - **Session-cookie authentication** (`HttpOnly` JWT + `X-CSRF-Token`) with login page
-- API key authentication for external Swarm API
+- Per-user, scoped API keys for the external REST and MCP surfaces
 - OAuth PKCE for Claude Code CLI
 - Bearer token support for MCP servers
 - No default credentials: `JWT_SECRET`, `ADMIN_PASSWORD`, `POSTGRES_PASSWORD` and `CODER_API_KEY` are mandatory — `docker compose` refuses to start without them

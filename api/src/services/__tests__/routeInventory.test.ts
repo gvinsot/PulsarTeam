@@ -65,7 +65,6 @@ type RoutePolicy = typeof PUBLIC | readonly string[];
  */
 const GUARD_PREFIXES = [
   'authenticateToken', // session JWT / HttpOnly cookie — middleware/auth.ts
-  'authenticateApiKey', // legacy instance-wide key (external Swarm API) — middleware/apiKeyAuth.ts
   'requireApiKeyScope(', // per-user, per-scope key (/api/mcp/*) — middleware/apiKeyAuth.ts
   'authenticateCoderApiKey', // shared runner key (/api/internal/*) — middleware/coderApiKeyAuth.ts
   'requireRole(',
@@ -376,12 +375,6 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'GET /api/analytics/errors': ['authenticateToken'],
 
   // ── /api/settings ─────────────────────────────────────────────────
-  'GET /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],
-  'POST /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],
-  'DELETE /api/settings/api-key': ['authenticateToken', 'requireRole(admin)'],
-  // The legacy instance-wide key panel — same admin gate as the three above.
-  'GET /api/settings/api-key/legacy': ['authenticateToken', 'requireRole(admin)'],
-  'DELETE /api/settings/api-key/legacy': ['authenticateToken', 'requireRole(admin)'],
   // Personal scoped keys. Deliberately NOT admin-only: these are each user's
   // own credentials, and the owner id is part of every query's predicate
   // (services/apiKeyManager.ts), so one user cannot list or revoke another's.
@@ -581,15 +574,6 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'ALL /api/mcp/insert': ['requireApiKeyScope(insert)'],
   'GET /api/insert/board': ['requireApiKeyScope(insert)'],
   'POST /api/insert/tasks': ['requireApiKeyScope(insert)'],
-
-  // ── /api/swarm ────────────────────────────────────────────────────
-  // Legacy key only (middleware/apiKeyAuth.ts): this surface runs unscoped, so
-  // a scoped key is refused here rather than escaping its own scope.
-  'ALL /api/swarm/mcp': ['authenticateApiKey'],
-  'GET /api/swarm/agents': ['authenticateApiKey'],
-  'GET /api/swarm/agents/:id': ['authenticateApiKey'],
-  'GET /api/swarm/boards': ['authenticateApiKey'],
-  'POST /api/swarm/agents/:id/tasks': ['authenticateApiKey'],
 
   // ── /api/health ───────────────────────────────────────────────────
   // Liveness/readiness probe. Polled by Docker, Swarm and Traefik, none of which

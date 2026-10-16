@@ -7,14 +7,10 @@ import type {
   AgentRagDocument,
   AgentTemplate,
   AgentTimeSeries,
-  ApiKeyCreated,
-  ApiKeyInfoResponse,
   LadderApiKeyScope,
   OpenApiDocument,
   ScopedApiKeyCreated,
   ScopedApiKeyListResponse,
-  LegacyApiKeyListResponse,
-  LegacyApiKeyRevokeResponse,
   AvailableRepo,
   AvailableStorage,
   Board,
@@ -1124,22 +1120,7 @@ export const api = {
     ),
 
   // ── API keys (MCP) ──────────────────────────────────────────────────────
-  // Two families, deliberately separate. The three below manage the LEGACY
-  // instance-wide key: ownerless, admin-only, still accepted on /api/swarm/*
-  // and refused on /api/mcp/*.
-  getApiKeyInfo: () => get<ApiKeyInfoResponse>('/settings/api-key'),
-
-  generateApiKey: () => post<ApiKeyCreated>('/settings/api-key'),
-
-  revokeApiKey: () => del<SuccessAck>('/settings/api-key'),
-
-  /** Outstanding ownerless keys — admin only, backs the modal's warning banner. */
-  listLegacyApiKeys: () => get<LegacyApiKeyListResponse>('/settings/api-key/legacy'),
-
-  /** Retire every ownerless key at once — admin only. */
-  revokeLegacyApiKeys: () => del<LegacyApiKeyRevokeResponse>('/settings/api-key/legacy'),
-
-  // …and these manage the caller's OWN scoped keys: one per (user, scope) on
+  // These manage the caller's OWN scoped keys: one per (user, scope) on
   // the ladder, any number of board-bound insert keys. Available to every
   // authenticated user: they are personal credentials, and the owner is part of
   // every server-side predicate.

@@ -24,8 +24,7 @@ export type McpHandlerContext = {
    *
    * Set by `authenticateToken` for the internal JWT mounts and by
    * `requireApiKeyScope` for /api/mcp/*, where it is the OWNER of the scoped
-   * API key, re-read from the database on every request. Null on the external
-   * /api/swarm/mcp mount, whose legacy key names nobody.
+   * API key, re-read from the database on every request.
    *
    * Servers that are global (Gmail, Slack, the browser tools…) ignore it; the
    * two /api/mcp/* surfaces are built entirely around it, because it is the
@@ -79,8 +78,7 @@ export function internalMcpContextMatches(
  * always an action taken AS the agent, never a read of it.
  *
  * A request that sends NEITHER header is untouched — most MCP servers are
- * global and take no agent context, and the external Swarm API mount
- * (/api/swarm/mcp, API-key auth) is one of them.
+ * global and take no agent context.
  *
  * @param label - Log label, e.g. 'Gmail' → "[Gmail MCP] Error:".
  * @param buildServer - Builds the MCP server for one request, given the
@@ -108,10 +106,7 @@ export function createMcpHttpHandler(
       }
 
       if (agentId || boardId) {
-        // Claimed agent context needs a session to be judged against. The
-        // API-key mount (/api/swarm/mcp) attaches none, so a caller on that
-        // path cannot claim an agent — it must address tasks by id instead,
-        // which is what the Swarm API tools already do.
+        // Claimed agent context needs a session to be judged against.
         const user = req.user;
         if (!user) {
           res.status(403).json({ error: 'Agent context requires an authenticated session' });

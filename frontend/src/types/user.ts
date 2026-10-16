@@ -211,45 +211,6 @@ export interface AppUser {
 }
 
 /**
- * Metadata about the LEGACY, instance-wide MCP API key — prefix only, never the
- * key. Produced by api/src/services/apiKeyManager.ts getApiKeyInfo.
- * key_hash and hash_version are absent from the SELECT and are not declared.
- *
- * "Legacy" is the real name for it: the row carries no `user_id` and no
- * `scope`, so it names nobody. It still opens /api/swarm/*, and is REFUSED on
- * /api/mcp/* — see ScopedApiKey below, which is what replaces it.
- */
-export interface ApiKeyInfo {
-  id: string;
-  /** `key.slice(0,12) + '...' + key.slice(-4)`, e.g. 'swarm_sk_abc...7f2e'. */
-  prefix: string;
-  created_at: string;
-}
-
-/**
- * Body of GET /api/settings/api-key. Produced by api/src/routes/apiKeys.ts:14.
- */
-export interface ApiKeyInfoResponse {
-  /** null when the table is empty OR when there is no DB pool. */
-  apiKey: ApiKeyInfo | null;
-}
-
-/**
- * Body of POST /api/settings/api-key — the ONLY response that ever contains the
- * clear-text key. Produced by api/src/services/apiKeyManager.ts:144.
- *
- * Deliberately NOT an ApiKeyInfo: there is no created_at here. ApiKeyModal
- * fabricates one client-side when it folds this into the GET state slot, which is
- * why the date it then displays is client clock time.
- */
-export interface ApiKeyCreated {
-  id: string;
-  /** CLEAR TEXT, shown once: 'swarm_sk_<64 hex chars>'. Only the HMAC is stored. */
-  key: string;
-  prefix: string;
-}
-
-/**
  * The tool set a scoped key opens. NOT a role: an `admin`-scoped key is still
  * bounded by what its owner can already administer, and the genuinely
  * instance-wide tools re-check the owner's role server-side.
@@ -310,30 +271,6 @@ export interface ScopedApiKeyCreated {
   /** Present on an insert key's response only. */
   board_name?: string | null;
   allowed_columns?: string[] | null;
-}
-
-/**
- * One outstanding legacy (ownerless) key, as listed by
- * GET /api/settings/api-key/legacy for an admin. Its presence is what the
- * modal's banner warns about.
- */
-export interface LegacyApiKey {
-  id: string;
-  prefix: string;
-  created_at: string;
-  last_used_at: string | null;
-}
-
-/** Body of GET /api/settings/api-key/legacy. */
-export interface LegacyApiKeyListResponse {
-  keys: LegacyApiKey[];
-}
-
-/** Body of DELETE /api/settings/api-key/legacy. */
-export interface LegacyApiKeyRevokeResponse {
-  success: true;
-  /** How many ownerless rows were retired. */
-  revoked: number;
 }
 
 /**

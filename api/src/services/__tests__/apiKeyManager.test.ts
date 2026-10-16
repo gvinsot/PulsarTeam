@@ -1,7 +1,7 @@
 /**
  * Tests for apiKeyManager — HMAC storage, timing-safe validation, and the
- * split between LEGACY (ownerless, instance-wide) and SCOPED (per user, per
- * scope) keys.
+ * SCOPED (per user, per scope) keys. The ownerless instance-wide "legacy" key
+ * no longer exists: a row without an owner resolves to nothing.
  */
 
 import test, { mock } from 'node:test';
@@ -20,7 +20,7 @@ type Row = {
   prefix: string;
   created_at: Date;
   hash_version: number;
-  // NULL on a legacy row — that is exactly what makes it legacy.
+  // NULL only on a dead ownerless row, which must resolve to nothing.
   user_id: string | null;
   scope: string | null;
   name: string | null;
@@ -51,12 +51,7 @@ function makeFakePool() {
 
       if (norm.startsWith('CREATE TABLE')) return { rows: [] };
 
-      // ── DELETEs. The predicate matters: rotating the legacy key must not
-      // wipe every user's scoped keys, which is exactly what an unqualified
-      // `DELETE FROM api_keys` used to do.
-      if (norm.startsWith('DELETE FROM api_keys WHERE user_id IS NULL')) {
-        return { rows: [], rowCount: removeWhere(r => r.user_id === null) };
-      }
+      // ── DELETEs
       if (norm.startsWith('DELETE FROM api_keys WHERE user_id = $1 AND scope = $2')) {
         const [userId, scope] = params as [string, string];
         return { rows: [], rowCount: removeWhere(r => r.user_id === userId && r.scope === scope) };
@@ -89,29 +84,6 @@ function makeFakePool() {
         const row = rows.find(r => r.id === params[0]);
         if (row) row.last_used_at = new Date();
         return { rows: [], rowCount: row ? 1 : 0 };
-      }
-
-      if (norm.startsWith('SELECT id, prefix, created_at FROM api_keys')) {
-        const v = params[0] as number;
-        const matches = rows
-          .filter(r => r.hash_version === v && r.user_id === null)
-          .sort((a, b) => +b.created_at - +a.created_at)
-          .slice(0, 1)
-          .map(({ id, prefix, created_at }) => ({ id, prefix, created_at }));
-        return { rows: matches };
-      }
-
-      if (norm.startsWith('SELECT id, prefix, created_at, last_used_at FROM api_keys')) {
-        return {
-          rows: rows
-            .filter(r => r.user_id === null)
-            .map(({ id, prefix, created_at, last_used_at }) => ({
-              id,
-              prefix,
-              created_at,
-              last_used_at,
-            })),
-        };
       }
 
       if (
@@ -168,17 +140,11 @@ mock.module('../database.js', {
 // Import under test AFTER mocks are registered.
 const {
   ensureApiKeysTable,
-  generateNewApiKey,
-  validateApiKey,
-  getApiKeyInfo,
-  revokeApiKey,
   resolveApiKey,
   createScopedApiKey,
   createInsertApiKey,
   listApiKeysForUser,
   revokeScopedApiKey,
-  listLegacyApiKeys,
-  revokeLegacyApiKeys,
   scopeSatisfies,
   touchApiKey,
   __testing,
@@ -189,11 +155,11 @@ function reset() {
   queries.length = 0;
 }
 
-test('generateNewApiKey returns plaintext key and stores only the HMAC', async () => {
+test('createScopedApiKey returns plaintext key and stores only the HMAC', async () => {
   reset();
   await ensureApiKeysTable();
 
-  const { id, key, prefix } = await generateNewApiKey();
+  const { id, key, prefix } = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
   assert.match(key, /^swarm_sk_[0-9a-f]{64}$/, 'plaintext key has expected format');
   assert.equal(rows.length, 1);
 
@@ -211,21 +177,21 @@ test('generateNewApiKey returns plaintext key and stores only the HMAC', async (
   assert.notEqual(stored.key_hash, plainSha);
 });
 
-test('validateApiKey accepts the freshly minted key and rejects a wrong one', async () => {
+test('resolveApiKey accepts the freshly minted key and rejects a wrong one', async () => {
   reset();
   await ensureApiKeysTable();
-  const { key } = await generateNewApiKey();
+  const { key } = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
 
-  assert.equal(await validateApiKey(key), true);
-  assert.equal(await validateApiKey('swarm_sk_' + 'a'.repeat(64)), false);
-  assert.equal(await validateApiKey(''), false);
-  assert.equal(await validateApiKey(undefined as unknown as string), false);
+  assert.ok(await resolveApiKey(key));
+  assert.equal(await resolveApiKey('swarm_sk_' + 'a'.repeat(64)), null);
+  assert.equal(await resolveApiKey(''), null);
+  assert.equal(await resolveApiKey(undefined as unknown as string), null);
 });
 
 test('validation uses crypto.timingSafeEqual on equal-length buffers', async () => {
   reset();
   await ensureApiKeysTable();
-  const { key } = await generateNewApiKey();
+  const { key } = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
 
   // Spy on crypto.timingSafeEqual to confirm it is the comparator in use.
   const original = crypto.timingSafeEqual;
@@ -237,7 +203,7 @@ test('validation uses crypto.timingSafeEqual on equal-length buffers', async () 
     return original(a, b);
   };
   try {
-    assert.equal(await validateApiKey(key), true);
+    assert.ok(await resolveApiKey(key));
     assert.ok(calls >= 1, 'timingSafeEqual must be called during validation');
     assert.ok(
       lengths.every(l => l === 32),
@@ -254,100 +220,35 @@ test('safeHexEqual returns false for differing-length inputs without throwing', 
   assert.equal(__testing.safeHexEqual('ab', 'cd'), false);
 });
 
-test('getApiKeyInfo returns prefix only and revokeApiKey clears the key', async () => {
+test('a scoped key names its owner and its scope', async () => {
   reset();
   await ensureApiKeysTable();
-  const { key, prefix } = await generateNewApiKey();
-
-  const info = await getApiKeyInfo();
-  assert.ok(info, 'info should exist');
-  assert.equal(info.prefix, prefix);
-  assert.ok(
-    !Object.prototype.hasOwnProperty.call(info, 'key_hash'),
-    'getApiKeyInfo must never expose the hash'
-  );
-  assert.ok(
-    !JSON.stringify(info).includes(key),
-    'getApiKeyInfo must never expose the plaintext key'
-  );
-
-  await revokeApiKey();
-  assert.equal(await getApiKeyInfo(), null);
-  assert.equal(await validateApiKey(key), false);
-});
-
-// ── The legacy / scoped split ───────────────────────────────────────────────
-//
-// Before this split there was ONE ownerless key: `validateApiKey` answered a
-// boolean and nothing downstream ever learned who was calling, so every tool it
-// reached ran with no tenant at all. The tests below pin the three properties
-// that make the replacement safe.
-
-test('a scoped key names its owner and its scope; a legacy key names neither', async () => {
-  reset();
-  await ensureApiKeysTable();
-
-  const legacy = await generateNewApiKey();
   const scoped = await createScopedApiKey({ userId: 'user-1', scope: 'admin', name: 'ci' });
 
-  const resolvedLegacy = await resolveApiKey(legacy.key);
+  const resolved = await resolveApiKey(scoped.key);
   assert.deepEqual(
-    {
-      userId: resolvedLegacy?.userId,
-      scope: resolvedLegacy?.scope,
-      legacy: resolvedLegacy?.legacy,
-    },
-    { userId: null, scope: null, legacy: true }
+    { userId: resolved?.userId, scope: resolved?.scope },
+    { userId: 'user-1', scope: 'admin' }
   );
-
-  const resolvedScoped = await resolveApiKey(scoped.key);
-  assert.deepEqual(
-    {
-      userId: resolvedScoped?.userId,
-      scope: resolvedScoped?.scope,
-      legacy: resolvedScoped?.legacy,
-    },
-    { userId: 'user-1', scope: 'admin', legacy: false }
-  );
-
-  assert.equal(await resolveApiKey('swarm_sk_' + 'a'.repeat(64)), null);
+  assert.ok(!('legacy' in (resolved as object)), 'there is no legacy flag any more');
 });
 
-test('validateApiKey — which guards /api/swarm/* — accepts ONLY legacy keys', async () => {
+test('an ownerless (former legacy) row resolves to nothing', async () => {
   reset();
   await ensureApiKeysTable();
-  const legacy = await generateNewApiKey();
-  const scoped = await createScopedApiKey({ userId: 'user-1', scope: 'management' });
+  const { key } = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
+  // Simulate a row left over from the removed instance-wide key: no owner, no
+  // scope, no board. It must never be honoured again.
+  rows[0].user_id = null;
+  rows[0].scope = null;
 
-  assert.equal(await validateApiKey(legacy.key), true, 'integrations keep working');
-  // The swarm surface runs with no tenant context whatsoever, so honouring a
-  // scoped key there would hand its holder the entire instance — the exact
-  // escalation the scopes exist to prevent.
-  assert.equal(await validateApiKey(scoped.key), false, 'a scoped key must not escape its scope');
+  assert.equal(await resolveApiKey(key), null);
 });
 
-test('rotating the legacy key leaves every user scoped key alone', async () => {
+test('revoking a scoped key kills it', async () => {
   reset();
   await ensureApiKeysTable();
   const scoped = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
-  await generateNewApiKey();
-
-  // The replacement DELETE used to be unqualified: rotating the shared key
-  // destroyed every personal key on the instance as a side effect.
-  const stillThere = await resolveApiKey(scoped.key);
-  assert.equal(stillThere?.userId, 'user-1');
-  assert.equal(stillThere?.scope, 'admin');
-});
-
-test('revoking the legacy key leaves scoped keys alone, and vice versa', async () => {
-  reset();
-  await ensureApiKeysTable();
-  const legacy = await generateNewApiKey();
-  const scoped = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
-
-  await revokeApiKey();
-  assert.equal(await validateApiKey(legacy.key), false);
-  assert.ok(await resolveApiKey(scoped.key), 'a personal key survives a legacy revoke');
 
   assert.equal(await revokeScopedApiKey(scoped.id, 'user-1'), true);
   assert.equal(await resolveApiKey(scoped.key), null);
@@ -402,14 +303,12 @@ test('the scope ladder is one-way: admin opens management, never the reverse', (
 test('a half-written row (owner without scope) is refused everywhere, not granted anything', async () => {
   reset();
   await ensureApiKeysTable();
-  const { key } = await generateNewApiKey();
-  // Simulate a row that acquired an owner but no scope — e.g. a partial
-  // backfill. Defaulting it to any tool set would be a silent grant, and
-  // reading it as LEGACY would be worse: that opens /api/swarm/* unscoped.
-  rows[0].user_id = 'user-1';
+  const { key } = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
+  // Simulate a row that has an owner but lost its scope — e.g. a partial
+  // backfill. Defaulting it to any tool set would be a silent grant.
+  rows[0].scope = null;
 
   assert.equal(await resolveApiKey(key), null);
-  assert.equal(await validateApiKey(key), false, 'a half-written row must not open /api/swarm');
 });
 
 // ── Insert keys ─────────────────────────────────────────────────────────────
@@ -430,9 +329,7 @@ test('an insert key names its owner, its scope AND its board', async () => {
     scope: 'insert',
     boardId: BOARD,
     allowedColumns: null,
-    legacy: false,
   });
-  assert.equal(await validateApiKey(created.key), false, 'an insert key must not open /api/swarm');
 });
 
 test('insert keys accumulate: minting another never kills the first', async () => {
@@ -468,7 +365,6 @@ test('an insert row without its board, or a ladder row with one, resolves to not
   rows.find(r => r.id === ladder.id)!.board_id = BOARD;
 
   assert.equal(await resolveApiKey(insert.key), null);
-  assert.equal(await validateApiKey(insert.key), false);
   assert.equal(await resolveApiKey(ladder.key), null);
 });
 
@@ -489,21 +385,6 @@ test('insert is off the ladder in both directions', () => {
   assert.equal(scopeSatisfies('insert', 'admin'), false);
   assert.equal(scopeSatisfies('admin', 'insert'), false);
   assert.equal(scopeSatisfies('management', 'insert'), false);
-});
-
-test('listLegacyApiKeys / revokeLegacyApiKeys see only the ownerless rows', async () => {
-  reset();
-  await ensureApiKeysTable();
-  await generateNewApiKey();
-  const scoped = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
-
-  const legacyRows = await listLegacyApiKeys();
-  assert.equal(legacyRows.length, 1);
-  assert.ok(!JSON.stringify(legacyRows).includes(scoped.id));
-
-  assert.equal(await revokeLegacyApiKeys(), 1);
-  assert.equal((await listLegacyApiKeys()).length, 0);
-  assert.ok(await resolveApiKey(scoped.key), 'retiring the legacy key spares personal keys');
 });
 
 test('touchApiKey records last use and never throws the request', async () => {

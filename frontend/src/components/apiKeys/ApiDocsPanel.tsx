@@ -29,7 +29,7 @@ import {
 const markdownPlugins = [remarkGfm];
 
 /** Section anchors the Keys tab can deep-link to. */
-export type ApiDocsSection = 'overview' | 'quickstart' | 'Insert' | 'MCP' | 'errors' | 'Legacy';
+export type ApiDocsSection = 'overview' | 'quickstart' | 'Insert' | 'MCP' | 'errors';
 
 interface ApiDocsPanelProps {
   /** Scroll to this section once the document is loaded. */
@@ -49,7 +49,6 @@ const SCOPE_STYLE: Record<string, string> = {
   insert: 'text-sky-300 bg-sky-500/10',
   management: 'text-indigo-300 bg-indigo-500/10',
   admin: 'text-fuchsia-300 bg-fuchsia-500/10',
-  legacy: 'text-amber-300 bg-amber-500/10',
 };
 
 function Markdown({ children }: { children: string }) {

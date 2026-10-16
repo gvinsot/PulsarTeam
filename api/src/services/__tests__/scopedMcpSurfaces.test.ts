@@ -5,9 +5,9 @@
  * ── What these replace ──────────────────────────────────────────────────────
  * The only key-authenticated MCP surface used to be /api/swarm/mcp, guarded by
  * ONE ownerless instance-wide key. `authenticateApiKey` attached no identity,
- * so `routes/swarmApi.ts` and `services/swarmApiMcp.ts` never read `req.user`
- * (0 occurrences) and every tool ran with no tenant at all: whoever held the
- * key listed every board, every agent and every task on the instance.
+ * so every tool it reached ran with no tenant at all: whoever held the
+ * key listed every board, every agent and every task on the instance. That
+ * key and the /api/swarm/* surface it opened have since been removed.
  *
  * The replacement keys name an OWNER, and these tests pin what that buys:
  * Alice, holding a perfectly valid key, must not be able to read, write,

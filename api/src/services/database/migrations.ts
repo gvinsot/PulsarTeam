@@ -352,6 +352,15 @@ const MIGRATIONS: Migration[] = [
     `UPDATE agents SET data = data #- '{permissions,linuxUser}'
      WHERE data->'permissions' ? 'linuxUser'`,
   ]),
+  // The ownerless instance-wide ("legacy") API key is gone for good: nothing
+  // accepts it any more (middleware/apiKeyAuth.ts), so any row still on disk is
+  // a dead secret. Delete it (and any half-written row without a scope), then
+  // make owner and scope mandatory so such a row can never be written again.
+  sqlMigration('202610160001_remove_legacy_api_keys', 'remove the legacy ownerless API key', [
+    'DELETE FROM api_keys WHERE user_id IS NULL OR scope IS NULL',
+    'ALTER TABLE api_keys ALTER COLUMN user_id SET NOT NULL',
+    'ALTER TABLE api_keys ALTER COLUMN scope SET NOT NULL',
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

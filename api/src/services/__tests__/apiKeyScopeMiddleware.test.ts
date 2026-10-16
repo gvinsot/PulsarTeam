@@ -9,10 +9,9 @@
  *     backwards would hand every management key the agent, board, project and
  *     workflow mutation tools.
  *
- *  2. A LEGACY KEY IS REFUSED. The old ownerless instance-wide key still works
- *     on /api/swarm/* so integrations do not break, but it names nobody — there
- *     is no tenant to run these tools in. Accepting it "for compatibility"
- *     would reinstate exactly the unscoped access this surface replaces.
+ *  2. A FORMER LEGACY KEY IS REFUSED. The old ownerless instance-wide key has
+ *     been removed; `resolveApiKey` never yields one, so presenting it is no
+ *     different from presenting an unknown key.
  *
  *  3. CLAIMS ARE READ LIVE, NEVER BAKED INTO THE KEY. The key carries an owner
  *     id and nothing else; the role comes from a fresh database read on every
@@ -30,36 +29,31 @@ import assert from 'node:assert/strict';
 // ── The key store, faked at the resolve boundary ────────────────────────────
 type Resolved = {
   id: string;
-  userId: string | null;
-  scope: string | null;
+  userId: string;
+  scope: string;
   boardId: string | null;
-  legacy: boolean;
 };
 
 const KEYS: Record<string, Resolved> = {
-  'key-admin': { id: 'k1', userId: 'user-a', scope: 'admin', boardId: null, legacy: false },
+  'key-admin': { id: 'k1', userId: 'user-a', scope: 'admin', boardId: null },
   'key-management': {
     id: 'k2',
     userId: 'user-a',
     scope: 'management',
     boardId: null,
-    legacy: false,
   },
-  'key-orphan': { id: 'k3', userId: 'user-gone', scope: 'admin', boardId: null, legacy: false },
-  'key-legacy': { id: 'k4', userId: null, scope: null, boardId: null, legacy: true },
+  'key-orphan': { id: 'k3', userId: 'user-gone', scope: 'admin', boardId: null },
   'key-insert': {
     id: 'k5',
     userId: 'user-a',
     scope: 'insert',
     boardId: 'board-own',
-    legacy: false,
   },
   'key-insert-shared': {
     id: 'k6',
     userId: 'user-a',
     scope: 'insert',
     boardId: 'board-shared',
-    legacy: false,
   },
 };
 
@@ -80,7 +74,6 @@ mock.module('../../services/apiKeyManager.js', {
     touchApiKey: async (id: string) => {
       touched.push(id);
     },
-    validateApiKey: async (key: string) => !!KEYS[key]?.legacy,
   },
 });
 
@@ -108,7 +101,7 @@ mock.module('../../services/database.js', {
   },
 });
 
-const { requireApiKeyScope, authenticateApiKey } = await import('../../middleware/apiKeyAuth.js');
+const { requireApiKeyScope } = await import('../../middleware/apiKeyAuth.js');
 
 /** Minimal Express doubles: record the status and body, and whether next ran. */
 function exchange(authorization?: string) {
@@ -158,25 +151,16 @@ test('a management key opens management and is REFUSED on admin', async () => {
   assert.match(denied.res.body.error, /scope "management" does not grant "admin"/);
 });
 
-// ── 2. Legacy keys ──────────────────────────────────────────────────────────
+// ── 2. Former legacy keys ───────────────────────────────────────────────────
 
-test('a legacy key is refused on every scoped endpoint', async () => {
-  for (const scope of ['admin', 'management'] as const) {
+test('a former legacy key is refused on every scoped endpoint', async () => {
+  // The key store no longer resolves ownerless rows, so the old key is unknown.
+  for (const scope of ['admin', 'management', 'insert'] as const) {
     const { passed, res } = await call(scope, 'Bearer key-legacy');
     assert.equal(passed, false, `the ownerless key must not open ${scope}`);
     assert.equal(res.statusCode, 403);
-    assert.match(res.body.error, /scoped API key/i);
+    assert.match(res.body.error, /Invalid API key/);
   }
-});
-
-test('a legacy key still passes authenticateApiKey, which guards /api/swarm/*', async () => {
-  // The compatibility half of the same decision: existing integrations keep
-  // working on the surface they were built for.
-  const ex = exchange('Bearer key-legacy');
-  await authenticateApiKey(ex.req, ex.res, ex.next);
-  assert.equal(ex.called(), true);
-  // …and it attaches no identity, which is precisely why it is refused above.
-  assert.equal(ex.req.user, undefined);
 });
 
 // ── 3. Live claims ──────────────────────────────────────────────────────────
@@ -247,8 +231,6 @@ test('no ladder key opens the insert surface — not even admin', async () => {
     assert.equal(passed, false, `${key} must not open the insert surface`);
     assert.equal(res.statusCode, 403);
   }
-  const legacy = await call('insert', 'Bearer key-legacy');
-  assert.equal(legacy.passed, false);
 });
 
 test('an insert key stops working as soon as its owner loses edit on the board', async () => {

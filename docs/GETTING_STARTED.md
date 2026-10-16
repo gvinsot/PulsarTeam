@@ -208,15 +208,15 @@ The agent is now ready to receive messages and tasks.
 
 ## Post-Installation
 
-### Generate a Swarm API Key
+### Create a personal API key
 
 To interact with PulsarTeam from external systems (scripts, CI/CD, other AI agents):
 
 1. Click the **key** icon in the header
-2. Click **Generate API Key**
+2. Create an **insert** key (bound to one board) or a **management** / **admin** MCP key
 3. Copy the key — it won't be shown again
 
-See [SWARM_API.md](SWARM_API.md) for the full API reference.
+The dialog's **Documentation** tab lists every endpoint and tool the key opens.
 
 ### Configure Plugins
 
