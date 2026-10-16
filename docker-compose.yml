@@ -4,7 +4,7 @@ services:
     environment:
       - POSTGRES_DB=swarm_prod
       - POSTGRES_USER=swarm_prod_app
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pulsarteam}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (openssl rand -hex 24)}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -24,10 +24,10 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in .env (openssl rand -hex 48)}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-swarm2026}
-      - DATABASE_CONNECTION_STRING=postgresql://swarm_prod_app:${POSTGRES_PASSWORD:-pulsarteam}@postgres:5432/swarm_prod
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env}
+      - DATABASE_CONNECTION_STRING=postgresql://swarm_prod_app:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (openssl rand -hex 24)}@postgres:5432/swarm_prod
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-}
@@ -38,7 +38,7 @@ services:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost}
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - HOME_FORM_KEY=${HOME_FORM_KEY:-}
       - GIT_USER_NAME=${GIT_USER_NAME:-PulsarTeam}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-agent@pulsarteam.local}
@@ -174,7 +174,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
@@ -239,7 +239,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
@@ -300,7 +300,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
@@ -372,7 +372,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
@@ -441,7 +441,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
@@ -500,7 +500,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
@@ -559,7 +559,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
@@ -605,7 +605,7 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in .env (openssl rand -hex 32)}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - MOCK_DELAY_MS=${MOCK_DELAY_MS:-50}

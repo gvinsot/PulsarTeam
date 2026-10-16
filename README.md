@@ -118,7 +118,7 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - API key authentication for external Swarm API
 - OAuth PKCE for Claude Code CLI
 - Bearer token support for MCP servers
-- Default credentials: `admin` / `swarm2026`
+- No default credentials: `JWT_SECRET`, `ADMIN_PASSWORD`, `POSTGRES_PASSWORD` and `CODER_API_KEY` are mandatory — `docker compose` refuses to start without them
 
 ## Architecture
 
@@ -164,10 +164,13 @@ Quick deploy:
 
 ```bash
 cp .env.example .env       # Configure environment variables
+# Generate the mandatory secrets (compose refuses to start without them)
+for v in JWT_SECRET POSTGRES_PASSWORD CODER_API_KEY ENCRYPTION_KEY ADMIN_PASSWORD; do
+  sed -i "s|^$v=.*|$v=$(openssl rand -hex 32)|" .env; done
 docker compose up -d --build   # Build & start all services
 ```
 
-Open **http://localhost** — login: `admin` / `swarm2026`
+Open **http://localhost** — login: `admin` / the `ADMIN_PASSWORD` from your `.env`
 
 ## Contributing
 

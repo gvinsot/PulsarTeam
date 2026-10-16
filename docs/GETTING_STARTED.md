@@ -56,13 +56,27 @@ Edit `.env` and configure the following sections:
 ```env
 PORT=3001
 NODE_ENV=production
-JWT_SECRET=generate-a-long-random-string-here
+JWT_SECRET=<openssl rand -hex 48>
 
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=swarm2026
+ADMIN_PASSWORD=<choose a strong password>
+
+POSTGRES_PASSWORD=<openssl rand -hex 24>
+CODER_API_KEY=<openssl rand -hex 32>
 ```
 
-> Generate a strong JWT secret: `openssl rand -hex 32`
+> `JWT_SECRET`, `ADMIN_PASSWORD`, `POSTGRES_PASSWORD` and `CODER_API_KEY` have **no default
+> value**: `docker compose` aborts with an explicit error if any of them is empty. Generate them
+> all at once with:
+>
+> ```bash
+> for v in JWT_SECRET POSTGRES_PASSWORD CODER_API_KEY ENCRYPTION_KEY ADMIN_PASSWORD; do
+>   sed -i "s|^$v=.*|$v=$(openssl rand -hex 32)|" .env; done
+> ```
+>
+> Upgrading an existing install that relied on the old `pulsarteam` default? Postgres only reads
+> `POSTGRES_PASSWORD` when the volume is first initialised — either set it to the current password,
+> or change it in the database first (`ALTER USER swarm_prod_app PASSWORD '...'`).
 
 ### Database
 
@@ -176,7 +190,7 @@ docker compose logs coder-service --tail 50
 ## Step 5 — First Login
 
 1. Open your browser at `http://localhost` (or your domain if using Traefik)
-2. Log in with the credentials from your `.env` file (default: `admin` / `swarm2026`)
+2. Log in with the credentials from your `.env` file (`ADMIN_USERNAME` / `ADMIN_PASSWORD`)
 3. You should see the agent dashboard
 
 ---
