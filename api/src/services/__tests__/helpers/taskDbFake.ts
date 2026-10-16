@@ -460,10 +460,40 @@ export function makeTaskDbFake() {
         .sort((a, b) => (b.occurrenceSeq || 0) - (a.occurrenceSeq || 0))
         .slice(0, limit)
         .map(clone),
-    countUnfinishedOccurrences: async (templateId: string) =>
-      all().filter(
-        t => live(t) && t.templateId === templateId && !['done', 'error'].includes(t.status)
-      ).length,
+    countUnfinishedOccurrences: async (
+      templateId: string,
+      {
+        terminalStatuses = ['done', 'error'],
+        liveStatuses = null,
+        staleBefore = null,
+      }: { terminalStatuses?: string[]; liveStatuses?: string[] | null; staleBefore?: any } = {}
+    ) => {
+      const cutoff = staleBefore ? Date.parse(String(staleBefore)) : null;
+      const touchedAt = (t: any) =>
+        Math.max(
+          ...[t.createdAt, t.updatedAt, t.actionHeartbeatAt, t.startedAt]
+            .map(v => Date.parse(v || ''))
+            .filter(Number.isFinite),
+          0
+        );
+      return all().filter(
+        t =>
+          live(t) &&
+          t.templateId === templateId &&
+          !terminalStatuses.includes(t.status) &&
+          (t.actionRunning === true ||
+            ((!liveStatuses || liveStatuses.includes(t.status)) &&
+              (cutoff === null || touchedAt(t) >= cutoff)))
+      ).length;
+    },
+    // Compare-and-set on recurrence.lastResetAt, like the real UPDATE.
+    claimRecurrenceCycle: async (templateId: string, expected: string | null, next: any) => {
+      const t = rows.get(templateId);
+      if (!live(t) || !t.isTemplate) return false;
+      if ((t.recurrence?.lastResetAt ?? null) !== (expected ?? null)) return false;
+      t.recurrence = next;
+      return true;
+    },
     // Hard delete, like the real sweep: finished runs only, never one in flight.
     purgeTemplateOccurrences: async (
       templateId: string,

@@ -30,6 +30,7 @@ import {
   getAllTaskIds,
   getRecurringTasks,
   countUnfinishedOccurrences,
+  claimRecurrenceCycle,
   purgeTemplateOccurrences,
   updateTaskFields,
   getBoardById,
@@ -148,6 +149,10 @@ const CLI_DRAIN_POLL_MS = envInt('CLI_DRAIN_POLL_MS', 2_000);
 const CLI_AUTH_PROBE_INTERVAL_MS = envInt('CLI_AUTH_PROBE_INTERVAL_MS', 3_000);
 // Terminal-independent commit sweep cadence while a CLI run is watched.
 const COMMIT_SWEEP_INTERVAL_MS = envInt('COMMIT_SWEEP_INTERVAL_MS', 60_000);
+// A run of a recurring rule untouched for this long (and at least three of its
+// periods) no longer blocks the next run under overlap=skip — see
+// _countBlockingOccurrences.
+const RECURRENCE_STALE_RUN_MIN_MS = envInt('RECURRENCE_STALE_RUN_MIN_MS', 24 * 3600_000);
 
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
@@ -1230,7 +1235,13 @@ export const tasksMethods = {
     this._reassigningStatuses = new Set();
     this._refreshWorkflowManagedStatuses();
     this._taskLoopInterval = setInterval(() => this._processNextPendingTasks(), intervalMs);
-    this._recurrenceInterval = setInterval(() => this._processRecurringTasks(), 60000);
+    this._recurrenceInterval = setInterval(
+      () =>
+        this._processRecurringTasks().catch((err: any) =>
+          console.error('🔁 [Recurrence] Scheduler tick failed:', errorMessage(err))
+        ),
+      60000
+    );
     this._workflowRefreshInterval = setInterval(
       () => this._refreshWorkflowManagedStatuses(),
       30000
@@ -1320,42 +1331,124 @@ export const tasksMethods = {
     // the 'prod' default: a QA replica would spawn prod's runs (see
     // _processNextPendingTasks).
     if (!isEnvironmentLocked()) return;
-    const now = Date.now();
-    const ownEnv = getCurrentEnvironment();
-    const templates = await getRecurringTasks();
-    for (const template of templates) {
-      // Environment isolation: only the matching replica runs the rule.
-      // NULL env is treated as "prod" to preserve legacy behavior.
-      const templateEnv = template.environment || 'prod';
-      if (templateEnv !== ownEnv) continue;
-      const rec = template.recurrence;
-      if (!rec) continue;
-
-      // Retention first: it is independent of the schedule, so a rule whose
-      // period is long still has its old runs collected on every tick.
-      await this._purgeOccurrences(template);
-
-      const dueAt = nextRunAt(rec, template.createdAt);
-      if (dueAt === null || now < dueAt) continue;
-
-      if (normalizeOverlap(rec.onOverlap) === 'skip') {
-        const inFlight = await countUnfinishedOccurrences(template.id);
-        if (inFlight > 0) {
-          // Drop this cycle rather than queue it: the next run is measured from
-          // now, so a slow workflow produces fewer runs instead of a backlog
-          // that can never drain. The run in progress is left strictly alone.
-          console.log(
-            `🔁 [Recurrence] Skipping "${(template.text || '').slice(0, 60)}" — ` +
-              `${inFlight} run(s) still in flight (overlap=skip)`
+    // One tick at a time: a slow DB used to let the next tick start while the
+    // previous one was still spawning, and both fired the same cycle.
+    if (this._recurrenceTickRunning) return;
+    this._recurrenceTickRunning = true;
+    try {
+      const now = Date.now();
+      const ownEnv = getCurrentEnvironment();
+      const templates = await getRecurringTasks();
+      for (const template of templates) {
+        // Environment isolation: only the matching replica runs the rule.
+        // NULL env is treated as "prod" to preserve legacy behavior.
+        const templateEnv = template.environment || 'prod';
+        if (templateEnv !== ownEnv) continue;
+        // Each rule on its own: one rule whose purge or spawn throws used to
+        // abort the whole tick — every rule after it in the list then never
+        // fired again for as long as the faulty one stayed there.
+        try {
+          await this._processRecurringTemplate(template, now);
+        } catch (err: any) {
+          console.error(
+            `🔁 [Recurrence] Rule ${template.id} ("${(template.text || '').slice(0, 60)}") failed:`,
+            errorMessage(err)
           );
-          template.recurrence = { ...rec, lastResetAt: new Date(now).toISOString() };
-          await saveTaskToDb(template);
-          continue;
         }
       }
-
-      await this._spawnOccurrence(template, { by: 'recurrence' });
+    } finally {
+      this._recurrenceTickRunning = false;
     }
+  },
+
+  /** One rule of a scheduler tick: retention sweep, then the due run if any. */
+  async _processRecurringTemplate(this: any, template: TaskWriteInput, now: number): Promise<void> {
+    const rec = template.recurrence;
+    if (!rec) return;
+
+    // Retention first: it is independent of the schedule, so a rule whose
+    // period is long still has its old runs collected on every tick. A purge
+    // failure must not cost the rule its run.
+    try {
+      await this._purgeOccurrences(template);
+    } catch (err: any) {
+      console.error(`🧹 [Recurrence] Purge of rule ${template.id} failed:`, errorMessage(err));
+    }
+
+    const dueAt = nextRunAt(rec, template.createdAt);
+    if (dueAt === null || now < dueAt) return;
+
+    const skip =
+      normalizeOverlap(rec.onOverlap) === 'skip' &&
+      (await this._countBlockingOccurrences(template, now)) > 0;
+
+    // Claim the cycle before acting on it: only the tick that moves
+    // `lastResetAt` from the value it read may skip or spawn. The other
+    // replica of a start-first redeploy sees the claim fail and stands down.
+    const expected = (rec.lastResetAt as string) || null;
+    const claimed: TaskRecurrence = { ...rec, lastResetAt: new Date(now).toISOString() };
+    if (!(await claimRecurrenceCycle(template.id as string, expected, claimed))) return;
+    template.recurrence = claimed;
+
+    if (skip) {
+      // Drop this cycle rather than queue it: the next run is measured from
+      // now, so a slow workflow produces fewer runs instead of a backlog that
+      // can never drain. The run in progress is left strictly alone.
+      console.log(
+        `🔁 [Recurrence] Skipping "${(template.text || '').slice(0, 60)}" — ` +
+          `a previous run is still in flight (overlap=skip)`
+      );
+      return;
+    }
+
+    await this._spawnOccurrence(template, { by: 'recurrence', advanceClock: false });
+  },
+
+  /**
+   * How many runs of a rule still block the next one under `overlap=skip`.
+   *
+   * A run blocks while an execution claim is live on it, or while it can still
+   * finish: it sits in a column its board still has, that column is not the
+   * board's last one, and it moved (or its runner heartbeated) recently —
+   * within three periods, at least a day. Any other run is stranded, and letting it block is what made a recurring task
+   * stop for good after a crash, a redeploy or a workflow edit.
+   */
+  async _countBlockingOccurrences(
+    this: any,
+    template: TaskWriteInput,
+    now: number
+  ): Promise<number> {
+    const terminalStatuses = ['done', 'error'];
+    let liveStatuses: string[] | null = null;
+    try {
+      const workflow = await getWorkflowForBoard(template.boardId || null);
+      const columnIds = (workflow?.columns || [])
+        .map((c: { id?: string }) => c?.id)
+        .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0);
+      if (columnIds.length > 0) {
+        terminalStatuses.push(columnIds[columnIds.length - 1]);
+        // Orphan detection only against the rule's own board: a board-less
+        // rule falls back to the instance default, which says nothing about
+        // where its runs live. The column runs start in never orphans them.
+        if (template.boardId) {
+          const start = (template.recurrence?.originalStatus as string) || 'backlog';
+          liveStatuses = [...new Set([...columnIds, start, 'backlog'])];
+        }
+      }
+    } catch (err: any) {
+      // Workflow unreadable: fall back to done/error, never to "nothing blocks".
+      console.warn(
+        `🔁 [Recurrence] Could not read the workflow of rule ${template.id}:`,
+        errorMessage(err)
+      );
+    }
+    const intervalMs = (Number(template.recurrence?.intervalMinutes) || 1440) * 60 * 1000;
+    const staleAfterMs = Math.max(3 * intervalMs, RECURRENCE_STALE_RUN_MIN_MS);
+    return countUnfinishedOccurrences(template.id as string, {
+      terminalStatuses,
+      liveStatuses,
+      staleBefore: new Date(now - staleAfterMs).toISOString(),
+    });
   },
 
   /**

@@ -1205,24 +1205,74 @@ export async function getOccurrencesForTemplate(templateId: string, limit = 50) 
  * Is a previous run still in flight? Drives the `skip` overlap policy.
  *
  * Unfinished means "has not reached a terminal column": `done` and `error` are
- * both terminal (an errored run stopped, it is not still working). A run nobody
- * ever picked up counts as unfinished, which is the point — with `skip`, runs
- * stop piling up behind a workflow that is not moving.
+ * always terminal (an errored run stopped, it is not still working), and the
+ * caller adds the board's own last column. A run nobody ever picked up counts
+ * as unfinished, which is the point — with `skip`, runs stop piling up behind a
+ * workflow that is not moving.
+ *
+ * But a run must never block its rule FOREVER — that is how a recurring task
+ * used to silently stop: one run stranded by a crash or a redeploy, parked in a
+ * column that was later deleted, or finished in a board whose final column is
+ * not called `done`, and every following cycle was skipped. So two more limits:
+ *  - `liveStatuses`: when given, only runs sitting in one of these columns
+ *    count; a run in a column the board no longer has is orphaned, not working.
+ *  - `staleBefore`: a run untouched since this instant (no write, no heartbeat)
+ *    stops counting.
+ * A run with a live execution claim (`action_running`) always counts.
  */
-export async function countUnfinishedOccurrences(templateId: string): Promise<number> {
+export async function countUnfinishedOccurrences(
+  templateId: string,
+  {
+    terminalStatuses = ['done', 'error'],
+    liveStatuses = null,
+    staleBefore = null,
+  }: {
+    terminalStatuses?: string[];
+    liveStatuses?: string[] | null;
+    staleBefore?: Date | string | null;
+  } = {}
+): Promise<number> {
   const pool = getPool();
   if (!pool) return 0;
   try {
     const result = await pool.query(
       `SELECT COUNT(*)::int AS count FROM tasks
-        WHERE template_id = $1 AND deleted_at IS NULL AND status NOT IN ('done', 'error')`,
-      [templateId]
+        WHERE template_id = $1 AND deleted_at IS NULL
+          AND NOT (status = ANY($2::text[]))
+          AND (action_running IS TRUE
+               OR (($3::text[] IS NULL OR status = ANY($3::text[]))
+                   AND ($4::timestamptz IS NULL
+                        OR GREATEST(created_at, updated_at, action_heartbeat_at) >= $4::timestamptz)))`,
+      [templateId, terminalStatuses, liveStatuses, staleBefore]
     );
     return result.rows[0]?.count || 0;
   } catch (err) {
     console.error('Failed to count unfinished occurrences:', errorMessage(err));
     return 0;
   }
+}
+
+/**
+ * Claim one scheduler cycle of a rule: write its next `recurrence` only if
+ * `lastResetAt` still holds the value the caller read. Returns false when
+ * another tick — an overlapping one, or the other replica of a start-first
+ * redeploy — already handled this cycle, so each cycle fires exactly once.
+ */
+export async function claimRecurrenceCycle(
+  templateId: string,
+  expectedLastResetAt: string | null,
+  next: TaskRecurrence
+): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return true;
+  const result = await pool.query(
+    `UPDATE tasks SET recurrence = $3::jsonb, updated_at = NOW()
+      WHERE id = $1 AND is_template IS TRUE AND deleted_at IS NULL
+        AND (recurrence->>'lastResetAt') IS NOT DISTINCT FROM $2::text
+      RETURNING id`,
+    [templateId, expectedLastResetAt, JSON.stringify(next)]
+  );
+  return result.rows.length > 0;
 }
 
 /**

@@ -1296,6 +1296,81 @@ test('a rule only fires in its own environment', async () => {
   assert.equal(runsOf(rule.id).length, 1, 'another replica owns this rule');
 });
 
+// ── Recurring rules must never stop for good ─────────────────────────────────
+
+/** A rule with one run, made due. */
+async function dueRuleWithRun(mgr: any, recurrence: any = {}) {
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Recurring', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60, ...recurrence },
+  });
+  const rule = templates().at(-1);
+  const run = runsOf(rule.id)[0];
+  rule.recurrence.lastResetAt = new Date(Date.now() - 61 * 60 * 1000).toISOString();
+  return { rule, run };
+}
+
+test('overlap=skip: a stranded run (untouched for days, no claim) stops blocking the rule', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { rule, run } = await dueRuleWithRun(mgr);
+  // Left mid-workflow by a crash/redeploy: no live claim, nothing moved for 2 days.
+  const old = new Date(Date.now() - 2 * 86400000).toISOString();
+  Object.assign(run, { status: 'code', actionRunning: false, createdAt: old, updatedAt: old });
+  delete run.startedAt;
+
+  await mgr._processRecurringTasks();
+
+  assert.equal(runsOf(rule.id).length, 2, 'the next run is spawned');
+  assert.equal(run.status, 'code', 'the stranded run is left alone');
+});
+
+test('overlap=skip: a recent unfinished run still blocks', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { rule, run } = await dueRuleWithRun(mgr);
+  run.status = 'code';
+  run.updatedAt = new Date().toISOString();
+
+  await mgr._processRecurringTasks();
+  assert.equal(runsOf(rule.id).length, 1);
+});
+
+test('a rule that throws does not stop the other rules', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const a = await dueRuleWithRun(mgr, { onOverlap: 'spawn' });
+  const b = await dueRuleWithRun(mgr, { onOverlap: 'spawn' });
+  const original = mgr._spawnOccurrence;
+  mgr._spawnOccurrence = async function (this: any, template: any, opts: any) {
+    if (template.id === a.rule.id) throw new Error('boom');
+    return original.call(this, template, opts);
+  };
+  const errors = mock.method(console, 'error', () => {});
+  try {
+    await mgr._processRecurringTasks();
+  } finally {
+    errors.mock.restore();
+    mgr._spawnOccurrence = original;
+  }
+  assert.equal(runsOf(b.rule.id).length, 2, 'the healthy rule still fired');
+});
+
+test('overlapping scheduler ticks fire a due cycle once', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { rule } = await dueRuleWithRun(mgr, { onOverlap: 'spawn' });
+  await Promise.all([mgr._processRecurringTasks(), mgr._processRecurringTasks()]);
+  assert.equal(runsOf(rule.id).length, 2, 'one new run, not two');
+});
+
+test('a cycle already claimed by another replica is not spawned again', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { rule } = await dueRuleWithRun(mgr, { onOverlap: 'spawn' });
+  // This replica read the rule before the other one advanced its clock.
+  const staleRead = { ...rule, recurrence: { ...rule.recurrence } };
+  rule.recurrence.lastResetAt = new Date().toISOString();
+  await mgr._processRecurringTemplate(staleRead, Date.now());
+  assert.equal(runsOf(rule.id).length, 1);
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // 19b. Secondary repos (primary + N cloned alongside)
 // ═══════════════════════════════════════════════════════════════════════════════

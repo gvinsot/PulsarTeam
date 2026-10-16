@@ -149,6 +149,7 @@ export {
   getTaskTemplateById,
   getOccurrencesForTemplate,
   countUnfinishedOccurrences,
+  claimRecurrenceCycle,
   purgeTemplateOccurrences,
   updateTaskFields,
   claimTaskRun,

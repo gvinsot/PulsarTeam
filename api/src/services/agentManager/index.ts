@@ -426,6 +426,8 @@ export interface AgentManager {
   _refreshWorkflowManagedStatuses(): void;
   stopTaskLoop(): void;
   _processRecurringTasks(): Promise<void>;
+  _processRecurringTemplate(template: any, now: number): Promise<void>;
+  _countBlockingOccurrences(template: any, now: number): Promise<number>;
   _processNextPendingTasks(): void;
   // `creatorAgentId` is the task's owning agent — null for a board-level task;
   // the implementation only logs it.
@@ -562,6 +564,7 @@ export class AgentManager {
   // Task loop fields used in startTaskLoop / stopTaskLoop
   _taskLoopInterval: ReturnType<typeof setInterval> | null | undefined;
   _recurrenceInterval: ReturnType<typeof setInterval> | null | undefined;
+  _recurrenceTickRunning?: boolean;
   _workflowRefreshInterval: ReturnType<typeof setInterval> | null | undefined;
   _loopProcessing: Set<string> | undefined;
   _taskResumeFailures: Map<string, { count: number; lastFailedAt: number }> | undefined;
