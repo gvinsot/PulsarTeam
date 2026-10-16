@@ -993,6 +993,7 @@ networks:
   proxy:
     external: true
   postgresqlcluster_internal:
+    external: true
 
   backend:
     driver: overlay
