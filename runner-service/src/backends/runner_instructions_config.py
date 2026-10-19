@@ -28,6 +28,7 @@ CLI actually picks it up):
   - opencode  → ~/.config/opencode/AGENTS.md   (CONFIRM AT DEPLOY)
   - hermes    → ~/.hermes/AGENTS.md            (CONFIRM AT DEPLOY)
   - openclaw  → ~/.openclaw/AGENTS.md          (CONFIRM AT DEPLOY)
+  - vibe      → ~/.vibe/AGENTS.md              (documented)
 
 Fetch contract (mirrors runner_mcp_config):
   - team-api unreachable / 404 / error  → return None → leave the file untouched
@@ -165,3 +166,9 @@ def configure_aider_instructions(agent_user: Optional[dict], agent_id: Optional[
     # AGENTS.md under ~/.aider and pass it to the CLI as a read-only context
     # file via --read (see backends/aider.py).
     _write_instructions(agent_user, agent_id, (".aider", "AGENTS.md"), "Aider Instructions")
+
+
+def configure_vibe_instructions(agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+    # Documented user-level instructions file (vibe.core.config.harness_files:
+    # $VIBE_HOME/AGENTS.md, VIBE_HOME defaulting to ~/.vibe).
+    _write_instructions(agent_user, agent_id, (".vibe", "AGENTS.md"), "Vibe Instructions")

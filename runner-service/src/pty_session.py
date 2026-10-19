@@ -182,6 +182,8 @@ _INTERRUPT_RECIPES = {
     # Prompt-toolkit style chat CLIs keep Ctrl-C as their interrupt primitive.
     "hermes": ("ctrl-c", b"\x03"),
     "aider": ("ctrl-c", b"\x03"),
+    # Vibe's Textual TUI interrupts the running turn on Escape; Ctrl-C quits.
+    "vibe": ("escape", b"\x1b"),
 }
 
 

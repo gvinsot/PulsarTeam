@@ -20,6 +20,7 @@ const VENDOR_PATTERNS: Array<[RegExp, string]> = [
   [/hermes/i, 'Hermes'],
   [/openclaw/i, 'OpenClaw'],
   [/aider/i, 'Aider'],
+  [/vibe/i, 'Mistral'],
 ];
 
 const PLACEHOLDERS = new Set(['', 'unknown', 'cli', 'null', 'undefined']);

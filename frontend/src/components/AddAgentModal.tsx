@@ -658,6 +658,7 @@ export default function AddAgentModal({
                       'hermes',
                       'openclaw',
                       'aider',
+                      'vibe',
                     ]);
                     const isCliRunner = CLI_RUNNERS.has(form.runner);
                     const placeholder = isCliRunner

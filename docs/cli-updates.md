@@ -63,3 +63,18 @@ Current model references:
 To refresh the other CLIs again, change `RUNNER_CLI_CACHE_BUST` when rebuilding the images.
 Deploying rebuilt images is required to update running services; changing these
 files alone does not upgrade existing containers.
+
+## Mistral Vibe Code — 2026-10-19
+
+New `vibe` runner (`RUNNER_TYPE=vibe`, service `vibe-service`) driving the
+[Mistral Vibe](https://github.com/mistralai/mistral-vibe) CLI, installed from
+PyPI (`mistral-vibe`, 2.26.1 at the time of writing) in its own virtualenv at
+`/opt/vibe`. Pin with `VIBE_CLI_VERSION`, refresh with `VIBE_CLI_CACHE_BUST`.
+
+- MCP servers, permissions and update checks go through Vibe's `VIBE_*`
+  env-var config layer; `~/.vibe/config.toml` is left to the user.
+- The model is chosen in the terminal (`/model`); `~/.vibe/{config.toml,.env}`
+  persist across restarts.
+- Base instructions are written to `~/.vibe/AGENTS.md`.
+- API key: per-agent Mistral LLM config, else the key saved via
+  `vibe --setup`, else the service-wide `MISTRAL_API_KEY`.

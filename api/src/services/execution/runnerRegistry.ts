@@ -14,6 +14,7 @@ export const RUNNER_SERVICES = {
   opencode: { envVar: 'OPENCODE_SERVICE_URL', defaultUrl: 'http://opencode-service:8000' },
   aider: { envVar: 'AIDER_SERVICE_URL', defaultUrl: 'http://aider-service:8000' },
   codex: { envVar: 'CODEX_SERVICE_URL', defaultUrl: 'http://codex-service:8000' },
+  vibe: { envVar: 'VIBE_SERVICE_URL', defaultUrl: 'http://vibe-service:8000' },
 } as const;
 
 export type RunnerServiceType = keyof typeof RUNNER_SERVICES;

@@ -42,6 +42,7 @@ interface ExecutionManagerOptions {
   opencodeOptions?: RunnerOpts;
   aiderOptions?: RunnerOpts;
   codexOptions?: RunnerOpts;
+  vibeOptions?: RunnerOpts;
 }
 
 interface BindAgentMeta {
@@ -74,6 +75,7 @@ export class ExecutionManager {
       opencode: options.opencodeOptions,
       aider: options.aiderOptions,
       codex: options.codexOptions,
+      vibe: options.vibeOptions,
     };
     for (const type of PROVIDER_TYPES) {
       this.providers.set(type, make(type, perTypeOpts[type]));

@@ -38,6 +38,7 @@ const RUNNER_SELECT_VALUES = [
   'opencode',
   'aider',
   'codex',
+  'vibe',
 ] as const;
 
 function isRunnerSelectValue(value: string): value is (typeof RUNNER_SELECT_VALUES)[number] {
@@ -193,9 +194,10 @@ export default function SettingsTab({
   };
 
   // Whether a given LLM config may be paired with a given runner. Claude Code
-  // only drives Anthropic models and Codex only OpenAI models; other runners
-  // accept any provider. An empty llmConfigId ("Default LLM") is always allowed
-  // because the runner falls back to its built-in credentials.
+  // only drives Anthropic models, Codex only OpenAI models and Vibe only Mistral
+  // models; other runners accept any provider. An empty llmConfigId ("Default
+  // LLM") is always allowed because the runner falls back to its built-in
+  // credentials.
   const isLlmAllowedForRunner = (llmConfigId: string, runner: string) => {
     if (!llmConfigId) return true;
     const sel = llmConfigs.find(c => c.id === llmConfigId);
@@ -205,6 +207,9 @@ export default function SettingsTab({
     }
     if (runner === 'codex') {
       return provider === 'openai';
+    }
+    if (runner === 'vibe') {
+      return provider === 'mistral';
     }
     return true;
   };
@@ -478,7 +483,7 @@ export default function SettingsTab({
               // chosen one is the default; for opencode the local vLLM/Ollama
               // models are also injected into the runner config so they can be
               // switched inside the terminal (see runner-service).
-              const CLI_RUNNERS = new Set(['opencode', 'hermes', 'openclaw', 'aider']);
+              const CLI_RUNNERS = new Set(['opencode', 'hermes', 'openclaw', 'aider', 'vibe']);
               const effectiveRunner = form.runner || resolveAutoRunner(form.llmConfigId);
               const isCliRunner = CLI_RUNNERS.has(effectiveRunner);
               const placeholderLabel = isCliRunner

@@ -16,6 +16,7 @@ export const CLI_RUNNER_IDS = [
   'openclaw',
   'hermes',
   'aider',
+  'vibe',
 ] as const;
 export type CliRunnerId = (typeof CLI_RUNNER_IDS)[number];
 
@@ -47,6 +48,7 @@ export const AGENT_TYPE_IDS = [
   'openclaw',
   'codex',
   'aider',
+  'vibe',
 ] as const;
 export type AgentTypeId = (typeof AGENT_TYPE_IDS)[number];
 
@@ -58,6 +60,7 @@ export const AGENT_TYPE_LABELS: Record<AgentTypeId, string> = {
   openclaw: 'OpenClaw CLI',
   codex: 'OpenAI Codex CLI',
   aider: 'Aider CLI',
+  vibe: 'Mistral Vibe CLI',
 };
 
 /**

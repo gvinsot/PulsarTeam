@@ -2,7 +2,7 @@
 #
 # A single image that ships every supported CLI; the active backend is
 # selected at startup via RUNNER_TYPE (claude-code, codex, openclaw, hermes,
-# opencode, aider, sandbox).
+# opencode, aider, vibe, sandbox).
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -125,6 +125,26 @@ RUN (echo "Aider CLI refresh key: ${AIDER_CLI_CACHE_BUST}" \
         && printf '#!/bin/sh\necho "aider-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/aider \
         && chmod +x /usr/local/bin/aider)
 
+# Mistral Vibe Code CLI (https://github.com/mistralai/mistral-vibe)
+# Same layout as aider: its own virtualenv, launcher symlinked onto PATH, tree
+# world-readable for the per-agent UIDs. Resolves the latest release at build
+# time; set VIBE_CLI_VERSION to pin and bump VIBE_CLI_CACHE_BUST to refresh.
+ARG VIBE_CLI_VERSION=latest
+ARG VIBE_CLI_CACHE_BUST=2026-10-19
+RUN (echo "Vibe CLI refresh key: ${VIBE_CLI_CACHE_BUST}" \
+     && python3.12 -m venv /opt/vibe \
+     && /opt/vibe/bin/pip install --no-cache-dir --upgrade pip \
+     && if [ "${VIBE_CLI_VERSION}" = "latest" ]; then \
+          /opt/vibe/bin/pip install --no-cache-dir mistral-vibe; \
+        else \
+          /opt/vibe/bin/pip install --no-cache-dir "mistral-vibe==${VIBE_CLI_VERSION}"; \
+        fi \
+     && ln -sf /opt/vibe/bin/vibe /usr/local/bin/vibe \
+     && chmod -R a+rX /opt/vibe) \
+    || (echo "WARN: mistral-vibe install failed — installing stub" \
+        && printf '#!/bin/sh\necho "vibe-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/vibe \
+        && chmod +x /usr/local/bin/vibe)
+
 # Install Go (dev tool inside agent workspaces)
 RUN curl -fsSL https://go.dev/dl/go1.24.1.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH"
@@ -193,6 +213,7 @@ RUN echo "=== Python ===" && python --version && \
     echo "=== OpenClaw ===" && openclaw --version && \
     echo "=== Hermes ===" && hermes --version && \
     echo "=== Aider ===" && (aider --version 2>&1 || echo "not installed") && \
+    echo "=== Vibe ===" && (vibe --version 2>&1 || echo "not installed") && \
     echo "=== Git ===" && git --version && \
     echo "=== Docker ===" && docker --version && \
     echo "=== Chromium ===" && chromium --version && \

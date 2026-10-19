@@ -49,6 +49,7 @@ export const CLI_RUNNERS = new Set([
   'openclaw',
   'hermes',
   'aider',
+  'vibe',
 ]);
 import ContextTab from './agentDetail/ContextTab';
 import ActionLogsTab from './agentDetail/ActionLogsTab';

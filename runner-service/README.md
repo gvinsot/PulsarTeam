@@ -12,6 +12,7 @@ env var.
 | `openclaw`    | OpenClaw CLI                       | yes       | no          |
 | `hermes`      | Hermes CLI                         | yes       | no          |
 | `opencode`    | OpenCode CLI (opencode.ai)         | yes       | no          |
+| `vibe`        | Mistral Vibe Code CLI              | yes       | no          |
 | `sandbox`     | No LLM — exec/file ops only        | no        | no          |
 | `mock`        | Hard-coded canned responses (test) | simulated | no          |
 
@@ -65,6 +66,7 @@ runner-service/
         ├── openclaw.py
         ├── hermes.py
         ├── opencode.py
+        ├── vibe.py           Mistral Vibe Code
         ├── sandbox.py
         └── mock.py             canned-response LLM (testing)
 ```

@@ -15,6 +15,7 @@ export const AGENT_TYPE_IDS = [
   'openclaw',
   'codex',
   'aider',
+  'vibe',
 ] as const;
 export type AgentTypeId = (typeof AGENT_TYPE_IDS)[number];
 
@@ -27,6 +28,7 @@ export const AGENT_TYPE_LABELS: Record<AgentTypeId, string> = {
   openclaw: 'OpenClaw CLI',
   codex: 'OpenAI Codex CLI',
   aider: 'Aider CLI',
+  vibe: 'Mistral Vibe CLI',
 };
 
 /** One-liners shown under each toggle. */
@@ -38,6 +40,7 @@ export const AGENT_TYPE_DESCRIPTIONS: Record<AgentTypeId, string> = {
   openclaw: 'OpenClaw CLI — multi-provider.',
   codex: 'OpenAI Codex CLI, model chosen in the terminal via the ChatGPT plan login.',
   aider: 'Aider CLI — multi-provider pair-programming runner.',
+  vibe: 'Mistral Vibe Code CLI — Mistral models, chosen in the terminal via /model.',
 };
 
 /** The runner <select> labels, which name the agent rather than the CLI. */
@@ -48,6 +51,7 @@ export const AGENT_TYPE_OPTION_LABELS: Record<AgentTypeId, string> = {
   hermes: 'Hermes Agent',
   opencode: 'OpenCode Agent',
   aider: 'Aider Agent',
+  vibe: 'Mistral Vibe Agent',
   codex: 'OpenAI Codex Agent',
 };
 
@@ -60,6 +64,7 @@ export const AGENT_TYPE_SELECT_ORDER: readonly AgentTypeId[] = [
   'opencode',
   'aider',
   'codex',
+  'vibe',
 ];
 
 /**

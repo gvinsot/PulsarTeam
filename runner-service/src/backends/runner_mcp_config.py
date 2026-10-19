@@ -490,6 +490,48 @@ def configure_openclaw_mcp(agent_user: Optional[dict], agent_id: Optional[str]) 
         logger.warning(f"[OpenClaw MCP] failed to write {cfg_path}: {e}")
 
 
+# ── vibe (Mistral) ────────────────────────────────────────────────────────────
+# Vibe reads `mcp_servers` as a list of tables, discriminated by `transport`
+# (vibe.core.config.models, mistral-vibe 2.26):
+#
+#     [[mcp_servers]]
+#     name = "pulsar-gateway"
+#     transport = "streamable-http"
+#     url = "https://.../mcp"
+#     [mcp_servers.auth]
+#     type = "static"
+#     headers = { Authorization = "Bearer ..." }
+#
+# Nothing is written to disk: VibeBackend hands this list to the CLI as JSON in
+# VIBE_MCP_SERVERS. The VIBE_* env layer outranks ~/.vibe/config.toml and
+# union-merges `mcp_servers` by name, so the user's own servers survive and a
+# removed plugin disappears on the next spawn with no managed-block bookkeeping.
+
+def to_vibe_mcp(servers: Optional[dict]) -> list:
+    out: list = []
+    for name, cfg in (servers or {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        url = cfg.get("url")
+        if not url:
+            continue
+        entry: dict = {"name": name, "transport": "streamable-http", "url": url}
+        headers = cfg.get("headers")
+        if isinstance(headers, dict) and headers:
+            entry["auth"] = {"type": "static", "headers": {str(k): str(v) for k, v in headers.items()}}
+        out.append(entry)
+    return out
+
+
+def fetch_vibe_mcp_servers(agent_id: Optional[str]) -> Optional[list]:
+    """The agent's MCP servers in Vibe's schema, or None when team-api could
+    not be reached (the caller keeps its last known set)."""
+    servers = _fetch_servers_or_none(agent_id)
+    if servers is None:
+        return None
+    return to_vibe_mcp(servers)
+
+
 # ── hermes ────────────────────────────────────────────────────────────────────
 # ~/.hermes/config.yaml, key `mcp_servers`. Schema VERIFIED against hermes
 # v0.15.0 (tools/mcp_tool.py docstring + parser):

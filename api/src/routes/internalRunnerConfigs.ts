@@ -31,6 +31,8 @@ const SCOPE_TYPE = 'agent';
 // - openclaw:    ~/.openclaw/openclaw.json
 // - aider:       ~/.aider.conf.yml (hand-written; aider has no in-chat "save
 //                my model" flow)
+// - vibe:        ~/.vibe/{config.toml,.env} (`/model` → active_model, and the
+//                key `vibe --setup` saves)
 const ALLOWED_RUNNERS = new Set([
   'hermes',
   'claude-code',
@@ -38,6 +40,7 @@ const ALLOWED_RUNNERS = new Set([
   'codex',
   'openclaw',
   'aider',
+  'vibe',
 ]);
 
 export function internalRunnerConfigsRoutes() {

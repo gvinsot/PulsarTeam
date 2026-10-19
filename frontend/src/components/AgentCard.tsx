@@ -19,6 +19,7 @@ const RUNNER_LABELS: Partial<Record<AgentRunner, string>> = {
   hermes: 'Hermes',
   opencode: 'OpenCode',
   codex: 'OpenAI Codex',
+  vibe: 'Mistral Vibe',
 };
 
 interface AgentCardProps {
