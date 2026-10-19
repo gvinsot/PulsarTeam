@@ -1020,6 +1020,12 @@ services:
     read_only: true
     deploy:
       mode: global
+      # The image is built for amd64 only. Without this the arm64 node (server-z)
+      # holds a task pending forever ("unsupported platform"); no runner can land
+      # there anyway (they are pinned to node.labels.gpu == none or server-b).
+      placement:
+        constraints:
+          - node.platform.arch == x86_64
       resources:
         limits:
           cpus: '0.1'
