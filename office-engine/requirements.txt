@@ -4,7 +4,10 @@
 # (installed in the Docker image / bundled in the desktop sidecar).
 
 # --- MCP transport (Streamable HTTP, matches api/src/services/mcpClient.ts) ---
-mcp>=1.2.0
+# <2: mcp 2.x renamed FastMCP to MCPServer (mcp.server.mcpserver), which
+# mcp_server.py is not written against yet — an unbounded pin crash-looped
+# office-service on boot (QA 1.0.1258).
+mcp>=1.2.0,<2
 uvicorn>=0.30.0
 starlette>=0.37.0
 
