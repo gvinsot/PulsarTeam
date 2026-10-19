@@ -108,6 +108,19 @@ interface Grid {
 // Backoff schedule for reconnects: 0.5s → 1s → 2s → … capped at 15s.
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15_000;
+// A socket must stay open this long before the schedule starts over. Resetting
+// on open let a runner that accepts then fails (1011) loop every ~second.
+const BACKOFF_STABLE_MS = 5_000;
+
+/**
+ * Whether the terminal may take the keyboard on its own (mount, reconnect).
+ * Never while the user is in another field — a modal over the agent panel, a
+ * task editor — or every reconnect would pull the caret out from under them.
+ */
+function focusIsFree(container: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || !!container?.contains(active);
+}
 // Floors for the grid a viewer CLAIMS. Below ~80 cols the Claude Code TUI
 // renders broken and wraps long output (e.g. the /login URL) into lossy
 // pieces, so a narrow desktop panel still claims 80 and shrinks its font to
@@ -571,7 +584,7 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
 
     window.requestAnimationFrame(() => {
       layoutNow();
-      if (!coarseRef.current) term.focus();
+      if (!coarseRef.current && focusIsFree(container)) term.focus();
     });
 
     // Web/local fonts can finish loading after the first measure, changing
@@ -754,12 +767,15 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       wsRef.current = ws;
       suppressReconnectRef.current = false;
       setExitedState(false);
+      let stableTimer: number | null = null;
 
       ws.onopen = () => {
         if (wsRef.current !== ws) return;
-        reconnectAttemptRef.current = 0;
+        stableTimer = window.setTimeout(() => {
+          if (wsRef.current === ws) reconnectAttemptRef.current = 0;
+        }, BACKOFF_STABLE_MS);
         setConnected(true);
-        if (!coarseRef.current) term.focus();
+        if (!coarseRef.current && focusIsFree(containerRef.current)) term.focus();
         // Ask the runner to repaint the current screen right now (the attach
         // already does, this covers a geometry that settled meanwhile).
         ws.send(JSON.stringify({ type: 'refresh' }));
@@ -834,6 +850,7 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       };
 
       ws.onclose = () => {
+        if (stableTimer !== null) window.clearTimeout(stableTimer);
         if (wsRef.current !== ws) return;
         wsRef.current = null;
         setConnected(false);
