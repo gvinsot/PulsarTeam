@@ -24,6 +24,10 @@ const CURRENT_HASH_VERSION = 2;
  *     on that board. Several per user — one per integration — so each can be
  *     revoked on its own. The owner's edit access to the board is re-checked
  *     on every request too (middleware/apiKeyAuth.ts).
+ *   – `browser`: opens only the web browser MCP (search, crawl, extract — the
+ *     same tools agents get, FlareSolverr fallback included), for another
+ *     service to use. No board, no tenant data. Several per user, one per
+ *     consuming service, each revoked on its own.
  *
  * The original ownerless instance-wide ("legacy") key has been removed for
  * good: migration 202610160001 deletes any such row, and a row that is not
@@ -47,9 +51,10 @@ const CURRENT_HASH_VERSION = 2;
  * `role === 'admin'` for themselves.
  *
  * `insert` is the narrowest: task creation on the one board the key is bound
- * to. It is off the ladder — see `scopeSatisfies`.
+ * to. `browser` opens the web browser tools and nothing of the tenant. Both are
+ * off the ladder — see `scopeSatisfies`.
  */
-export const API_KEY_SCOPES = ['admin', 'management', 'insert'] as const;
+export const API_KEY_SCOPES = ['admin', 'management', 'insert', 'browser'] as const;
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 
 /** The scopes that sit on the ladder: one key per (user, scope), no board. */
@@ -66,17 +71,23 @@ export function isApiKeyScope(value: unknown): value is ApiKeyScope {
   return typeof value === 'string' && (API_KEY_SCOPES as readonly string[]).includes(value);
 }
 
+/** The scopes that sit off the ladder: each opens its own surface and no other. */
+const OFF_LADDER_SCOPES: readonly ApiKeyScope[] = ['insert', 'browser'];
+
 /**
  * Does a key granted `granted` satisfy an endpoint demanding `required`?
  *
- * `insert` is off the ladder in BOTH directions. An insert key opens nothing
- * but the insert surface, however high the ladder is read. And no ladder key
- * opens the insert surface — not even `admin`: that surface takes its board
- * from the key, and a ladder key has none to give.
+ * `insert` and `browser` are off the ladder in BOTH directions. Such a key
+ * opens nothing but its own surface, however high the ladder is read. And no
+ * ladder key opens theirs — not even `admin`: the insert surface takes its
+ * board from the key, and a key handed to another service for browsing must
+ * not double as one that reshapes the tenant (nor the reverse).
  */
 export function scopeSatisfies(granted: ApiKeyScope, required: ApiKeyScope): boolean {
-  if (granted === 'insert' || required === 'insert') return granted === required;
-  return SCOPE_RANK[granted] >= SCOPE_RANK[required];
+  if (OFF_LADDER_SCOPES.includes(granted) || OFF_LADDER_SCOPES.includes(required)) {
+    return granted === required;
+  }
+  return SCOPE_RANK[granted as LadderApiKeyScope] >= SCOPE_RANK[required as LadderApiKeyScope];
 }
 
 /** What `resolveApiKey` hands back. Never contains the owner's claims. */
@@ -364,6 +375,38 @@ export async function createInsertApiKey({
     board_id: boardId,
     allowed_columns: allowedColumns,
   };
+}
+
+/**
+ * Mint a `browser` key. Never replaces anything: a user may hold several, one
+ * per service calling the browser MCP, each revoked on its own with
+ * `revokeScopedApiKey`. Bound to no board — the surface reads no tenant data.
+ *
+ * Returns the full key — the only time it is visible in clear.
+ */
+export async function createBrowserApiKey({
+  userId,
+  name,
+}: {
+  userId: string;
+  name?: string | null;
+}) {
+  const pool = getPool();
+  if (!pool) throw new Error('Database not available');
+
+  const key = generateApiKey();
+  const id = crypto.randomUUID();
+  const prefix = key.slice(0, 12) + '...' + key.slice(-4);
+  const keyHash = hmacKey(key);
+  const label = (name || '').trim() || 'browser key';
+
+  await pool.query(
+    `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version, user_id, scope, name)
+     VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7)`,
+    [id, keyHash, prefix, CURRENT_HASH_VERSION, userId, 'browser', label]
+  );
+
+  return { id, key, prefix, scope: 'browser' as const, name: label, board_id: null };
 }
 
 /** The caller's own scoped keys (every kind), metadata only. */

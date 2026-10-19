@@ -18,6 +18,7 @@ const { TASK_VIEW_KEYS } = await import('../mcp/taskOperations.js');
 const { createInsertMcpServer } = await import('../mcp/insertMcp.js');
 const { createManagementMcpServer } = await import('../mcp/managementMcp.js');
 const { createAdminMcpServer } = await import('../mcp/adminMcp.js');
+const { createBrowserMcpServer } = await import('../browserMcp.js');
 
 const managers = { agentManager: {}, mcpManager: {}, skillManager: {} } as any;
 const ACTOR = { userId: 'u', username: 'u', role: 'basic', csrf: '' } as any;
@@ -29,6 +30,7 @@ const toExpressPath = (path: string) => path.replace(/\{(\w+)\}/g, ':$1');
 /** The guard each security scheme stands for, as the route inventory names it. */
 const GUARD_OF_SCHEME: Record<string, string> = {
   insertKey: 'requireApiKeyScope(insert)',
+  browserKey: 'requireApiKeyScope(browser)',
   managementKey: 'requireApiKeyScope(management)',
   adminKey: 'requireApiKeyScope(admin)',
 };
@@ -82,6 +84,7 @@ test('each MCP catalogue is exactly the tool set its real server registers', () 
       apiKeyId: 'k',
       boardId: 'b',
     }),
+    '/api/mcp/browser': createBrowserMcpServer(),
     '/api/mcp/management': createManagementMcpServer(managers.agentManager, ACTOR),
     '/api/mcp/admin': createAdminMcpServer(
       managers.agentManager,

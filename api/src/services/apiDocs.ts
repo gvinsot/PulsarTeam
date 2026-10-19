@@ -26,6 +26,7 @@ import type { SkillManager } from './skillManager.js';
 import { createAdminMcpServer } from './mcp/adminMcp.js';
 import { createManagementMcpServer } from './mcp/managementMcp.js';
 import { createInsertMcpServer } from './mcp/insertMcp.js';
+import { BROWSER_KEY_RATE_LIMIT_PER_MINUTE, createBrowserMcpServer } from './browserMcp.js';
 import { createTaskFieldsSchema } from './mcp/taskInsertion.js';
 import { TASK_VIEW_KEYS } from './mcp/taskOperations.js';
 import { INSERT_RATE_LIMIT_PER_MINUTE } from '../routes/insertApi.js';
@@ -207,6 +208,16 @@ export const MCP_SURFACES = [
       'Two tools: `get_board` (name and columns the key may write to) and `create_task`. The board comes from the key and is never an argument; no task can be read, moved or deleted. Tasks are created `untrusted`: no agent works on them until a human approves them.',
   },
   {
+    path: '/api/mcp/browser',
+    scope: 'browser',
+    security: 'browserKey',
+    title: 'Browser MCP',
+    summary: 'Search and read the web',
+    description:
+      'The web browser tools agents use: search, crawl one or several pages, list links, extract structured data with the configured LLM. Pages behind an anti-bot challenge (Cloudflare…) are retried through FlareSolverr. Only public URLs are fetched — private, loopback and internal addresses are refused. No tenant data is read or written. ' +
+      `Rate limit: ${BROWSER_KEY_RATE_LIMIT_PER_MINUTE} requests/minute per key.`,
+  },
+  {
     path: '/api/mcp/management',
     scope: 'management',
     security: 'managementKey',
@@ -235,18 +246,20 @@ export interface ApiDocsManagers {
 /** Build the whole OpenAPI document. Pure apart from the in-memory tools/list. */
 export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<JsonObject> {
   const { agentManager, mcpManager, skillManager } = managers;
-  const [insertTools, managementTools, adminTools] = await Promise.all([
+  const [insertTools, browserTools, managementTools, adminTools] = await Promise.all([
     listServerTools(
       createInsertMcpServer(agentManager, DOCS_ACTOR, {
         apiKeyId: 'api-docs',
         boardId: DOCS_BOARD_ID,
       })
     ),
+    listServerTools(createBrowserMcpServer()),
     listServerTools(createManagementMcpServer(agentManager, DOCS_ACTOR)),
     listServerTools(createAdminMcpServer(agentManager, mcpManager, skillManager, DOCS_ACTOR)),
   ]);
   const toolsBySurface: Record<string, DocumentedTool[]> = {
     '/api/mcp/insert': insertTools,
+    '/api/mcp/browser': browserTools,
     '/api/mcp/management': managementTools,
     '/api/mcp/admin': adminTools,
   };
@@ -292,13 +305,20 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
                       id: 2,
                       method: 'tools/call',
                       params: {
-                        name: surface.scope === 'admin' ? 'list_boards' : 'create_task',
+                        name:
+                          surface.scope === 'admin'
+                            ? 'list_boards'
+                            : surface.scope === 'browser'
+                              ? 'search_web'
+                              : 'create_task',
                         arguments:
                           surface.scope === 'insert'
                             ? { task: 'Customer reports a broken export', priority: 'high' }
                             : surface.scope === 'management'
                               ? { board_id: '<board uuid>', task: 'Prepare the release notes' }
-                              : {},
+                              : surface.scope === 'browser'
+                                ? { query: 'PulsarTeam release notes' }
+                                : {},
                       },
                     },
                   },
@@ -333,9 +353,10 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         'A key names its owner, never their permissions: the owner is re-read on every request, so a demotion, an unshared board or a deleted account restricts the key on its very next call.\n\n' +
         '| Key | Opens |\n|---|---|\n' +
         '| `insert` | `/api/insert/*`, `/api/mcp/insert` — task creation on the one board it is bound to |\n' +
+        '| `browser` | `/api/mcp/browser` — web search and crawling, no tenant data |\n' +
         '| `management` | `/api/mcp/management` |\n' +
         '| `admin` | `/api/mcp/admin` and `/api/mcp/management` |\n\n' +
-        'Keys never cross these lines: an `admin` key does not open the insert surface (it has no board).',
+        'Keys never cross these lines: an `admin` key does not open the insert surface (it has no board) nor the browser one, and a `browser` key opens nothing else.',
     },
     servers: [{ url: '/' }],
     tags: [
@@ -461,6 +482,10 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         insertKey: bearer(
           'Insert',
           'Bound to one board at mint time, optionally narrowed to some of its columns; creates tasks there and nothing else. Several may exist per board. The owner must still be able to edit the board on every request. Tasks it creates wait for human approval before any agent sees them.'
+        ),
+        browserKey: bearer(
+          'Browser',
+          'Opens the web browser tools and nothing of the tenant. Several may exist per user, one per calling service, each revoked on its own.'
         ),
         managementKey: bearer('Management', 'One per user; minting again rotates it.'),
         adminKey: bearer('Admin', 'One per user; also opens the management surface.'),

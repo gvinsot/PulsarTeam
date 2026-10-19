@@ -610,6 +610,7 @@ export default function ApiDocsPanel({ focus, freshKeys = {} }: ApiDocsPanelProp
               <OperationCard
                 freshKey={
                   entry.op['x-api-key-scope'] === 'insert' ||
+                  entry.op['x-api-key-scope'] === 'browser' ||
                   entry.op['x-api-key-scope'] === 'management' ||
                   entry.op['x-api-key-scope'] === 'admin'
                     ? freshKeys[entry.op['x-api-key-scope']]

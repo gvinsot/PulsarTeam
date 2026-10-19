@@ -143,6 +143,7 @@ const {
   resolveApiKey,
   createScopedApiKey,
   createInsertApiKey,
+  createBrowserApiKey,
   listApiKeysForUser,
   revokeScopedApiKey,
   scopeSatisfies,
@@ -385,6 +386,53 @@ test('insert is off the ladder in both directions', () => {
   assert.equal(scopeSatisfies('insert', 'admin'), false);
   assert.equal(scopeSatisfies('admin', 'insert'), false);
   assert.equal(scopeSatisfies('management', 'insert'), false);
+});
+
+test('browser keys name their owner and no board, and accumulate like insert keys', async () => {
+  reset();
+  await ensureApiKeysTable();
+  const scraper = await createBrowserApiKey({ userId: 'user-1', name: 'scraper' });
+  const digest = await createBrowserApiKey({ userId: 'user-1' });
+  const ladder = await createScopedApiKey({ userId: 'user-1', scope: 'admin' });
+  assert.equal(scraper.scope, 'browser');
+  assert.equal(scraper.board_id, null);
+  assert.equal(digest.name, 'browser key');
+
+  assert.deepEqual(await resolveApiKey(scraper.key), {
+    id: scraper.id,
+    userId: 'user-1',
+    scope: 'browser',
+    boardId: null,
+    allowedColumns: null,
+  });
+  assert.ok(await resolveApiKey(digest.key), 'minting another never kills the first');
+  assert.ok(await resolveApiKey(ladder.key), 'browser keys do not touch the ladder keys');
+
+  assert.equal(await revokeScopedApiKey(scraper.id, 'user-1'), true);
+  assert.equal(await resolveApiKey(scraper.key), null);
+  assert.ok(await resolveApiKey(digest.key), 'revoking one browser key spares the others');
+
+  // A browser row that somehow carries a board is half-written: refused.
+  rows.find(r => r.id === digest.id)!.board_id = BOARD;
+  assert.equal(await resolveApiKey(digest.key), null);
+});
+
+test('createScopedApiKey refuses the browser scope — it is not a ladder rung', async () => {
+  reset();
+  await ensureApiKeysTable();
+  await assert.rejects(
+    createScopedApiKey({ userId: 'user-1', scope: 'browser' as any }),
+    /Unknown API key scope/
+  );
+  assert.equal(rows.length, 0);
+});
+
+test('browser is off the ladder in both directions, and apart from insert', () => {
+  assert.equal(scopeSatisfies('browser', 'browser'), true);
+  for (const other of ['admin', 'management', 'insert'] as const) {
+    assert.equal(scopeSatisfies('browser', other), false, `browser opens no ${other} surface`);
+    assert.equal(scopeSatisfies(other, 'browser'), false, `${other} does not open browser`);
+  }
 });
 
 test('touchApiKey records last use and never throws the request', async () => {

@@ -1142,6 +1142,13 @@ export const api = {
       ...(allowedColumns?.length ? { allowed_columns: allowedColumns } : {}),
     }),
 
+  /**
+   * Mint a NEW browser key (never rotates another one), opening only the web
+   * browser MCP for another service. Returns the key once.
+   */
+  createBrowserApiKey: (name?: string) =>
+    post<ScopedApiKeyCreated>('/settings/api-key/mine', { scope: 'browser', name }),
+
   /** The generated OpenAPI 3.1 document of every key-authenticated surface. */
   getApiDocs: () => get<OpenApiDocument>('/settings/api-docs/openapi.json'),
 

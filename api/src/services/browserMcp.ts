@@ -7,6 +7,14 @@ import { assertPublicUrl } from '../lib/ssrfGuard.js';
 const BROWSER_SERVICE_URL = process.env.BROWSER_SERVICE_URL || 'http://mcp-browser:8000';
 
 /**
+ * Calls a `browser` key may make per minute on /api/mcp/browser (src/index.ts),
+ * on top of the global per-IP limit. A crawl drives a real browser — and an
+ * `extract` an LLM call — so a key handed to another service is held tighter
+ * than an insert key.
+ */
+export const BROWSER_KEY_RATE_LIMIT_PER_MINUTE = 30;
+
+/**
  * Every URL below is chosen by an agent, and an agent's input is whatever it
  * last read — a cloned README, a Jira comment, a page it crawled a moment ago.
  * mcp-browser sits on the `backend` overlay next to team-api and postgres, so

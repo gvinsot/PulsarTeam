@@ -3,6 +3,7 @@ import { X, Key, Copy, RefreshCw, Trash2, Shield, BookOpen } from 'lucide-react'
 import { api } from '../api';
 import type { LadderApiKeyScope, ScopedApiKey, ScopedApiKeyCreated, ShowToastFn } from '../types';
 import InsertKeysSection from './apiKeys/InsertKeysSection';
+import BrowserKeysSection from './apiKeys/BrowserKeysSection';
 import ApiDocsPanel, { type ApiDocsSection } from './apiKeys/ApiDocsPanel';
 
 interface ApiKeyModalProps {
@@ -58,6 +59,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   /** Clear text of a just-minted ladder key, keyed by scope. Shown once. */
   const [freshScoped, setFreshScoped] = useState<Partial<Record<LadderApiKeyScope, string>>>({});
   const [freshInsert, setFreshInsert] = useState<ScopedApiKeyCreated | null>(null);
+  const [freshBrowser, setFreshBrowser] = useState<ScopedApiKeyCreated | null>(null);
   const [minting, setMinting] = useState<LadderApiKeyScope | null>(null);
 
   const reloadMyKeys = useCallback(async () => {
@@ -122,6 +124,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   };
 
   const insertKeys = myKeys.filter(k => k.scope === 'insert');
+  const browserKeys = myKeys.filter(k => k.scope === 'browser');
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
@@ -184,6 +187,9 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
               freshKeys={{
                 ...freshScoped,
                 insert: myKeys.some(k => k.id === freshInsert?.id) ? freshInsert?.key : undefined,
+                browser: myKeys.some(k => k.id === freshBrowser?.id)
+                  ? freshBrowser?.key
+                  : undefined,
               }}
             />
           ) : (
@@ -205,6 +211,28 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
                     keys={insertKeys}
                     onChanged={reloadMyKeys}
                     onOpenDocs={() => openDocs('quickstart')}
+                    showToast={showToast}
+                  />
+                )}
+              </div>
+
+              {/* ── Browser keys ──────────────────────────────────────────── */}
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-sm font-medium text-dark-300">Web browser</h3>
+                  <p className="text-xs text-dark-500 mt-1">
+                    Let another service search and read the web through this instance. The key
+                    reaches no task, board or agent of yours.
+                  </p>
+                </div>
+                {loading ? (
+                  <div className="text-center py-4 text-dark-400 text-sm">Loading...</div>
+                ) : (
+                  <BrowserKeysSection
+                    onCreated={setFreshBrowser}
+                    keys={browserKeys}
+                    onChanged={reloadMyKeys}
+                    onOpenDocs={() => openDocs('MCP')}
                     showToast={showToast}
                   />
                 )}

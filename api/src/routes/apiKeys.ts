@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { errorMessage } from '../lib/errors.js';
 import {
   API_KEY_SCOPES,
+  createBrowserApiKey,
   createInsertApiKey,
   createScopedApiKey,
   listApiKeysForUser,
@@ -17,8 +18,9 @@ import { validateBody } from '../lib/validate.js';
 /**
  * /api/settings/api-key — every authenticated user manages their own scoped
  * keys under `/mine`: one per (user, scope) for `admin` / `management` (what
- * open /api/mcp/admin and /api/mcp/management), and any number of board-bound
- * `insert` keys (what open /api/insert/* and /api/mcp/insert). They are
+ * open /api/mcp/admin and /api/mcp/management), any number of board-bound
+ * `insert` keys (what open /api/insert/* and /api/mcp/insert), and any number
+ * of `browser` keys (what open /api/mcp/browser). They are
  * personal credentials: an admin cannot list, mint or read another user's keys
  * through this router. The ownerless instance-wide ("legacy") key no longer
  * exists.
@@ -81,6 +83,7 @@ router.get(
 //  • insert: always a new key, bound to `board_id`, which the caller must be
 //    able to edit — the same level POST /api/tasks demands. The middleware
 //    re-checks that level on every request the key later makes.
+//  • browser: always a new key, bound to nothing — one per consuming service.
 router.post(
   '/mine',
   validateBody(createScopedKeySchema),
@@ -118,6 +121,16 @@ router.post(
         return res.status(201).json({ ...result, board_name: access.board.name ?? null });
       } catch (err) {
         console.error('Failed to create insert API key:', errorMessage(err));
+        return res.status(500).json({ error: 'Failed to create API key' });
+      }
+    }
+
+    if (req.body.scope === 'browser') {
+      try {
+        const result = await createBrowserApiKey({ userId: user.userId, name: req.body.name });
+        return res.status(201).json(result);
+      } catch (err) {
+        console.error('Failed to create browser API key:', errorMessage(err));
         return res.status(500).json({ error: 'Failed to create API key' });
       }
     }

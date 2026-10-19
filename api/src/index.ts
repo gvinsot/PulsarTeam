@@ -23,7 +23,10 @@ import { MCPManager } from './services/mcpManager.js';
 import { CodeIndexService } from './services/codeIndexService.js';
 import { createCodeIndexMcpHandler } from './services/codeIndexMcp.js';
 import { createGandiDnsMcpHandler } from './services/gandiDnsMcp.js';
-import { createBrowserMcpHandler } from './services/browserMcp.js';
+import {
+  BROWSER_KEY_RATE_LIMIT_PER_MINUTE,
+  createBrowserMcpHandler,
+} from './services/browserMcp.js';
 import { createAuthBrowserMcpHandler } from './services/authBrowserMcp.js';
 import { authBrowserRoutes } from './routes/authBrowser.js';
 import { pluginRoutes } from './routes/plugins.js';
@@ -366,6 +369,27 @@ app.all('/api/mcp/management', requireApiKeyScope('management'), (req, res) =>
 const insertMcpHandler = createInsertMcpHandler(agentManager);
 app.all('/api/mcp/insert', requireApiKeyScope('insert'), (req, res) => insertMcpHandler(req, res));
 app.use('/api/insert', requireApiKeyScope('insert'), insertApiRoutes(agentManager));
+
+// ── Browser surface — `browser` keys ───────────────────────────────────────
+//
+// The web browser MCP agents use (search, crawl, extract, FlareSolverr
+// fallback), opened to another service. Off the ladder like insert: only a
+// browser key opens it, and it opens nothing else. The tools read no tenant
+// data; the SSRF guard in services/browserMcp.ts applies exactly as for agents.
+const browserKeyMcpHandler = createBrowserMcpHandler();
+// Per key, applied inside the handler so the mount's middleware chain stays
+// exactly the guard the route inventory pins.
+const browserKeyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: BROWSER_KEY_RATE_LIMIT_PER_MINUTE,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => `browser-key:${req.apiKey?.id ?? 'unknown'}`,
+  message: { error: 'Too many requests for this API key, please slow down.' },
+});
+app.all('/api/mcp/browser', requireApiKeyScope('browser'), (req, res) =>
+  browserKeyLimiter(req, res, () => browserKeyMcpHandler(req, res))
+);
 
 // Public liveness/readiness probe — unauthenticated, because it is what Docker,
 // Swarm and Traefik poll.
