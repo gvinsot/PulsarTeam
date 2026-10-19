@@ -189,6 +189,11 @@ services:
       # CLAUDE_CODE_OAUTH_TOKEN env. Only the per-node toolchain volumes are kept.
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -249,6 +254,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -310,6 +320,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -382,6 +397,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -452,6 +472,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -510,6 +535,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -567,6 +597,11 @@ services:
       - sandbox-data:/app/data
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -614,6 +649,11 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - mock-data:/app/data
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -735,6 +775,35 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
+
+  # Per-node disk write throttle. Swarm has no blkio settings, so this global
+  # helper writes the cgroup io.max (v2) / blkio throttle (v1) of every local
+  # container labelled io.pulsarteam.io-limit.write-bps (the CLI runners).
+  # It needs the host cgroup tree (rw) and the Docker socket (to list local
+  # containers); it publishes no port and joins no application network.
+  io-limiter:
+    build:
+      context: .
+      dockerfile: io-limiter/Dockerfile
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - LOG_LEVEL=INFO
+      - IO_LIMITER_INTERVAL=15
+    volumes:
+      - /sys/fs/cgroup:/host/cgroup
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    network_mode: none
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
 
 volumes:
   # Rust toolchain, provisioned once per node by runner-service/src/rust_toolchain.sh

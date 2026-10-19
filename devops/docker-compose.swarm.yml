@@ -289,6 +289,11 @@ services:
       # secret above. Only the per-node toolchain volumes below are kept.
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -367,6 +372,11 @@ services:
       - sandbox-data:/app/data
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -427,6 +437,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -502,6 +517,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -585,6 +605,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -661,6 +686,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -738,6 +768,11 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+    # Disk write ceiling, enforced per node by the io-limiter service
+    # (Swarm ignores blkio_config): a runner's builds/installs must not
+    # starve the disk shared with Postgres and the other services.
+    labels:
+      - 'io.pulsarteam.io-limit.write-bps=${RUNNER_IO_WRITE_BPS:-25M}'
     cap_drop:
       - ALL
     cap_add:
@@ -960,6 +995,40 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  # Per-node disk write throttle. Swarm has no blkio settings, so this global
+  # helper writes the cgroup io.max (v2) / blkio throttle (v1) of every local
+  # container labelled io.pulsarteam.io-limit.write-bps (the CLI runners).
+  # It needs the host cgroup tree (rw) and the Docker socket (to list local
+  # containers); it publishes no port and joins no application network.
+  io-limiter:
+    image: registry.methodinfo.fr/pulsarteam-io-limiter:latest
+    build:
+      context: ..
+      dockerfile: io-limiter/Dockerfile
+    environment:
+      - TZ=Europe/Paris
+      - LOG_LEVEL=INFO
+      - IO_LIMITER_INTERVAL=15
+    volumes:
+      - /sys/fs/cgroup:/host/cgroup
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    deploy:
+      mode: global
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 5s
+      labels:
+        - 'traefik.enable=false'
 
 volumes:
   # Rust toolchain, provisioned once per node by runner-service/src/rust_toolchain.sh
