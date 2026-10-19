@@ -1,4 +1,5 @@
 import { waitForProjectSwitch } from './crud.js';
+import { projectRulesSection } from '../projectRules.js';
 import { isAgentBusy, isTaskRunning, reserveAgentForTask } from '../workflow/agentSelector.js';
 import {
   claimRun,
@@ -2407,7 +2408,7 @@ export const tasksMethods = {
           );
         const messageToSend = alreadySent
           ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n${taskContentForPrompt(task, 300)}\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
-          : `Task ID: ${task.id}\n\n${taskContentForPrompt(task)}`;
+          : `Task ID: ${task.id}\n\n${taskContentForPrompt(task)}${await projectRulesSection(task)}`;
 
         // Snapshot the repo HEAD(s) before the run: the wait-loop sweep and the
         // finally reconcile below link every commit the executor makes — the only

@@ -44,6 +44,7 @@ import {
   getTaskById,
   getActiveAssigneeIds,
 } from '../database.js';
+import { projectRulesSection } from '../projectRules.js';
 import {
   clearTaskErrorForRun,
   emitTaskUpdated,
@@ -225,8 +226,8 @@ function buildSetTypePrompt(description: string, external: boolean) {
   return `Classify the following task into exactly one type. The possible types are: bug, feature, technical, improvement, documentation, other.\n\nReply with ONLY the type (a single word, lowercase), nothing else.\n\n${wrapUntrusted(description, 'task_content', external)}`;
 }
 
-function buildRefinePrompt(task: Task, instructions: string) {
-  return `Refine the following task:\n\n${taskContentForPrompt(task)}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved task description.`;
+function buildRefinePrompt(task: Task, instructions: string, projectRules = '') {
+  return `Refine the following task:\n\n${taskContentForPrompt(task)}\n${task.project ? `Project: ${task.project}\n` : ''}${projectRules}\n${instructions}\n\nReply ONLY with the improved task description.`;
 }
 
 function nextColumnAfter(status: string, columns: WorkflowColumn[]) {
@@ -259,7 +260,12 @@ ${example}${targetHint}
 `;
 }
 
-function buildInstructionsPrompt(task: Task, instructions: string, columns: WorkflowColumn[]) {
+function buildInstructionsPrompt(
+  task: Task,
+  instructions: string,
+  columns: WorkflowColumn[],
+  projectRules = ''
+) {
   const columnList = columns?.length
     ? `\nValid statuses (column IDs): ${columns.map(c => c.id).join(', ')}`
     : '';
@@ -274,7 +280,7 @@ ${taskContentForPrompt(task)}
 Current status: ${task.status}
 ${columnList}
 
-${task.error ? `Previous error: ${task.error}\n` : ''}${commits}
+${task.error ? `Previous error: ${task.error}\n` : ''}${commits}${projectRules}
 
 Instructions:
 ${instructions}
@@ -1229,7 +1235,7 @@ async function _runRefineMode(
   instructions: string,
   { agentManager, io: _io, execStartMsgIdx, execStartedAt }: ModeRunContext
 ): Promise<ActionResult> {
-  const prompt = buildRefinePrompt(task, instructions);
+  const prompt = buildRefinePrompt(task, instructions, await projectRulesSection(task));
   console.log(`[ActionExecutor] refine: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
   const buf = { text: '' };
@@ -1290,7 +1296,12 @@ async function _runDecideMode(
     };
   }
 
-  const prompt = buildInstructionsPrompt(task, instructions, columns);
+  const prompt = buildInstructionsPrompt(
+    task,
+    instructions,
+    columns,
+    await projectRulesSection(task)
+  );
   console.log(`[ActionExecutor] decide: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
   // Snapshot task state so we can detect whether the agent actually made a

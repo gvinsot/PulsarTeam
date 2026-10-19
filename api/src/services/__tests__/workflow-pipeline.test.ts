@@ -51,6 +51,8 @@ const noop = async () => {};
 
 // In-memory task DB (the store was removed; DB is the single source of truth).
 const { rows: taskRows, exports: taskDbFake } = makeTaskDbFake();
+// Projects served by the mocked getProjectById, keyed by id.
+const projectRows = new Map<string, { id: string; name: string; rules: string }>();
 
 // Mock database: every export as a no-op
 mock.module('../database.js', {
@@ -83,7 +85,7 @@ mock.module('../database.js', {
     // projects
     getAllProjects: async () => [],
     getProjectsForUser: async () => [],
-    getProjectById: async () => null,
+    getProjectById: async (id: string) => projectRows.get(id) ?? null,
     getProjectByName: async () => null,
     createProject: noop,
     updateProject: noop,
@@ -1032,4 +1034,66 @@ test('an external task is inert until approved, then runs confined with delimite
     { mode?: string; taskId?: string } | undefined;
   assert.equal(profile?.mode, 'external', 'the agent ran confined');
   assert.equal(profile?.taskId, task.id);
+});
+
+// ── Project rules ───────────────────────────────────────────────────────────
+//
+// The rules of the task's project (board → project) are read when the prompt
+// is built, not cached on the agent: an edit reaches the very next run, and a
+// task outside any project gets no section.
+
+test('workflow prompts carry the current rules of the task project', async () => {
+  for (const mode of ['decide', 'refine'] as const) {
+    const mgr = await setup([{ name: 'Worker', role: 'assistant', runner: 'sandbox' }]);
+    const { task } = createTask(mgr, 'Ship the release notes', 'step1');
+    task.projectId = 'proj-rules';
+    task.project = 'Website';
+    projectRows.set('proj-rules', {
+      id: 'proj-rules',
+      name: 'Website',
+      rules: 'Never push to main.',
+    });
+
+    let prompt = '';
+    mgr.sendMessage = async (_id: string, message: string) => {
+      prompt = message;
+      throw new ToolBudgetReachedError();
+    };
+    const action = {
+      type: 'run_agent' as const,
+      mode,
+      role: 'assistant',
+      instructions: 'Do the work',
+    };
+    const context = {
+      agentManager: mgr,
+      io: mockIo,
+      ownerId: null,
+      workflow: { columns: TEST_WORKFLOW.columns, transitions: [] },
+    };
+
+    try {
+      await executeAction(action, task, context);
+      assert.match(prompt, /Project rules \(Website\)[^\n]*\nNever push to main\./, mode);
+      assert.ok(
+        prompt.indexOf('Never push to main.') < prompt.indexOf('Do the work'),
+        `${mode}: rules come before the column instructions`
+      );
+
+      projectRows.set('proj-rules', { id: 'proj-rules', name: 'Website', rules: 'Use pnpm.' });
+      await executeAction(action, task, context);
+      assert.ok(prompt.includes('Use pnpm.'), `${mode}: an edited rule reaches the next run`);
+      assert.ok(!prompt.includes('Never push to main.'), `${mode}: the old rule is gone`);
+
+      projectRows.set('proj-rules', { id: 'proj-rules', name: 'Website', rules: '   ' });
+      await executeAction(action, task, context);
+      assert.ok(!prompt.includes('Project rules'), `${mode}: blank rules add no section`);
+
+      task.projectId = null;
+      await executeAction(action, task, context);
+      assert.ok(!prompt.includes('Project rules'), `${mode}: no project, no section`);
+    } finally {
+      projectRows.clear();
+    }
+  }
 });
