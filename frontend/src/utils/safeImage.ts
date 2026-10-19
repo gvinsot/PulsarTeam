@@ -42,7 +42,9 @@ function isBase64(data: unknown): data is string {
 }
 
 /** Resolves a validated `{ mediaType, data }` pair from an image, preferring `preview`. */
-function resolveSafeImage(img: ImageLike | null | undefined): { mediaType: string; data: string } | null {
+function resolveSafeImage(
+  img: ImageLike | null | undefined
+): { mediaType: string; data: string } | null {
   if (!img) return null;
   if (typeof img.preview === 'string') {
     const match = img.preview.match(DATA_URL_RE);

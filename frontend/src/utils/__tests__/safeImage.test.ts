@@ -14,8 +14,14 @@ test('normalizeSafeImageMediaType only accepts raster image types', () => {
 });
 
 test('safeImageDataUrl builds data URLs only for safe images', () => {
-  assert.equal(safeImageDataUrl({ mediaType: 'image/png', data: PNG_B64 }), `data:image/png;base64,${PNG_B64}`);
-  assert.equal(safeImageDataUrl({ mediaType: 'text/html', data: 'PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==' }), null);
+  assert.equal(
+    safeImageDataUrl({ mediaType: 'image/png', data: PNG_B64 }),
+    `data:image/png;base64,${PNG_B64}`
+  );
+  assert.equal(
+    safeImageDataUrl({ mediaType: 'text/html', data: 'PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==' }),
+    null
+  );
   assert.equal(safeImageDataUrl({ mediaType: 'image/png', data: 'abc"><script>' }), null);
   assert.equal(safeImageDataUrl({ mediaType: 'image/png', data: '' }), null);
   assert.equal(safeImageDataUrl(null), null);
@@ -26,7 +32,7 @@ test('safeImageDataUrl validates preview and falls back to mediaType/data', () =
   assert.equal(safeImageDataUrl({ preview }), preview);
   assert.equal(
     safeImageDataUrl({ preview: 'javascript:alert(1)', mediaType: 'image/png', data: PNG_B64 }),
-    `data:image/png;base64,${PNG_B64}`,
+    `data:image/png;base64,${PNG_B64}`
   );
   assert.equal(safeImageDataUrl({ preview: 'data:text/html;base64,PGgxPg==' }), null);
 });
