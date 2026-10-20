@@ -35,6 +35,8 @@ const TABLES = [
       last_seen TIMESTAMPTZ,
       terms_accepted_at TIMESTAMPTZ,
       tutorial_completed_at TIMESTAMPTZ,
+      approval_status TEXT NOT NULL DEFAULT 'approved'
+        CHECK (approval_status IN ('approved', 'pending', 'rejected')),
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )

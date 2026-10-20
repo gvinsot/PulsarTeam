@@ -120,6 +120,10 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
 
   // ── /api/users ────────────────────────────────────────────────────
   'GET /api/users': ['authenticateToken', 'requireRole(admin)'],
+  'GET /api/users/pending': ['authenticateToken', 'requireRole(admin)'],
+  'GET /api/users/pending/count': ['authenticateToken', 'requireRole(admin)'],
+  'POST /api/users/:id/approve': ['authenticateToken', 'requireRole(admin)'],
+  'POST /api/users/:id/reject': ['authenticateToken', 'requireRole(admin)'],
   'GET /api/users/:id': ['authenticateToken', 'requireRole(admin)'],
   'POST /api/users': ['authenticateToken', 'requireRole(admin)'],
   'PUT /api/users/:id': ['authenticateToken', 'requireRole(admin)'],

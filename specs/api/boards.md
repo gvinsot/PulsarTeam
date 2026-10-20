@@ -84,6 +84,7 @@ List current shares.
 Share with another user.
 - **Auth**: board admin.
 - **Body**: `{ userId?, username?, permission: 'read'|'edit'|'admin' }`.
+- An unknown email `username` pre-creates a credential-less account, `pending` admin approval (see [auth.md](auth.md#account-approval)): the invitee's first OAuth login adopts it and is refused until an admin approves it.
 - **Errors**: 400 if trying to share with self or with the owner.
 
 ### PUT `/api/boards/:id/shares/:userId`

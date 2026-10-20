@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../api';
 import { errorMessage } from '../../utils/errors';
-import type { ImpersonateResponse, ShowToastFn, User } from '../../types';
+import type { ImpersonateResponse, ShowToastFn, User, UserApprovalStatus } from '../../types';
 
 function timeAgo(date: string | null): string {
   if (!date) return 'never';
@@ -52,13 +52,32 @@ const ROLE_CONFIG = {
   },
 };
 
+// Only the two non-default states get a badge; an approved account shows none.
+const APPROVAL_BADGE: Partial<Record<UserApprovalStatus, { label: string; className: string }>> = {
+  pending: {
+    label: 'Pending approval',
+    className: 'bg-amber-500/10 border border-amber-500/30 text-amber-400',
+  },
+  rejected: {
+    label: 'Rejected',
+    className: 'bg-dark-700 border border-dark-600 text-dark-400',
+  },
+};
+
 interface UsersTabProps {
   showToast?: ShowToastFn;
   onImpersonate?: (data: ImpersonateResponse) => void;
   onClose: () => void;
+  /** Changes when another tab altered users (an approval / rejection), to re-fetch. */
+  reloadToken?: number;
 }
 
-export default function UsersTab({ showToast, onImpersonate, onClose }: UsersTabProps) {
+export default function UsersTab({
+  showToast,
+  onImpersonate,
+  onClose,
+  reloadToken = 0,
+}: UsersTabProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -90,7 +109,7 @@ export default function UsersTab({ showToast, onImpersonate, onClose }: UsersTab
 
   useEffect(() => {
     loadUsers();
-  }, [loadUsers]);
+  }, [loadUsers, reloadToken]);
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
@@ -337,6 +356,7 @@ export default function UsersTab({ showToast, onImpersonate, onClose }: UsersTab
           {users.map(user => {
             const rc = ROLE_CONFIG[user.role] || ROLE_CONFIG.basic;
             const RoleIcon = rc.icon;
+            const approval = APPROVAL_BADGE[user.approval_status];
             return (
               <div
                 key={user.id}
@@ -358,6 +378,11 @@ export default function UsersTab({ showToast, onImpersonate, onClose }: UsersTab
                   <span className={`text-[10px] px-1 py-0.5 rounded ${rc.bg} ${rc.color}`}>
                     {rc.label}
                   </span>
+                  {approval && (
+                    <span className={`text-[10px] px-1 py-0.5 rounded ${approval.className}`}>
+                      {approval.label}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span
@@ -368,8 +393,14 @@ export default function UsersTab({ showToast, onImpersonate, onClose }: UsersTab
                   <div className="flex items-center gap-0.5">
                     <button
                       onClick={() => handleImpersonate(user)}
-                      className="p-1.5 text-dark-400 hover:text-emerald-400 hover:bg-dark-700 rounded transition-colors"
-                      title={`Impersonate ${user.username}`}
+                      // The API refuses a session to an account that is not approved.
+                      disabled={user.approval_status !== 'approved'}
+                      className="p-1.5 text-dark-400 hover:text-emerald-400 hover:bg-dark-700 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={
+                        user.approval_status === 'approved'
+                          ? `Impersonate ${user.username}`
+                          : 'Approve the account first'
+                      }
                     >
                       <Eye className="w-3.5 h-3.5" />
                     </button>

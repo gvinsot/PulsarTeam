@@ -186,6 +186,22 @@ const translations = {
     fr: 'Interface sécurisée de gestion multi-agents',
   },
 
+  // Account approval notice (new OAuth accounts wait for an administrator)
+  'login.pendingTitle': {
+    en: 'Account awaiting validation',
+    fr: 'Compte en attente de validation',
+  },
+  'login.pendingMessage': {
+    en: 'Your account was created and is awaiting validation by an administrator. You will be able to sign in once it is approved.',
+    fr: "Votre compte a été créé et est en attente de validation par un administrateur. Vous pourrez vous connecter dès qu'il sera approuvé.",
+  },
+  'login.rejectedTitle': { en: 'Access request declined', fr: "Demande d'accès refusée" },
+  'login.rejectedMessage': {
+    en: 'Your access request was declined.',
+    fr: "Votre demande d'accès a été refusée.",
+  },
+  'login.noticeClose': { en: 'OK', fr: 'OK' },
+
   // Contact form
   'contact.title': { en: 'Contact Us', fr: 'Nous contacter' },
   'contact.titleSupport': { en: 'Request Support', fr: 'Demander du support' },

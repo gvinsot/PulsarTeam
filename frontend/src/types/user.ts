@@ -68,7 +68,62 @@ export interface User extends UserDirectoryEntry {
   /** Not a column — computed from the live socket registry. Present ONLY on
    *  GET /users; absent from GET /boards/users and GET /users/:id. */
   is_online: boolean;
+  /** The admin-approval gate. DEFAULT 'approved', so every pre-existing row and
+   *  every non-OAuth creation is approved; only a NEW OAuth account starts
+   *  'pending'. */
+  approval_status: UserApprovalStatus;
 }
+
+/**
+ * Where an account stands with respect to admin approval. RULE 1(b): api/src is
+ * the only writer (OAuth creation, POST /users/:id/approve|reject) and the
+ * column is not in the update schema.
+ */
+export type UserApprovalStatus = 'approved' | 'pending' | 'rejected';
+
+/** The sign-in providers an OAuth account can come from ("Hotmail" accounts
+ *  sign in through Microsoft). */
+export type LoginProvider = 'google' | 'microsoft' | 'github';
+
+/**
+ * One row of GET /api/users/pending (admin only) — an OAuth account awaiting
+ * approval. camelCase, unlike the users rows of GET /users.
+ */
+export interface PendingUser {
+  id: string;
+  /** For OAuth accounts this is the email, or <login>@users.noreply.github.com. */
+  username: string;
+  displayName: string | null;
+  /** May be an https URL (Google/GitHub) or a data: URI (Microsoft photo). */
+  avatarUrl: string | null;
+  /** null when the row carries no provider id at all. */
+  provider: LoginProvider | null;
+  /** ISO-8601 — when the account was created, i.e. when access was requested. */
+  createdAt: string;
+}
+
+/** Body of GET /api/users/pending — oldest request first. */
+export interface PendingUsersResponse {
+  users: PendingUser[];
+}
+
+/** Body of GET /api/users/pending/count, and the payload of the admin-only
+ *  'users:pending' socket event. */
+export interface PendingUsersCount {
+  count: number;
+}
+
+/** Body of POST /api/users/:id/approve. */
+export interface UserApprovedResponse {
+  user: UserMutationResult;
+}
+
+/**
+ * The `code` of the 403 `{ error, code }` an OAuth callback (or POST
+ * /auth/login) answers for an account that is not approved. No session cookie
+ * is set on that response.
+ */
+export type AccountApprovalErrorCode = 'ACCOUNT_PENDING_APPROVAL' | 'ACCOUNT_REJECTED';
 
 /**
  * The much thinner user object returned by POST /users (201) and PUT /users/:id —

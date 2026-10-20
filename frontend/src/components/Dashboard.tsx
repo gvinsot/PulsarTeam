@@ -24,6 +24,7 @@ import {
 import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../api';
 import { useClickOutside } from '../hooks/useDismiss';
+import { usePendingUsersCount } from '../hooks/usePendingUsersCount';
 import { safeGet, safeSet, safeRemove } from '../lib/safeStorage';
 import { WsEvents } from '../socketEvents';
 import AgentCard from './AgentCard';
@@ -34,6 +35,8 @@ import AgentDetail, { CLI_RUNNERS } from './AgentDetail';
 import SwarmOverview from './SwarmOverview';
 import ActiveVoiceIndicator from './ActiveVoiceIndicator';
 import ApiKeyModal from './ApiKeyModal';
+// Type-only: erased at build time, so AdminPanel stays a lazy chunk.
+import type { AdminTabId } from './AdminPanel';
 import { Crown, UserCheck } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
 import type {
@@ -159,6 +162,7 @@ export default function Dashboard({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [adminPanelTab, setAdminPanelTab] = useState<AdminTabId>('users');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [boards, setBoards] = useState<BoardListItem[]>([]);
   const [agentSearch, setAgentSearch] = useState('');
@@ -182,6 +186,11 @@ export default function Dashboard({
   const { theme, toggleTheme } = useTheme() as { theme: string; toggleTheme: () => void };
   const isAdmin = user?.role === 'admin';
   const isBasic = user?.role === 'basic';
+  // New OAuth accounts awaiting approval — the admin alert badge.
+  const { count: pendingUsersCount, setCount: setPendingUsersCount } = usePendingUsersCount(
+    isAdmin,
+    socket
+  );
 
   // Reload the project list that feeds the header scope chip + ProjectDrawer.
   // Also refresh the app-level projects prop so downstream modals stay in sync.
@@ -486,7 +495,17 @@ export default function Dashboard({
                 <span className="text-sm text-dark-300 hidden sm:inline">
                   {user.displayName || user.username}
                 </span>
-                {isAdmin && <Crown className="w-3.5 h-3.5 text-red-400" />}
+                {isAdmin && (
+                  <span className="relative inline-flex">
+                    <Crown className="w-3.5 h-3.5 text-red-400" />
+                    {pendingUsersCount > 0 && (
+                      <span
+                        className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 ring-2 ring-dark-900"
+                        title={`${pendingUsersCount} user(s) awaiting approval`}
+                      />
+                    )}
+                  </span>
+                )}
                 {user?.role === 'advanced' && <UserCheck className="w-3.5 h-3.5 text-amber-400" />}
                 <ChevronDown
                   className={`w-3.5 h-3.5 text-dark-400 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`}
@@ -497,6 +516,7 @@ export default function Dashboard({
                   {isAdmin && (
                     <button
                       onClick={() => {
+                        setAdminPanelTab('users');
                         setShowAdminPanel(true);
                         setUserMenuOpen(false);
                       }}
@@ -504,6 +524,30 @@ export default function Dashboard({
                     >
                       <Settings className="w-4 h-4" />
                       Admin Settings
+                    </button>
+                  )}
+                  {isAdmin && (
+                    // The approval queue's own entry; its badge is the alert.
+                    <button
+                      onClick={() => {
+                        setAdminPanelTab('pending');
+                        setShowAdminPanel(true);
+                        setUserMenuOpen(false);
+                      }}
+                      className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-dark-300 hover:bg-dark-700 hover:text-dark-100 transition-colors"
+                      title={
+                        pendingUsersCount > 0
+                          ? `${pendingUsersCount} user(s) awaiting approval`
+                          : undefined
+                      }
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      <span className="flex-1 text-left">Pending users</span>
+                      {pendingUsersCount > 0 && (
+                        <span className="min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none text-center">
+                          {pendingUsersCount}
+                        </span>
+                      )}
                     </button>
                   )}
                   <button
@@ -855,6 +899,9 @@ export default function Dashboard({
             onClose={() => setShowAdminPanel(false)}
             onImpersonate={onImpersonate}
             showToast={showToast}
+            initialTab={adminPanelTab}
+            pendingCount={pendingUsersCount}
+            onPendingCountChange={setPendingUsersCount}
           />
         </Suspense>
       )}

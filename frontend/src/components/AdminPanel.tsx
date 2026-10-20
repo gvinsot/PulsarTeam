@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { X, Users, Crown, Settings, Cpu, LayoutGrid, UserX, Bot } from 'lucide-react';
+import { X, Users, Crown, Settings, Cpu, LayoutGrid, UserX, Bot, UserPlus } from 'lucide-react';
 import UsersTab from './admin/UsersTab';
+import PendingUsersTab from './admin/PendingUsersTab';
 import SettingsTab from './admin/SettingsTab';
 import LlmConfigsTab from './admin/LlmConfigsTab';
 import AgentTypesTab from './admin/AgentTypesTab';
@@ -10,21 +11,40 @@ import type { ImpersonateResponse, ShowToastFn } from '../types';
 
 const TABS = [
   { id: 'users', label: 'Users', icon: Users },
+  { id: 'pending', label: 'Pending users', icon: UserPlus },
   { id: 'settings', label: 'Settings', icon: Settings },
   { id: 'llm', label: 'LLM Models', icon: Cpu },
   { id: 'agentTypes', label: 'Agent Types', icon: Bot },
   { id: 'boards', label: 'Boards', icon: LayoutGrid },
   { id: 'orphans', label: 'Orphan Agents', icon: UserX },
-];
+] as const;
+
+export type AdminTabId = (typeof TABS)[number]['id'];
 
 interface AdminPanelProps {
   onClose: () => void;
   onImpersonate?: (data: ImpersonateResponse) => void;
   showToast?: ShowToastFn;
+  /** The tab shown on open — 'pending' when opened from the approval alert. */
+  initialTab?: AdminTabId;
+  /** Accounts awaiting approval (live), shown as the Pending users tab badge. */
+  pendingCount?: number;
+  /** The server's new pending count after an approval / rejection. */
+  onPendingCountChange?: (count: number) => void;
 }
 
-export default function AdminPanel({ onClose, onImpersonate, showToast }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState('users');
+export default function AdminPanel({
+  onClose,
+  onImpersonate,
+  showToast,
+  initialTab = 'users',
+  pendingCount = 0,
+  onPendingCountChange,
+}: AdminPanelProps) {
+  const [activeTab, setActiveTab] = useState<AdminTabId>(initialTab);
+  // Bumped when an approval / rejection changes a user's status, so the Users
+  // tab (mounted alongside) re-fetches its list.
+  const [usersVersion, setUsersVersion] = useState(0);
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
@@ -49,12 +69,12 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }: AdminP
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-dark-700">
+        <div className="flex border-b border-dark-700 overflow-x-auto">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
+              className={`flex items-center gap-2 px-6 py-3 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
                 activeTab === id
                   ? 'border-indigo-500 text-indigo-400'
                   : 'border-transparent text-dark-400 hover:text-dark-200'
@@ -62,6 +82,11 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }: AdminP
             >
               <Icon className="w-4 h-4" />
               {label}
+              {id === 'pending' && pendingCount > 0 && (
+                <span className="min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none text-center">
+                  {pendingCount}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -71,7 +96,21 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }: AdminP
             `active` prop drives each tab's activation re-fetches. */}
         <div className="flex-1 overflow-auto p-6">
           <div className={activeTab === 'users' ? 'space-y-6' : 'hidden'}>
-            <UsersTab showToast={showToast} onImpersonate={onImpersonate} onClose={onClose} />
+            <UsersTab
+              showToast={showToast}
+              onImpersonate={onImpersonate}
+              onClose={onClose}
+              reloadToken={usersVersion}
+            />
+          </div>
+          <div className={activeTab === 'pending' ? 'space-y-6' : 'hidden'}>
+            <PendingUsersTab
+              active={activeTab === 'pending'}
+              pendingCount={pendingCount}
+              showToast={showToast}
+              onCountChange={onPendingCountChange}
+              onUsersChanged={() => setUsersVersion(v => v + 1)}
+            />
           </div>
           <div className={activeTab === 'settings' ? 'space-y-6' : 'hidden'}>
             <SettingsTab active={activeTab === 'settings'} showToast={showToast} />

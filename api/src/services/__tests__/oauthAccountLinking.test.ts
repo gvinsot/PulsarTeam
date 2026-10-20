@@ -29,6 +29,7 @@ mock.module('../database.js', {
     getUserByUsername: async (u: string) => usersByUsername[u] || null,
     getUserById: async (id: string) => usersById[id] || null,
     countUsers: async () => Object.keys(usersById).length,
+    countPendingApprovalUsers: async () => 0,
     createUser: async () => ({}),
     isDatabaseConnected: () => true,
     getBoardById: async () => null,

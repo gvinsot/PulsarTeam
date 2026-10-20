@@ -5,6 +5,14 @@ import { errorCode, errorMessage } from '../../lib/errors.js';
 const PG_UNIQUE_VIOLATION = '23505';
 
 /**
+ * Whether an admin let the account in. Only a NEW account created by an OAuth
+ * login starts 'pending' (see findOrCreateOAuthUser); the column DEFAULT makes
+ * every other row 'approved'. 'rejected' rows are kept so the same identity
+ * cannot simply sign up again.
+ */
+export type ApprovalStatus = 'approved' | 'pending' | 'rejected';
+
+/**
  * A full `SELECT *` row of the `users` table, mirroring the DDL in
  * baseSchema.ts plus the idempotent ALTERs in migrations.ts. Every nullable
  * column is typed nullable; TIMESTAMPTZ comes back from pg as a `Date`.
@@ -27,6 +35,7 @@ export interface UserRow {
   last_seen: Date | null;
   terms_accepted_at: Date | null;
   tutorial_completed_at: Date | null;
+  approval_status: ApprovalStatus;
   created_at: Date | null;
   updated_at: Date | null;
 }
@@ -36,7 +45,7 @@ export async function getAllUsers() {
   if (!pool) return [];
   try {
     const result = await pool.query<Omit<UserRow, 'password'>>(
-      'SELECT id, username, role, display_name, google_id, microsoft_id, github_id, avatar_url, last_seen, terms_accepted_at, tutorial_completed_at, created_at, updated_at FROM users ORDER BY created_at'
+      'SELECT id, username, role, display_name, google_id, microsoft_id, github_id, avatar_url, last_seen, terms_accepted_at, tutorial_completed_at, approval_status, created_at, updated_at FROM users ORDER BY created_at'
     );
     return result.rows;
   } catch (err) {
@@ -96,15 +105,18 @@ export async function createUser(
  * id). It cannot sign in by itself; the first OAuth login whose verified email
  * equals `username` adopts it (see findOrCreateOAuthUser), so anything already
  * shared with it is there on that first connection.
+ *
+ * It is a brand-new person, so it starts 'pending' like any OAuth sign-up: the
+ * adopting login is refused until an admin approves it (which provisions it).
  */
 export async function createPendingUser(username: string, role = 'advanced') {
   const pool = getPool();
   if (!pool) throw new Error('Database not connected');
   try {
     const result = await pool.query(
-      `INSERT INTO users (username, password, role, display_name)
-       VALUES ($1, NULL, $2, $1)
-       RETURNING id, username, role, display_name, created_at, updated_at`,
+      `INSERT INTO users (username, password, role, display_name, approval_status)
+       VALUES ($1, NULL, $2, $1, 'pending')
+       RETURNING id, username, role, display_name, approval_status, created_at, updated_at`,
       [username, role]
     );
     return result.rows[0];
@@ -182,23 +194,29 @@ export async function getUserByProviderId(provider: IdProvider, externalId: stri
   }
 }
 
+/**
+ * Create the account of an OAuth identity. It defaults to 'pending' — unlike
+ * every other creation path — because an OAuth login is the one way in that no
+ * admin initiated; findOrCreateOAuthUser passes the status explicitly.
+ */
 export async function createProviderUser(
   provider: IdProvider,
   externalId: string,
   username: string,
   displayName: string,
   avatarUrl: string | null,
-  role = 'advanced'
+  role = 'advanced',
+  approvalStatus: ApprovalStatus = 'pending'
 ) {
   const col = PROVIDER_ID_COLUMNS[provider];
   const pool = getPool();
   if (!pool) throw new Error('Database not connected');
   try {
     const result = await pool.query(
-      `INSERT INTO users (username, password, role, display_name, ${col}, avatar_url)
-       VALUES ($1, NULL, $2, $3, $4, $5)
-       RETURNING id, username, role, display_name, ${col}, avatar_url, created_at, updated_at`,
-      [username, role, displayName || username, externalId, avatarUrl || null]
+      `INSERT INTO users (username, password, role, display_name, ${col}, avatar_url, approval_status)
+       VALUES ($1, NULL, $2, $3, $4, $5, $6)
+       RETURNING id, username, role, display_name, ${col}, avatar_url, approval_status, created_at, updated_at`,
+      [username, role, displayName || username, externalId, avatarUrl || null, approvalStatus]
     );
     return result.rows[0];
   } catch (err) {
@@ -233,16 +251,17 @@ export async function linkProviderId(
 // The per-provider aliases below mirror the LoginProviderSpec DB hooks in
 // routes/authLogin.ts one for one: getByProviderId(id), linkProviderId(userId,
 // id, avatarUrl | null) and createUser(id, loginUsername, displayName,
-// avatarUrl | null, role). `avatarUrl` is nullable because every provider
-// profile mapper falls back to `null` when the picture is absent.
+// avatarUrl | null, role, approvalStatus). `avatarUrl` is nullable because
+// every provider profile mapper falls back to `null` when the picture is absent.
 export const getUserByGoogleId = (googleId: string) => getUserByProviderId('google', googleId);
 export const createGoogleUser = (
   googleId: string,
   email: string,
   displayName: string,
   avatarUrl: string | null,
-  role = 'advanced'
-) => createProviderUser('google', googleId, email, displayName, avatarUrl, role);
+  role = 'advanced',
+  approvalStatus: ApprovalStatus = 'pending'
+) => createProviderUser('google', googleId, email, displayName, avatarUrl, role, approvalStatus);
 export const linkGoogleId = (userId: string, googleId: string, avatarUrl: string | null) =>
   linkProviderId('google', userId, googleId, avatarUrl);
 
@@ -253,8 +272,10 @@ export const createMicrosoftUser = (
   email: string,
   displayName: string,
   avatarUrl: string | null,
-  role = 'advanced'
-) => createProviderUser('microsoft', microsoftId, email, displayName, avatarUrl, role);
+  role = 'advanced',
+  approvalStatus: ApprovalStatus = 'pending'
+) =>
+  createProviderUser('microsoft', microsoftId, email, displayName, avatarUrl, role, approvalStatus);
 export const linkMicrosoftId = (userId: string, microsoftId: string, avatarUrl: string | null) =>
   linkProviderId('microsoft', userId, microsoftId, avatarUrl);
 
@@ -264,8 +285,9 @@ export const createGitHubUser = (
   email: string,
   displayName: string,
   avatarUrl: string | null,
-  role = 'advanced'
-) => createProviderUser('github', githubId, email, displayName, avatarUrl, role);
+  role = 'advanced',
+  approvalStatus: ApprovalStatus = 'pending'
+) => createProviderUser('github', githubId, email, displayName, avatarUrl, role, approvalStatus);
 export const linkGitHubId = (userId: string, githubId: string, avatarUrl: string | null) =>
   linkProviderId('github', userId, githubId, avatarUrl);
 
@@ -325,4 +347,62 @@ export async function countUsers() {
     console.error('Failed to count users:', errorMessage(err));
     throw err;
   }
+}
+
+/** A row of the admin's approval queue (GET /api/users/pending). */
+export interface PendingApprovalUserRow {
+  id: string;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  google_id: string | null;
+  microsoft_id: string | null;
+  github_id: string | null;
+  created_at: Date | null;
+}
+
+/**
+ * Accounts waiting for an admin, oldest first. Errors propagate: an empty
+ * queue must mean "nobody is waiting", never "the query failed".
+ */
+export async function getPendingApprovalUsers(): Promise<PendingApprovalUserRow[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const result = await pool.query<PendingApprovalUserRow>(
+    `SELECT id, username, display_name, avatar_url, google_id, microsoft_id, github_id, created_at
+       FROM users WHERE approval_status = 'pending'
+      ORDER BY created_at ASC, id ASC`
+  );
+  return result.rows;
+}
+
+export async function countPendingApprovalUsers(): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  const result = await pool.query<{ count: string }>(
+    "SELECT COUNT(*) AS count FROM users WHERE approval_status = 'pending'"
+  );
+  return parseInt(result.rows[0].count, 10);
+}
+
+/**
+ * Move an account from `from` to `to` — and, when given, set its role in the
+ * same statement. Conditional on the current status so two admins acting at
+ * once cannot both win: the loser gets `null` (nothing matched).
+ */
+export async function setUserApprovalStatus(
+  id: string,
+  from: ApprovalStatus,
+  to: ApprovalStatus,
+  role?: string
+) {
+  const pool = getPool();
+  if (!pool) throw new Error('Database not connected');
+  const result = await pool.query(
+    `UPDATE users SET approval_status = $3, role = COALESCE($4, role), updated_at = NOW()
+      WHERE id = $1 AND approval_status = $2
+      RETURNING id, username, role, display_name, avatar_url, approval_status, created_at, updated_at`,
+    [id, from, to, role ?? null]
+  );
+  return result.rows[0] || null;
 }

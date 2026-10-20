@@ -1,6 +1,6 @@
 import express from 'express';
 import { createPendingUser } from '../services/database/users.js';
-import { provisionNewUser } from '../services/userProvisioning.js';
+import { emitPendingUsersCount, type AdminSocketEmitter } from '../services/userApproval.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { resolveSessionToken } from '../middleware/session.js';
 import { isInternalServiceSession } from '../lib/agentAccess.js';
@@ -387,16 +387,19 @@ export function boardRoutes(agentManager: AgentManager) {
           user = found;
         } else {
           // Unknown email: pre-create the account so the share is waiting on
-          // the invitee's first login.
+          // the invitee's first login. It starts pending: an admin still has to
+          // let this new person in, and approval is what provisions it.
           const email = String(targetUsername).trim().toLowerCase();
           if (!EMAIL_RE.test(email)) {
             return res.status(404).json({ error: `User "${targetUsername}" not found` });
           }
           const created: { id: string; username: string } = await createPendingUser(email);
           user = created;
-          await provisionNewUser(created.id).catch(err =>
-            console.error('Provisioning error:', err.message)
+          console.log(
+            `[Auth] ${req.user.username} invited "${created.username}" (${created.id}) ` +
+              `through board ${board.id}; awaiting admin approval`
           );
+          await emitPendingUsersCount(req.app.get('io') as AdminSocketEmitter | undefined);
         }
         targetUserId = user.id;
         targetUsername = user.username;

@@ -67,6 +67,10 @@ export const WsEvents = {
   BRIDGE_TOOL_CALL: 'bridge:tool:call', // server → desktop: run a file/office tool (ack = result)
   BRIDGE_FOLDER_CHANGED: 'bridge:folder:changed', // server → user web sockets: desktop state changed
 
+  // Admin: the number of OAuth accounts awaiting approval changed. Emitted to
+  // the `role:admin` room only (services/userApproval.ts).
+  USERS_PENDING: 'users:pending',
+
   ERROR: 'error',
   HANDOFF_COMPLETE: 'agent:handoff:complete',
   HANDOFF_ERROR: 'agent:handoff:error',
