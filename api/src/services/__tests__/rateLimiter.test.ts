@@ -86,7 +86,10 @@ test('delays requests when limit is exceeded', async () => {
   await Promise.all(promises);
 
   assert.equal(timestamps.length, 3);
-  const gap = timestamps[2] - timestamps[1];
-  // The 3rd request must wait for the window to expire (~100ms)
-  assert.ok(gap >= 100, `3rd request should be delayed by at least windowMs, got ${gap}ms`);
+  // The 3rd request waits until the OLDEST one leaves the window, so it is
+  // measured from the 1st: from the 2nd, the gap shrinks by however late the
+  // 2nd ran (97ms seen in CI). A few ms of slack absorb timer rounding and the
+  // gap between the limiter's timestamp and the one taken here.
+  const gap = timestamps[2] - timestamps[0];
+  assert.ok(gap >= 95, `3rd request should wait for the 1st to leave the window, got ${gap}ms`);
 });
