@@ -121,6 +121,10 @@ export interface AgentManager {
   _haltAgentTasks(id: string, stopTimestamp: string): Promise<void>;
   stopAgent(id: string): boolean;
   abortChatTurn(id: string, reason?: string): boolean;
+  isTerminalDriven(id: string): boolean;
+  startCliTurn(id: string, prompt: string, label: string): Promise<void>;
+  isCliTurnActive(id: string, prompt: string): boolean;
+  endCliTurn(id: string, prompt: string, opts?: { interrupt?: boolean }): void;
   beginStream(
     agentId: string,
     opts?: { userMessage?: string | null; userMessageId?: string | null }

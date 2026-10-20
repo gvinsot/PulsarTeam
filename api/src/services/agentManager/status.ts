@@ -11,10 +11,11 @@ import {
   getTotalTokensByAgentId,
   getTotalTokensForAgent,
 } from '../database.js';
-import { getTaskSignal, setTaskSignal } from './tasks.js';
+import { bindAgentRunner, getTaskSignal, setTaskSignal } from './tasks.js';
 import { isCliRunner } from '../runners.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
-import { getAgentRunningTaskId } from '../workflow/agentSelector.js';
+import { getAgentRunningTaskId, isAgentBusy } from '../workflow/agentSelector.js';
+import { noteCliActivity, noteCliPromptInjected } from './cliActivity.js';
 import { emitTaskUpdated } from '../taskMutations.js';
 import type { Task } from '../database/tasks.js';
 import type { AgentManager } from './index.js';
@@ -541,6 +542,73 @@ export const statusMethods = {
     console.log(`🛑 Agent ${agent.name}: chat turn aborted (${reason})`);
     this._emit('agent:stopped', { id, name: agent.name, project: agent.project || null });
     return true;
+  },
+
+  /** True when the agent works in its shared terminal (a CLI runner). */
+  isTerminalDriven(this: AgentManager, id: string): boolean {
+    const agent = this.agents.get(id);
+    return !!(agent && isCliRunner(agent) && this.executionManager?.sendTerminalInput);
+  },
+
+  /**
+   * Start a turn in the agent's shared terminal for a caller that is not a task
+   * (the LLM API). The prompt is pasted into the CLI the UI shows, so the user
+   * sees it and can step in — a /login, an answer to a question. The agent is
+   * held busy by the chat lock (keyed on `prompt`) and `currentTask`, which the
+   * CLI-activity idle timer leaves alone, until endCliTurn.
+   *
+   * Throws 'Agent is already processing a message' when anything else holds
+   * the agent: a chat turn, a task run, or a CLI still at work.
+   */
+  async startCliTurn(this: AgentManager, id: string, prompt: string, label: string): Promise<void> {
+    const agent = this.agents.get(id);
+    if (!agent) throw new Error('Agent not found');
+    if (this._chatLocks.has(id) || agent.status === 'busy' || isAgentBusy(id)) {
+      throw new Error('Agent is already processing a message');
+    }
+    // Held before the first await, so no task or chat slips in meanwhile.
+    this._chatLocks.set(id, prompt);
+    agent.currentTask = label.slice(0, 200);
+    this.setStatus(id, 'busy', label);
+    try {
+      if (!(await this._isCliQuiet(id))) {
+        throw new Error('Agent is already processing a message (its terminal is active)');
+      }
+      await bindAgentRunner(this, agent);
+      await this.executionManager.sendTerminalInput(id, prompt, { submit: true });
+      noteCliPromptInjected(this, id, 'LLM API prompt injected');
+    } catch (err) {
+      this.endCliTurn(id, prompt);
+      throw err;
+    }
+  },
+
+  /** Whether the terminal turn started with `prompt` still holds the agent
+   * (a Stop or a context reload releases it). */
+  isCliTurnActive(this: AgentManager, id: string, prompt: string): boolean {
+    return this._chatLocks.get(id) === prompt;
+  },
+
+  /**
+   * Release a turn started by startCliTurn — only while it still holds the
+   * agent. `interrupt` also stops the CLI (the caller went away, or gave up).
+   * The agent goes idle through the CLI-activity quiet timer rather than here:
+   * the CLI usually still prints its closing reply after the answer, and
+   * nothing may be pasted into it meanwhile.
+   */
+  endCliTurn(
+    this: AgentManager,
+    id: string,
+    prompt: string,
+    { interrupt = false }: { interrupt?: boolean } = {}
+  ): void {
+    const agent = this.agents.get(id);
+    if (!agent || this._chatLocks.get(id) !== prompt) return;
+    if (interrupt) requestCliTerminalInterrupt(this, agent);
+    this._chatLocks.delete(id);
+    agent.currentTask = null;
+    noteCliActivity(this, id, interrupt ? 'LLM API turn interrupted' : 'LLM API turn answered');
+    this._emit('agent:updated', this._sanitize(agent));
   },
 
   /** Mark the task(s) this agent is EXECUTING, in this environment, as stopped:

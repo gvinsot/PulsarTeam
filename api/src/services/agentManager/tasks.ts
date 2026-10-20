@@ -108,7 +108,7 @@ async function requireTaskExecutionAccess(
   if (!(await checkAgentAccess(owner, user, 'edit')).ok) throw new Error('Access denied');
 }
 
-async function bindAgentRunner(manager: any, agent: any): Promise<void> {
+export async function bindAgentRunner(manager: any, agent: any): Promise<void> {
   if (!manager.executionManager?.bindAgent || !agent?.id) return;
   const llmConfig = manager.resolveLlmConfig?.(agent) || {};
   const providerType = agent.runner || (llmConfig.managesContext ? 'claudecode' : 'sandbox');

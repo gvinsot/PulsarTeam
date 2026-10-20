@@ -200,6 +200,14 @@ export interface CompletionRunner {
   appendStreamChunk(agentId: string, chunk: string): void;
   endStream(agentId: string): void;
   errorStream(agentId: string, error: string): void;
+  /** The terminal turn of a CLI agent — see runTerminalCompletion. */
+  isTerminalDriven(id: string): boolean;
+  startCliTurn(id: string, prompt: string, label: string): Promise<void>;
+  isCliTurnActive(id: string, prompt: string): boolean;
+  endCliTurn(id: string, prompt: string, opts?: { interrupt?: boolean }): void;
+  _checkTerminalAuthError(id: string): Promise<string | null>;
+  _isCliQuiet(id: string): Promise<boolean>;
+  addActionLog(id: string, type: string, message: string, detail?: string | null): void;
   executionManager?: {
     readFile(agentId: string, filePath: string): Promise<string>;
     exec(
@@ -236,6 +244,148 @@ export interface CompletionResult {
 /** How often a client hang-up retries the abort until the turn has started. */
 const ABORT_RETRY_MS = 500;
 
+/** Longest a terminal turn may take — it can include a /login done by hand. */
+export const LLM_TERMINAL_TIMEOUT_MS = (() => {
+  const n = Number(process.env.LLM_API_TERMINAL_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 30 * 60_000;
+})();
+
+/**
+ * A CLI quiet this long with no answer file has finished its turn without
+ * writing it — the delay after which the agent itself goes idle again
+ * (cliActivity.CLI_ACTIVITY_IDLE_MS).
+ */
+export const LLM_TERMINAL_QUIET_MS = (() => {
+  const n = Number(process.env.LLM_API_TERMINAL_QUIET_MS);
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+})();
+
+/** Answer-file poll interval of a terminal turn. */
+const TERMINAL_POLL_MS = 2000;
+
+/** Tunables of a terminal turn, overridden by tests. */
+export interface CompletionOptions {
+  pollMs?: number;
+  timeoutMs?: number;
+  quietMs?: number;
+}
+
+/** Waits `ms`, or less when `signal` aborts. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+/**
+ * A CLI agent's turn, run in its SHARED terminal — the one the UI shows — the
+ * way the workflow runs its tasks, instead of a headless CLI nobody sees. The
+ * user watches the request being worked on and can step in: run /login when
+ * the CLI is not authenticated, answer a question it asks.
+ *
+ * The turn has no task, so nothing calls update_task to end it: it ends when
+ * the answer file exists and stopped changing between two polls. A CLI that
+ * stays quiet for LLM_TERMINAL_QUIET_MS without that file has finished its
+ * turn without writing it (502 no_answer_file — the runner never hands back
+ * terminal text, so there is no other answer to return). Except after an
+ * authentication error: the CLI is then quiet because it waits for the user
+ * to log in, so the turn keeps waiting. The caller hanging up, a Stop, or the
+ * timeout end it too.
+ */
+async function runTerminalCompletion(
+  runner: CompletionRunner,
+  agent: CompletionAgent,
+  prompt: string,
+  label: string,
+  answerPath: string,
+  signal: AbortSignal | undefined,
+  opts: CompletionOptions
+): Promise<CompletionResult> {
+  const exec = runner.executionManager;
+  const clientClosed = () =>
+    new LlmRequestError(499, 'The client closed the request', 'client_closed');
+  try {
+    await runner.startCliTurn(agent.id, prompt, label);
+  } catch (err) {
+    const msg = errorMessage(err);
+    if (/already processing/i.test(msg)) {
+      throw new LlmRequestError(409, `Agent "${agent.name}" is busy. Retry later.`, 'agent_busy');
+    }
+    throw new LlmRequestError(502, `Agent "${agent.name}" failed: ${msg}`, 'agent_error');
+  }
+
+  const pollMs = opts.pollMs ?? TERMINAL_POLL_MS;
+  const quietMs = opts.quietMs ?? LLM_TERMINAL_QUIET_MS;
+  const deadline = Date.now() + (opts.timeoutMs ?? LLM_TERMINAL_TIMEOUT_MS);
+  // Interrupt the CLI on the way out unless it is done (answered, or quiet).
+  let interrupt = true;
+  let authNoted = false;
+  let quietSince: number | null = null;
+  let previous = '';
+  try {
+    for (;;) {
+      if (signal?.aborted) throw clientClosed();
+      if (!runner.isCliTurnActive(agent.id, prompt)) {
+        throw new LlmRequestError(409, `Agent "${agent.name}" was stopped`, 'agent_stopped');
+      }
+      if (Date.now() > deadline) {
+        throw new LlmRequestError(
+          504,
+          `Agent "${agent.name}" wrote no answer within ${Math.round((opts.timeoutMs ?? LLM_TERMINAL_TIMEOUT_MS) / 1000)}s`,
+          'timeout'
+        );
+      }
+
+      let content = '';
+      try {
+        content = ((await exec?.readFile(agent.id, answerPath)) || '').replace(/\s+$/, '');
+      } catch {
+        // Not written yet.
+      }
+      if (content.trim() && content === previous) {
+        interrupt = false;
+        return { content, source: 'file', promptTokens: estimateTokens(prompt) };
+      }
+      previous = content;
+
+      if (!authNoted) {
+        const authError = await runner._checkTerminalAuthError(agent.id);
+        if (authError) {
+          authNoted = true;
+          console.warn(`🔌 [LLM API] "${agent.name}" needs authentication: ${authError}`);
+          runner.addActionLog(
+            agent.id,
+            'warning',
+            'LLM API request waiting: the CLI needs authentication. Log in from the agent terminal (e.g. /login), then resubmit the request there (↑ then Enter).',
+            authError
+          );
+        }
+      }
+
+      const quiet = !authNoted && !content.trim() && (await runner._isCliQuiet(agent.id));
+      quietSince = quiet ? (quietSince ?? Date.now()) : null;
+      if (quietSince !== null && Date.now() - quietSince >= quietMs) {
+        interrupt = false;
+        throw new LlmRequestError(
+          502,
+          `Agent "${agent.name}" finished its turn without writing its answer — see its terminal`,
+          'no_answer_file'
+        );
+      }
+      await pause(pollMs, signal);
+    }
+  } finally {
+    runner.endCliTurn(agent.id, prompt, { interrupt });
+    exec?.exec(agent.id, `rm -f '${answerPath}'`, { timeout: 10_000 }).catch(() => {});
+  }
+}
+
 /**
  * Run one agent turn for an OpenAI chat request and return the answer.
  * Refuses (409) an agent that is already working: it would otherwise inject
@@ -243,12 +393,17 @@ const ABORT_RETRY_MS = 500;
  *
  * `signal` is the caller's connection: when it aborts, the turn is ended so
  * the agent does not stay busy — and answer 409 — for a reply nobody reads.
+ *
+ * A CLI agent answers in its shared terminal (runTerminalCompletion), unless
+ * the request carries images: those can only reach the CLI through the chat
+ * path.
  */
 export async function runAgentCompletion(
   runner: CompletionRunner,
   agent: CompletionAgent,
   messages: ChatMessage[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  opts: CompletionOptions = {}
 ): Promise<CompletionResult> {
   const clientClosed = () =>
     new LlmRequestError(499, 'The client closed the request', 'client_closed');
@@ -267,6 +422,13 @@ export async function runAgentCompletion(
 
   const answerPath = `${LLM_ANSWER_DIR}/${crypto.randomUUID()}.md`;
   const { prompt, images } = buildAgentPrompt(messages, answerPath);
+
+  if (!images.length && runner.isTerminalDriven(agent.id)) {
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    const asked = contentText(lastUser?.content, []).replace(/\s+/g, ' ').trim();
+    const label = `[LLM API] ${asked}`.slice(0, 200);
+    return runTerminalCompletion(runner, agent, prompt, label, answerPath, signal, opts);
+  }
 
   const exec = runner.executionManager;
   // Best-effort cleanup; never fails the request.

@@ -39,6 +39,15 @@ function fakeRunner(opts: { fileContent?: string | null; reply?: unknown; fail?:
     appendStreamChunk: (_id, chunk) => stream.push(`chunk ${chunk}`),
     endStream: () => stream.push('end'),
     errorStream: (_id, error) => stream.push(`error ${error}`),
+    isTerminalDriven: () => false,
+    startCliTurn: async () => {
+      throw new Error('not a CLI agent');
+    },
+    isCliTurnActive: () => false,
+    endCliTurn: () => {},
+    _checkTerminalAuthError: async () => null,
+    addActionLog: () => {},
+    _isCliQuiet: async () => false,
     executionManager: {
       async readFile(_id, path) {
         if (!files.has(path)) throw new Error('No such file');
@@ -238,6 +247,158 @@ test('a turn refused before running opens no stream — the running turn keeps i
   });
   await assert.rejects(runAgentCompletion(runner, AGENT, [{ role: 'user', content: 'x' }]));
   assert.deepEqual(stream, []);
+});
+
+/**
+ * A CLI agent whose shared terminal "answers" by writing `answer` to the answer
+ * file `writeAfter` polls after the prompt was pasted.
+ */
+function terminalRunner(
+  opts: {
+    answer?: string | null;
+    writeAfter?: number;
+    authError?: string | null;
+    startError?: Error;
+    /** The CLI sits quiet at its prompt (default: working). */
+    quiet?: boolean;
+  } = {}
+) {
+  const { runner, removed } = fakeRunner();
+  const files = new Map<string, string>();
+  const pasted: string[] = [];
+  const ended: { interrupt: boolean }[] = [];
+  const logs: string[] = [];
+  let lock: string | null = null;
+  let polls = 0;
+  runner.sendMessage = async () => {
+    throw new Error('a CLI agent must not take the chat path');
+  };
+  runner.isTerminalDriven = () => true;
+  runner.startCliTurn = async (_id, prompt) => {
+    if (opts.startError) throw opts.startError;
+    lock = prompt;
+    pasted.push(prompt);
+  };
+  runner.isCliTurnActive = (_id, prompt) => lock === prompt;
+  runner.endCliTurn = (_id, prompt, o) => {
+    if (lock !== prompt) return;
+    lock = null;
+    ended.push({ interrupt: !!o?.interrupt });
+  };
+  runner._checkTerminalAuthError = async () => opts.authError ?? null;
+  runner._isCliQuiet = async () => !!opts.quiet;
+  runner.addActionLog = (_id, type, message) => logs.push(`${type}: ${message}`);
+  runner.executionManager!.readFile = async (_id, path) => {
+    polls++;
+    if (opts.answer != null && polls > (opts.writeAfter ?? 1)) files.set(path, opts.answer);
+    if (!files.has(path)) throw new Error('No such file');
+    return files.get(path)!;
+  };
+  return {
+    runner,
+    removed,
+    pasted,
+    ended,
+    logs,
+    stop: () => {
+      lock = null;
+    },
+  };
+}
+
+const FAST = { pollMs: 5, timeoutMs: 2000 };
+const ASK = [{ role: 'user' as const, content: '2+2?' }];
+
+test('a CLI agent answers in its shared terminal, once the answer file stops changing', async () => {
+  const t = terminalRunner({ answer: '4\n', writeAfter: 2 });
+  const result = await runAgentCompletion(t.runner, AGENT, ASK, undefined, FAST);
+  assert.deepEqual([result.content, result.source], ['4', 'file']);
+  assert.equal(t.pasted.length, 1);
+  assert.match(t.pasted[0], /Request:\n2\+2\?/);
+  assert.deepEqual(t.ended, [{ interrupt: false }]);
+  assert.equal(t.removed.length, 1);
+});
+
+test('a CLI gone quiet without the answer file has finished: 502, not interrupted', async () => {
+  const t = terminalRunner({ answer: null, quiet: true });
+  await assert.rejects(
+    runAgentCompletion(t.runner, AGENT, ASK, undefined, { ...FAST, quietMs: 20 }),
+    (e: any) => e.status === 502 && e.toJSON().error.code === 'no_answer_file'
+  );
+  assert.deepEqual(t.ended, [{ interrupt: false }]);
+});
+
+test('a CLI quiet on an authentication error waits for the login, noting it once', async () => {
+  const t = terminalRunner({
+    answer: '4',
+    writeAfter: 12,
+    authError: 'Please run /login',
+    quiet: true,
+  });
+  const result = await runAgentCompletion(t.runner, AGENT, ASK, undefined, {
+    ...FAST,
+    quietMs: 20,
+  });
+  assert.equal(result.content, '4');
+  assert.equal(t.logs.length, 1);
+  assert.match(t.logs[0], /^warning: .*\/login/);
+});
+
+test('a client hanging up interrupts the terminal turn', async () => {
+  const t = terminalRunner({ answer: null });
+  const client = new AbortController();
+  const pending = runAgentCompletion(t.runner, AGENT, ASK, client.signal, FAST);
+  setTimeout(() => client.abort(), 20);
+  await assert.rejects(pending, isClientClosed);
+  assert.deepEqual(t.ended, [{ interrupt: true }]);
+  assert.equal(t.removed.length, 1);
+});
+
+test('a Stop ends the terminal wait; a timeout interrupts the CLI', async () => {
+  const stopped = terminalRunner({ answer: null });
+  const pending = runAgentCompletion(stopped.runner, AGENT, ASK, undefined, FAST);
+  setTimeout(stopped.stop, 20);
+  await assert.rejects(pending, (e: any) => e.toJSON().error.code === 'agent_stopped');
+  assert.deepEqual(stopped.ended, [], 'the turn no longer held the agent');
+
+  const slow = terminalRunner({ answer: null });
+  await assert.rejects(
+    runAgentCompletion(slow.runner, AGENT, ASK, undefined, { pollMs: 5, timeoutMs: 30 }),
+    (e: any) => e.status === 504
+  );
+  assert.deepEqual(slow.ended, [{ interrupt: true }]);
+});
+
+test('a CLI agent already at work answers 409; images keep the chat path', async () => {
+  const busy = terminalRunner({
+    startError: new Error('Agent is already processing a message (its terminal is active)'),
+  });
+  await assert.rejects(
+    runAgentCompletion(busy.runner, AGENT, ASK, undefined, FAST),
+    (e: any) => e.toJSON().error.code === 'agent_busy'
+  );
+
+  const withImage = terminalRunner();
+  let chatTurns = 0;
+  withImage.runner.sendMessage = async () => {
+    chatTurns++;
+    return 'A cat.';
+  };
+  const result = await runAgentCompletion(
+    withImage.runner,
+    AGENT,
+    [
+      {
+        role: 'user',
+        content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }],
+      },
+    ],
+    undefined,
+    FAST
+  );
+  assert.equal(chatTurns, 1);
+  assert.equal(withImage.pasted.length, 0);
+  assert.equal(result.content, 'A cat.');
 });
 
 test('the response is a chat.completion object', () => {
