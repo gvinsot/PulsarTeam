@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Header
 from fastapi.responses import StreamingResponse
 
-from config import RUNNER_MODEL, PROJECTS_DIR, logger
+from config import RUNNER_MODEL, PROJECTS_DIR, CLI_CWD, logger
 from models import (
     MessageRequest, CodeRequest, ExecutionResponse,
     OpenAIChatCompletionRequest, OpenAICompletionRequest,
@@ -431,6 +431,19 @@ async def install_git_credentials_route(
         return {"status": "error", "error": f"{err_type}: {err_msg}"}
 
 
+def default_exec_cwd() -> str:
+    """Working directory of a command for an agent with no project.
+
+    PROJECTS_DIR where the image has it; otherwise the directory a project-less
+    CLI is spawned in (the backends' _resolve_cwd → CLI_CWD), so a relative
+    path means the same thing to the CLI and to a command run for it. The CLI
+    runner images have no /projects: falling back to it failed every command of
+    such an agent with "Directory not found: /projects" — reading an answer file
+    or an email attachment included.
+    """
+    return PROJECTS_DIR if os.path.isdir(PROJECTS_DIR) else CLI_CWD
+
+
 @router.post("/exec-shell")
 async def exec_shell(
     request: ShellExecRequest,
@@ -462,7 +475,7 @@ async def exec_shell(
     if not cwd and x_agent_id:
         cwd = get_agent_project_dir(x_agent_id)
     if not cwd:
-        cwd = PROJECTS_DIR
+        cwd = default_exec_cwd()
     if not os.path.isdir(cwd):
         return ExecutionResponse(status="error", output="", error=f"Directory not found: {cwd}")
 
