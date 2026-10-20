@@ -50,7 +50,7 @@ export default function AdminPanel({
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
       <div className="bg-dark-900 border border-dark-700 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-dark-700">
+        <div className="shrink-0 flex items-center justify-between p-6 border-b border-dark-700">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center">
               <Crown className="w-5 h-5 text-white" />
@@ -69,7 +69,7 @@ export default function AdminPanel({
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-dark-700 overflow-x-auto">
+        <div className="shrink-0 flex border-b border-dark-700 overflow-x-auto">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -94,7 +94,7 @@ export default function AdminPanel({
         {/* Content — all tabs stay mounted so their in-progress form state
             survives a tab round-trip; visibility is toggled with CSS and the
             `active` prop drives each tab's activation re-fetches. */}
-        <div className="flex-1 overflow-auto p-6">
+        <div className="flex-1 min-h-0 overflow-auto p-6">
           <div className={activeTab === 'users' ? 'space-y-6' : 'hidden'}>
             <UsersTab
               showToast={showToast}
