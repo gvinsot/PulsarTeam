@@ -92,6 +92,7 @@ export function CategoryFilterPills({
 // `badges` renders between the category badge and the MCP-count badge;
 // `extraActions` renders before the remove button; `connectorProps` is
 // spread onto each connector widget ({agentId|boardId, onStatusChange}).
+// Without `onRemove` the card is read-only (no remove button).
 export function AssignedPluginCard({
   plugin,
   badges,
@@ -102,7 +103,7 @@ export function AssignedPluginCard({
   plugin: Plugin;
   badges?: ReactNode;
   extraActions?: ReactNode;
-  onRemove: () => void;
+  onRemove?: () => void;
   connectorProps: ConnectWidgetProps;
 }) {
   const pluginMcps = (plugin.mcps || []).filter(m => m.id);
@@ -129,13 +130,15 @@ export function AssignedPluginCard({
           <p className="text-xs text-dark-400 truncate">{plugin.description}</p>
         </div>
         {extraActions}
-        <button
-          onClick={onRemove}
-          className="p-1 text-dark-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-          title="Remove plugin"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        {onRemove && (
+          <button
+            onClick={onRemove}
+            className="p-1 text-dark-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+            title="Remove plugin"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
       {connectorMcpIds.length > 0 && (
         <div className="px-3 pb-3 space-y-2">

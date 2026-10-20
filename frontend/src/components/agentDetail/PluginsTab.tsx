@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { X, Wrench, KeyRound, Globe, Lock } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { X, Wrench, KeyRound, Globe, Lock, LayoutGrid } from 'lucide-react';
 import { api } from '../../api';
 import PluginEditor from '../PluginEditor';
 import McpRegistryCatalog from '../plugins/McpRegistryCatalog';
@@ -47,9 +47,34 @@ export default function PluginsTab({
   const [activationSaving, setActivationSaving] = useState(false);
   const [activationError, setActivationError] = useState<string | null>(null);
 
+  // The board's plugins apply to every agent on it (agent plugins ∪ board
+  // plugins — pulsarGatewayMcp.ts, chat.ts), so they are shown here too, read
+  // only: otherwise an agent with no plugin of its own lists tools out of
+  // nowhere. Removing one is done from the board.
+  const [boardPluginIds, setBoardPluginIds] = useState<string[]>([]);
+  useEffect(() => {
+    setBoardPluginIds([]);
+    if (!agent.boardId) return;
+    let cancelled = false;
+    api
+      .getBoardPlugins(agent.boardId)
+      .then(data => {
+        if (!cancelled) setBoardPluginIds(data.plugins || []);
+      })
+      .catch(err => console.error('Failed to load board plugins:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [agent.boardId]);
+
   const agentPluginIds = agent.skills || [];
   const assignedPlugins = plugins.filter(s => agentPluginIds.includes(s.id));
-  const availablePlugins = plugins.filter(s => !agentPluginIds.includes(s.id));
+  const inheritedPlugins = plugins.filter(
+    s => boardPluginIds.includes(s.id) && !agentPluginIds.includes(s.id)
+  );
+  const availablePlugins = plugins.filter(
+    s => !agentPluginIds.includes(s.id) && !boardPluginIds.includes(s.id)
+  );
 
   const categories = ['all', ...new Set<string>(plugins.map(s => s.category).filter(Boolean))];
   const filteredAvailable =
@@ -180,6 +205,32 @@ export default function PluginsTab({
           </div>
         )}
       </div>
+
+      {inheritedPlugins.length > 0 && (
+        <div>
+          <h3 className="font-medium text-dark-200 text-sm mb-1">
+            Inherited from the board
+            <span className="ml-2 text-dark-400 font-normal">({inheritedPlugins.length})</span>
+          </h3>
+          <p className="text-xs text-dark-500 mb-3">
+            Active for every agent on this board. Remove them from the board&apos;s plugins.
+          </p>
+          <div className="space-y-2">
+            {inheritedPlugins.map(plugin => (
+              <AssignedPluginCard
+                key={plugin.id}
+                plugin={plugin}
+                connectorProps={{ agentId: agent.id, onStatusChange: () => onRefresh?.() }}
+                badges={
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/30 flex items-center gap-0.5">
+                    <LayoutGrid className="w-2.5 h-2.5" /> hérité du board
+                  </span>
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between mb-3">
