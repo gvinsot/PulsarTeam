@@ -82,13 +82,29 @@ export function llmApiRoutes(agentManager: AgentManager) {
     throw new LlmRequestError(404, `The model "${model}" does not exist`, 'model_not_found');
   }
 
-  function sendError(res: express.Response, err: unknown) {
-    const e =
-      err instanceof LlmRequestError
-        ? err
-        : new LlmRequestError(500, errorMessage(err) || 'Internal error', 'internal_error');
-    if (!(err instanceof LlmRequestError)) console.error('LLM API error:', errorMessage(err));
+  /**
+   * Aborts when the client hangs up before the response is complete. 'close'
+   * also fires after a normal end, hence the writableFinished check.
+   */
+  function clientGoneSignal(res: express.Response): AbortSignal {
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) controller.abort();
+    });
+    return controller.signal;
+  }
+
+  function asLlmError(err: unknown): LlmRequestError {
+    if (err instanceof LlmRequestError) return err;
+    console.error('LLM API error:', errorMessage(err));
+    return new LlmRequestError(500, errorMessage(err) || 'Internal error', 'internal_error');
+  }
+
+  /** Answers the error; returns its "<status> <code>" for the request log. */
+  function sendError(res: express.Response, err: unknown): string {
+    const e = asLlmError(err);
     res.status(e.status).json(e.toJSON());
+    return `${e.status} ${e.code}`;
   }
 
   router.get(
@@ -111,75 +127,107 @@ export function llmApiRoutes(agentManager: AgentManager) {
   router.post(
     '/v1/chat/completions',
     asyncHandler(async (req, res) => {
-      const parsed = chatCompletionRequestSchema.safeParse(req.body);
-      if (!parsed.success) {
-        const details = formatZodError(parsed.error).details;
-        return sendError(
-          res,
-          new LlmRequestError(
-            400,
-            `Invalid request: ${details.map(d => `${d.path}: ${d.message}`).join('; ')}`,
-            'invalid_request'
-          )
-        );
-      }
-      const body = parsed.data;
-      const id = `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`;
-      const created = Math.floor(Date.now() / 1000);
-
-      let agent: CompletionAgent;
+      // One line per request, success included: without it a call that never
+      // reached the agent cannot be told from one the agent answered.
+      const startedAt = Date.now();
+      const trace = { model: '', agent: '', stream: false, outcome: 'unknown' };
       try {
-        agent = await resolveAgent(req, body.model);
-      } catch (err) {
-        return sendError(res, err);
-      }
-
-      if (!body.stream) {
-        try {
-          const result = await runAgentCompletion(
-            agentManager as unknown as CompletionRunner,
-            agent,
-            body.messages
-          );
-          return res.json(chatCompletionBody(body.model, result, id, created));
-        } catch (err) {
-          return sendError(res, err);
-        }
-      }
-
-      // Streaming: the answer only exists once the file is written, so it is
-      // sent as one content chunk. Headers go out first, with SSE comments as
-      // keep-alives, so proxies do not cut a long agent turn.
-      res.status(200);
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('X-Accel-Buffering', 'no');
-      res.flushHeaders();
-      const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
-      const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 15_000);
-      try {
-        send(chatCompletionChunk(body.model, id, created, { role: 'assistant', content: '' }));
-        const result = await runAgentCompletion(
-          agentManager as unknown as CompletionRunner,
-          agent,
-          body.messages
-        );
-        send(chatCompletionChunk(body.model, id, created, { content: result.content }));
-        send(chatCompletionChunk(body.model, id, created, {}, 'stop'));
-      } catch (err) {
-        const e =
-          err instanceof LlmRequestError
-            ? err
-            : new LlmRequestError(500, errorMessage(err), 'internal_error');
-        send(e.toJSON());
+        trace.outcome = await completion(req, res, trace);
       } finally {
-        clearInterval(keepAlive);
-        res.write('data: [DONE]\n\n');
-        res.end();
+        console.log(
+          `🔌 [LLM API] key=${req.apiKey?.id ?? '?'} model="${trace.model}"` +
+            `${trace.agent ? ` agent=${trace.agent}` : ''} stream=${trace.stream}` +
+            ` → ${trace.outcome} in ${Date.now() - startedAt}ms`
+        );
       }
     })
   );
+
+  /** Serve one chat completion; returns the outcome for the request log. */
+  async function completion(
+    req: express.Request,
+    res: express.Response,
+    trace: { model: string; agent: string; stream: boolean }
+  ): Promise<string> {
+    const parsed = chatCompletionRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const details = formatZodError(parsed.error).details;
+      return sendError(
+        res,
+        new LlmRequestError(
+          400,
+          `Invalid request: ${details.map(d => `${d.path}: ${d.message}`).join('; ')}`,
+          'invalid_request'
+        )
+      );
+    }
+    const body = parsed.data;
+    trace.model = body.model;
+    trace.stream = !!body.stream;
+    const id = `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`;
+    const created = Math.floor(Date.now() / 1000);
+
+    let agent: CompletionAgent;
+    try {
+      agent = await resolveAgent(req, body.model);
+    } catch (err) {
+      return sendError(res, err);
+    }
+    trace.agent = agent.id;
+
+    const clientGone = clientGoneSignal(res);
+    if (!body.stream) {
+      try {
+        const result = await runAgentCompletion(
+          agentManager as unknown as CompletionRunner,
+          agent,
+          body.messages,
+          clientGone
+        );
+        res.json(chatCompletionBody(body.model, result, id, created));
+        return `200 ${result.source}`;
+      } catch (err) {
+        if (clientGone.aborted) return 'client_closed';
+        return sendError(res, err);
+      }
+    }
+
+    // Streaming: the answer only exists once the file is written, so it is
+    // sent as one content chunk. Headers go out first, with SSE comments as
+    // keep-alives, so proxies do not cut a long agent turn.
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    const write = (data: string) => {
+      if (!clientGone.aborted) res.write(data);
+    };
+    const send = (payload: unknown) => write(`data: ${JSON.stringify(payload)}\n\n`);
+    const keepAlive = setInterval(() => write(': keep-alive\n\n'), 15_000);
+    try {
+      send(chatCompletionChunk(body.model, id, created, { role: 'assistant', content: '' }));
+      const result = await runAgentCompletion(
+        agentManager as unknown as CompletionRunner,
+        agent,
+        body.messages,
+        clientGone
+      );
+      send(chatCompletionChunk(body.model, id, created, { content: result.content }));
+      send(chatCompletionChunk(body.model, id, created, {}, 'stop'));
+      return `200 ${result.source}`;
+    } catch (err) {
+      if (clientGone.aborted) return 'client_closed';
+      const e = asLlmError(err);
+      send(e.toJSON());
+      return `${e.status} ${e.code} (in stream)`;
+    } finally {
+      clearInterval(keepAlive);
+      write('data: [DONE]\n\n');
+      if (!clientGone.aborted) res.end();
+    }
+  }
 
   return router;
 }

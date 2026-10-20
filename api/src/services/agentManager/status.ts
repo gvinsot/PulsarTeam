@@ -17,6 +17,7 @@ import { getCurrentEnvironment } from '../../lib/environment.js';
 import { getAgentRunningTaskId } from '../workflow/agentSelector.js';
 import { emitTaskUpdated } from '../taskMutations.js';
 import type { Task } from '../database/tasks.js';
+import type { AgentManager } from './index.js';
 
 function requestCliTerminalInterrupt(manager: any, agent: any): void {
   if (!manager?.executionManager || !agent?.id) return;
@@ -505,6 +506,39 @@ export const statusMethods = {
     saveAgent(agent);
 
     console.log(`🛑 Agent ${agent.name} stopped`);
+    this._emit('agent:stopped', { id, name: agent.name, project: agent.project || null });
+    return true;
+  },
+
+  /** End the chat turn the agent is running, and nothing else — for a caller
+   * that started the turn and went away (the LLM API's client hanging up).
+   * Unlike stopAgent it leaves the agent's tasks, its message queue and, for a
+   * leader, its team alone: none of them belong to that turn. The aborted
+   * sendMessage unwinds on its own ('Agent stopped by user'); the status is
+   * still reset here, as stopAgent does, so the agent is free at once.
+   * Returns false when no turn has registered its abort controller yet. */
+  abortChatTurn(this: AgentManager, id: string, reason: string = 'Chat turn aborted'): boolean {
+    const agent = this.agents.get(id);
+    const controller = this.abortControllers.get(id);
+    if (!agent || !controller) return false;
+
+    requestCliTerminalInterrupt(this, agent);
+    controller.abort();
+    this.abortControllers.delete(id);
+
+    agent.currentThinking = '';
+    this._emit('agent:thinking', {
+      agentId: id,
+      agentName: agent.name,
+      project: agent.project || null,
+      thinking: '',
+    });
+    agent.currentTask = null;
+    this._chatLocks.delete(id);
+    this.setStatus(id, 'idle', reason);
+    saveAgent(agent);
+
+    console.log(`🛑 Agent ${agent.name}: chat turn aborted (${reason})`);
     this._emit('agent:stopped', { id, name: agent.name, project: agent.project || null });
     return true;
   },

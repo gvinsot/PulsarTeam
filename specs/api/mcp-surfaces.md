@@ -183,7 +183,9 @@ The conversation is flattened into one agent message (system/developer messages 
 
 - Sampling parameters are accepted and ignored; inline `data:` images are passed to the agent, image URLs are never fetched (no SSRF primitive). `usage` is a ≈4 chars/token estimate.
 - `stream: true` answers server-sent `chat.completion.chunk` events: role chunk, keep-alive comments every 15 s, the whole answer in one chunk, a `stop` chunk, `[DONE]`.
-- One turn at a time per agent: a busy or disabled agent answers `409` (`agent_busy` / `agent_disabled`). The turn is part of the agent's conversation history.
+- One turn at a time per agent: a busy or disabled agent answers `409` (`agent_busy` / `agent_disabled`). The turn is part of the agent's conversation history, and streams live into the agent's chat in the UI like a socket chat (stream opened on its first chunk, so a refused turn never touches the running one's).
+- A client that hangs up before the answer ends the turn (`abortChatTurn`: CLI interrupt, abort, agent back to idle — never stopAgent's tasks, queue or leader team), and the answer file is removed.
+- Every completion request logs one line `🔌 [LLM API] key=… model=… agent=… stream=… → <outcome> in <ms>` — successes included.
 - Errors use OpenAI's envelope `{ error: { message, type, param, code } }`.
 
 Rate limit: 20 requests/minute **per key** (`LLM_KEY_RATE_LIMIT_PER_MINUTE`), on top of the global 300/minute per IP.

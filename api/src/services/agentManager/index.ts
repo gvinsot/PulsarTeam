@@ -120,6 +120,7 @@ export interface AgentManager {
   _markTaskStopped(t: { id: string; status: string }, stopTimestamp: string): Promise<Task | null>;
   _haltAgentTasks(id: string, stopTimestamp: string): Promise<void>;
   stopAgent(id: string): boolean;
+  abortChatTurn(id: string, reason?: string): boolean;
   beginStream(
     agentId: string,
     opts?: { userMessage?: string | null; userMessageId?: string | null }

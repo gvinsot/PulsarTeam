@@ -193,6 +193,13 @@ export interface CompletionRunner {
     messageMeta?: unknown,
     images?: PromptImage[] | null
   ): Promise<unknown>;
+  /** End the agent's running chat turn; false when none has started yet. */
+  abortChatTurn(id: string, reason?: string): boolean;
+  /** The live stream the chat UI renders — what the socket chat feeds too. */
+  beginStream(agentId: string, opts?: { userMessage?: string | null }): void;
+  appendStreamChunk(agentId: string, chunk: string): void;
+  endStream(agentId: string): void;
+  errorStream(agentId: string, error: string): void;
   executionManager?: {
     readFile(agentId: string, filePath: string): Promise<string>;
     exec(
@@ -226,16 +233,27 @@ export interface CompletionResult {
   promptTokens: number;
 }
 
+/** How often a client hang-up retries the abort until the turn has started. */
+const ABORT_RETRY_MS = 500;
+
 /**
  * Run one agent turn for an OpenAI chat request and return the answer.
  * Refuses (409) an agent that is already working: it would otherwise inject
  * the request into whatever the agent is doing.
+ *
+ * `signal` is the caller's connection: when it aborts, the turn is ended so
+ * the agent does not stay busy — and answer 409 — for a reply nobody reads.
  */
 export async function runAgentCompletion(
   runner: CompletionRunner,
   agent: CompletionAgent,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  signal?: AbortSignal
 ): Promise<CompletionResult> {
+  const clientClosed = () =>
+    new LlmRequestError(499, 'The client closed the request', 'client_closed');
+  if (signal?.aborted) throw clientClosed();
+
   if (agent.enabled === false) {
     throw new LlmRequestError(409, `Agent "${agent.name}" is disabled`, 'agent_disabled');
   }
@@ -250,25 +268,72 @@ export async function runAgentCompletion(
   const answerPath = `${LLM_ANSWER_DIR}/${crypto.randomUUID()}.md`;
   const { prompt, images } = buildAgentPrompt(messages, answerPath);
 
+  const exec = runner.executionManager;
+  // Best-effort cleanup; never fails the request.
+  const removeAnswerFile = () =>
+    exec?.exec(agent.id, `rm -f '${answerPath}'`, { timeout: 10_000 }).catch(() => {});
+
+  // Only this turn is aborted, and only while it runs: once sendMessage has
+  // settled the agent may already be on other work. sendMessage registers its
+  // abort controller after a possible project-switch wait, so a hang-up
+  // landing before that retries until the turn is there to abort.
+  let turnRunning = true;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  const abortTurn = () => {
+    retryTimer = null;
+    if (!turnRunning) return;
+    if (!runner.abortChatTurn(agent.id, 'LLM API client disconnected')) {
+      retryTimer = setTimeout(abortTurn, ABORT_RETRY_MS);
+    }
+  };
+  signal?.addEventListener('abort', abortTurn, { once: true });
+
+  // The turn streams into the agent's chat in the UI, like a socket chat, so
+  // the request is seen being worked on. Opened on the first chunk, not
+  // before: a sendMessage refused because another turn holds the agent must
+  // not replace — then close — that turn's stream.
+  let streaming = false;
+  const onChunk = (chunk: string) => {
+    if (!streaming) {
+      streaming = true;
+      runner.beginStream(agent.id, { userMessage: prompt });
+    }
+    runner.appendStreamChunk(agent.id, chunk);
+  };
+
   let reply: unknown;
   try {
     reply = await runner.sendMessage(
       agent.id,
       prompt,
-      () => {},
+      onChunk,
       0,
       null,
       images.length ? images : null
     );
+    if (streaming) runner.endStream(agent.id);
   } catch (err) {
+    if (streaming) runner.errorStream(agent.id, errorMessage(err));
+    if (signal?.aborted) {
+      removeAnswerFile();
+      throw clientClosed();
+    }
     const msg = errorMessage(err);
     if (/already processing/i.test(msg)) {
       throw new LlmRequestError(409, `Agent "${agent.name}" is busy. Retry later.`, 'agent_busy');
     }
     throw new LlmRequestError(502, `Agent "${agent.name}" failed: ${msg}`, 'agent_error');
+  } finally {
+    turnRunning = false;
+    if (retryTimer) clearTimeout(retryTimer);
+    signal?.removeEventListener('abort', abortTurn);
   }
 
-  const exec = runner.executionManager;
+  if (signal?.aborted) {
+    removeAnswerFile();
+    throw clientClosed();
+  }
+
   let fileContent = '';
   if (exec) {
     try {
@@ -276,8 +341,7 @@ export async function runAgentCompletion(
     } catch {
       // No file: fall back to the reply below.
     }
-    // Best-effort cleanup; never fails the request.
-    exec.exec(agent.id, `rm -f '${answerPath}'`, { timeout: 10_000 }).catch(() => {});
+    removeAnswerFile();
   }
 
   const fromFile = fileContent.replace(/\s+$/, '');

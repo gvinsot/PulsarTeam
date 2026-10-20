@@ -22,14 +22,23 @@ function fakeRunner(opts: { fileContent?: string | null; reply?: unknown; fail?:
   const files = new Map<string, string>();
   const calls: { prompt: string; images: unknown }[] = [];
   const removed: string[] = [];
+  const stream: string[] = [];
   const runner: CompletionRunner = {
-    async sendMessage(_id, prompt, _cb, _d, _m, images) {
+    async sendMessage(_id, prompt, cb, _d, _m, images) {
       calls.push({ prompt, images });
       if (opts.fail) throw opts.fail;
+      cb('Working…');
       const path = new RegExp('`(' + LLM_ANSWER_DIR + '/[^`]+)`').exec(prompt)![1];
       if (opts.fileContent != null) files.set(path, opts.fileContent);
       return opts.reply ?? 'Done.';
     },
+    abortChatTurn() {
+      return true;
+    },
+    beginStream: id => stream.push(`begin ${id}`),
+    appendStreamChunk: (_id, chunk) => stream.push(`chunk ${chunk}`),
+    endStream: () => stream.push('end'),
+    errorStream: (_id, error) => stream.push(`error ${error}`),
     executionManager: {
       async readFile(_id, path) {
         if (!files.has(path)) throw new Error('No such file');
@@ -41,7 +50,7 @@ function fakeRunner(opts: { fileContent?: string | null; reply?: unknown; fail?:
       },
     },
   };
-  return { runner, calls, removed };
+  return { runner, calls, removed, stream };
 }
 
 test('the request schema accepts a classic OpenAI body and ignores sampling params', () => {
@@ -145,6 +154,90 @@ test('busy, disabled and failing agents answer OpenAI-shaped errors', async () =
 
   const empty = fakeRunner({ fileContent: null, reply: '' });
   await assert.rejects(runAgentCompletion(empty.runner, AGENT, msgs), /no answer/);
+});
+
+/**
+ * A runner whose turn only ends when aborted, like a real sendMessage does on
+ * abort. Its controller registers after `registerAfter` abort attempts.
+ */
+function hangingRunner(registerAfter = 0) {
+  const { runner, removed } = fakeRunner({ fileContent: 'x' });
+  const aborts: string[] = [];
+  let attempts = 0;
+  let endTurn: (err: Error) => void = () => {};
+  runner.sendMessage = () =>
+    new Promise((_resolve, reject) => {
+      endTurn = reject;
+    });
+  runner.abortChatTurn = (id, reason) => {
+    if (attempts++ < registerAfter) return false;
+    aborts.push(`${id}: ${reason}`);
+    endTurn(new Error('Agent stopped by user'));
+    return true;
+  };
+  return { runner, removed, aborts, attempts: () => attempts };
+}
+
+const isClientClosed = (e: any) =>
+  e instanceof LlmRequestError && e.toJSON().error.code === 'client_closed';
+
+test('a client hanging up ends the agent turn and removes the answer file', async () => {
+  const { runner, removed, aborts } = hangingRunner();
+  const client = new AbortController();
+  const pending = runAgentCompletion(runner, AGENT, [{ role: 'user', content: 'x' }], client.signal);
+  client.abort();
+  await assert.rejects(pending, isClientClosed);
+  assert.deepEqual(aborts, ['agent-1: LLM API client disconnected']);
+  assert.equal(removed.length, 1);
+});
+
+test('a hang-up before the turn has registered is retried until it can abort', async () => {
+  const { runner, aborts, attempts } = hangingRunner(2);
+  const client = new AbortController();
+  const pending = runAgentCompletion(runner, AGENT, [{ role: 'user', content: 'x' }], client.signal);
+  client.abort();
+  await assert.rejects(pending, isClientClosed);
+  assert.equal(attempts(), 3);
+  assert.equal(aborts.length, 1);
+});
+
+test('a finished turn is never aborted, and a gone client starts no turn', async () => {
+  const { runner, calls } = fakeRunner({ fileContent: '4' });
+  let aborted = 0;
+  runner.abortChatTurn = () => {
+    aborted++;
+    return true;
+  };
+  const client = new AbortController();
+  const result = await runAgentCompletion(
+    runner,
+    AGENT,
+    [{ role: 'user', content: 'x' }],
+    client.signal
+  );
+  client.abort();
+  assert.equal(result.content, '4');
+  assert.equal(aborted, 0, 'the agent may be on other work by now');
+
+  await assert.rejects(
+    runAgentCompletion(runner, AGENT, [{ role: 'user', content: 'x' }], client.signal),
+    isClientClosed
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('the turn streams into the agent chat of the UI', async () => {
+  const { runner, stream } = fakeRunner({ fileContent: '4' });
+  await runAgentCompletion(runner, AGENT, [{ role: 'user', content: '2+2?' }]);
+  assert.deepEqual(stream, ['begin agent-1', 'chunk Working…', 'end']);
+});
+
+test('a turn refused before running opens no stream — the running turn keeps its own', async () => {
+  const { runner, stream } = fakeRunner({
+    fail: new Error('Agent is already processing a message'),
+  });
+  await assert.rejects(runAgentCompletion(runner, AGENT, [{ role: 'user', content: 'x' }]));
+  assert.deepEqual(stream, []);
 });
 
 test('the response is a chat.completion object', () => {
