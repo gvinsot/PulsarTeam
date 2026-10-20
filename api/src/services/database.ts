@@ -73,6 +73,9 @@ export {
   updateLastSeen,
   acceptTerms,
   completeTutorial,
+  getPendingApprovalUsers,
+  countPendingApprovalUsers,
+  setUserApprovalStatus,
 } from './database/users.js';
 export {
   getAllLlmConfigs,

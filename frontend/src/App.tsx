@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { disconnectSocket, getSocket } from './socket';
 import { api, setCsrfToken, OAUTH_STATE_KEY } from './api';
 import { useAgentsSocket } from './hooks/useAgentsSocket';
+import { accountApprovalNotice, type AccountApprovalNotice } from './lib/accountApproval';
 import Dashboard from './components/Dashboard';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
 import { X, AlertCircle, CheckCircle, Info } from 'lucide-react';
@@ -73,6 +74,9 @@ export default function App() {
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [oauthLoading, setOauthLoading] = useState(false);
+  // Set when a sign-in answered "account awaiting approval" / "declined":
+  // the login page shows a notice instead of an error.
+  const [accountNotice, setAccountNotice] = useState<AccountApprovalNotice | null>(null);
 
   const showToast = useCallback((message: string, type: ToastType = 'error', duration = 5000) => {
     const id = Date.now() + Math.random();
@@ -310,6 +314,13 @@ export default function App() {
     exchange(code, redirectUri, returnedState)
       .then(data => completeLogin(data, { awaitHealth: true }))
       .catch(err => {
+        // A new OAuth account awaiting admin approval (or declined) is not a
+        // failed sign-in: no session was opened, and the user gets a notice.
+        const notice = accountApprovalNotice(err);
+        if (notice) {
+          setAccountNotice(notice);
+          return;
+        }
         console.error('OAuth login failed:', err);
         showToast(err.message || 'Login failed', 'error');
       })
@@ -320,7 +331,16 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLogin = async (username: string, password: string) => {
-    const data = await api.login(username, password);
+    let data: SessionPayload;
+    try {
+      data = await api.login(username, password);
+    } catch (err) {
+      const notice = accountApprovalNotice(err);
+      if (!notice) throw err;
+      setAccountNotice(notice);
+      return;
+    }
+    setAccountNotice(null);
     await completeLogin(data);
   };
 
@@ -452,7 +472,12 @@ export default function App() {
     return (
       <>
         <Suspense fallback={null}>
-          <LoginPage onLogin={handleLogin} oauthLoading={oauthLoading} />
+          <LoginPage
+            onLogin={handleLogin}
+            oauthLoading={oauthLoading}
+            accountNotice={accountNotice}
+            onDismissAccountNotice={() => setAccountNotice(null)}
+          />
         </Suspense>
         {toastContainer}
       </>

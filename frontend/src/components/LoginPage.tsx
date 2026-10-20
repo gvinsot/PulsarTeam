@@ -19,11 +19,14 @@ import {
   MessageSquare,
   Headphones,
   Send,
+  Hourglass,
+  Info,
 } from 'lucide-react';
 import { api, OAUTH_STATE_KEY } from '../api';
 import type { OAuthAuthUrlResponse } from '../types/user';
 import { useLanguage } from '../contexts/LanguageContext';
 import { errorMessage } from '../utils/errors';
+import type { AccountApprovalNotice } from '../lib/accountApproval';
 
 /* ── Reusable tiny components ── */
 
@@ -686,16 +689,71 @@ function LanguageToggle() {
   );
 }
 
+/* ── Account approval notice ── */
+
+/**
+ * Shown when a sign-in answered that the account is awaiting administrator
+ * approval (a new OAuth account) or that the request was declined. Deliberately
+ * not styled as an error: for a pending account nothing went wrong.
+ */
+function AccountApprovalNoticeModal({
+  notice,
+  onClose,
+}: {
+  notice: AccountApprovalNotice;
+  onClose: () => void;
+}) {
+  const { t } = useLanguage();
+  const pending = notice === 'pending';
+  const Icon = pending ? Hourglass : Info;
+  return (
+    <div
+      className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="account-approval-notice-title"
+    >
+      <div className="w-full max-w-md bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl p-8 text-center animate-fadeIn">
+        <div
+          className={`inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-5 ${
+            pending ? 'bg-indigo-500/15 text-indigo-400' : 'bg-dark-700 text-dark-300'
+          }`}
+        >
+          <Icon className="w-7 h-7" />
+        </div>
+        <h2 id="account-approval-notice-title" className="text-lg font-bold text-dark-100 mb-3">
+          {t(pending ? 'login.pendingTitle' : 'login.rejectedTitle')}
+        </h2>
+        <p className="text-sm text-dark-300 leading-relaxed mb-6">
+          {t(pending ? 'login.pendingMessage' : 'login.rejectedMessage')}
+        </p>
+        <button
+          onClick={onClose}
+          autoFocus
+          className="px-6 py-2.5 text-sm font-medium rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 transition-all"
+        >
+          {t('login.noticeClose')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main landing page ── */
 
 export default function LoginPage({
   onLogin,
   onGoogleLogin: _onGoogleLogin,
   oauthLoading,
+  accountNotice = null,
+  onDismissAccountNotice,
 }: {
   onLogin: (u: string, p: string) => Promise<void>;
   onGoogleLogin?: () => void;
   oauthLoading?: boolean;
+  /** Set when the last sign-in answered "awaiting approval" / "declined". */
+  accountNotice?: AccountApprovalNotice | null;
+  onDismissAccountNotice?: () => void;
 }) {
   const { t } = useLanguage();
   const [loginOpen, setLoginOpen] = useState(false);
@@ -1057,6 +1115,14 @@ export default function LoginPage({
         onGitHubLogin={githubEnabled ? handleGitHubLogin : null}
         oauthLoading={oauthBusy || oauthLoading}
       />
+
+      {/* ─── Account approval notice ─── */}
+      {accountNotice && (
+        <AccountApprovalNoticeModal
+          notice={accountNotice}
+          onClose={() => onDismissAccountNotice?.()}
+        />
+      )}
 
       {/* ─── Contact / Support form modal ─── */}
       <ContactFormModal

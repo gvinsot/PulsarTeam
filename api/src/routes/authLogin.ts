@@ -21,7 +21,12 @@ import {
   isDatabaseConnected,
 } from '../services/database.js';
 import { provisionNewUser } from '../services/userProvisioning.js';
-import type { UserRow } from '../services/database/users.js';
+import type { ApprovalStatus, UserRow } from '../services/database/users.js';
+import {
+  approvalRefusal,
+  emitPendingUsersCount,
+  type AdminSocketEmitter,
+} from '../services/userApproval.js';
 import { readSecret } from '../secrets.js';
 import { getMicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
 import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
@@ -164,8 +169,13 @@ function sendLoginResponse(
  *
  * Ordering (preserved across all three providers):
  *   provider-id lookup → getUserByUsername(loginUsername) → link + refetch by id
- *   → countUsers → role admin (first user) else advanced → createUser
- *   → provisionNewUser(user.id).
+ *   → countUsers → role admin (first user) else advanced → createUser.
+ *
+ * Only the very first user of an empty instance is created approved (and
+ * provisioned here). Every other new account is created 'pending': it gets no
+ * session (the caller refuses it — see approvalRefusal) and no provisioning
+ * until an admin approves it (routes/users.ts). Finding or linking an EXISTING
+ * account leaves its approval status as it is.
  *
  * `loginUsername` is the local username key: the email for Google/Microsoft, but
  * for GitHub a computed value (profile email OR `<login>@users.noreply.github.com`).
@@ -178,7 +188,8 @@ export async function findOrCreateOAuthUser(opts: {
     loginUsername: string,
     displayName: string,
     avatarUrl: string | null,
-    role: string
+    role: string,
+    approvalStatus: ApprovalStatus
   ) => Promise<any>;
   providerId: string;
   loginUsername: string;
@@ -188,6 +199,8 @@ export async function findOrCreateOAuthUser(opts: {
   emailVerified?: boolean;
   /** Provider label, for the error message when linking is refused. */
   label: string;
+  /** Called once a new account has been created awaiting approval. */
+  onPendingCreated?: (user: { id: string; username: string }) => unknown;
 }): Promise<any> {
   let user = await opts.getByProviderId(opts.providerId);
   if (user) return user;
@@ -221,17 +234,28 @@ export async function findOrCreateOAuthUser(opts: {
     return getUserById(existingUser.id);
   }
 
-  // Determine role — first user gets admin, others get advanced
+  // Determine role — first user gets admin, others get advanced. The first
+  // user is also the only one nobody could approve, so it starts approved.
   const userCount = await countUsers();
-  const role = userCount === 0 ? 'admin' : 'advanced';
+  const isFirstUser = userCount === 0;
+  const role = isFirstUser ? 'admin' : 'advanced';
+  const approvalStatus: ApprovalStatus = isFirstUser ? 'approved' : 'pending';
   user = await opts.createUser(
     opts.providerId,
     opts.loginUsername,
     opts.displayName,
     opts.avatarUrl,
-    role
+    role,
+    approvalStatus
   );
-  await provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
+  if (isFirstUser) {
+    await provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
+  } else {
+    console.log(
+      `[Auth] New ${opts.label} account "${opts.loginUsername}" (${user.id}) is awaiting admin approval`
+    );
+    await opts.onPendingCreated?.(user);
+  }
   return user;
 }
 
@@ -331,6 +355,14 @@ router.post(
         return;
       }
 
+      // Only an OAuth sign-up starts unapproved, and it has no password — but
+      // an admin may have set one since, so the gate holds here too.
+      const refusal = approvalRefusal(user);
+      if (refusal) {
+        res.status(403).json(refusal);
+        return;
+      }
+
       sendLoginResponse(res, user);
     } catch (err) {
       console.error('Login error:', errorMessage(err));
@@ -365,6 +397,15 @@ router.get(
       const user = await getUserById(decoded.userId);
       if (!user) {
         res.status(401).json({ error: 'User not found' });
+        return;
+      }
+
+      // The approval is re-read with the role: a session minted before an
+      // account lost it does not survive the next reload.
+      const refusal = approvalRefusal(user);
+      if (refusal) {
+        clearSessionCookie(res);
+        res.status(403).json(refusal);
         return;
       }
 
@@ -419,6 +460,12 @@ router.post<{ userId: string }>(
         res.status(404).json({ error: 'User not found' });
         return;
       }
+      // A pending or rejected account holds no session of its own; an admin
+      // must not be able to open one on its behalf either.
+      if (approvalRefusal(targetUser)) {
+        res.status(409).json({ error: 'Cannot impersonate an account that is not approved' });
+        return;
+      }
 
       const { token, csrfToken } = signSessionToken({
         userId: targetUser.id,
@@ -469,7 +516,7 @@ router.post(
       const admin = await getUserById(current.impersonatorId);
       // Refuse to restore a session that is no longer entitled to one: the
       // impersonator may have been demoted or deleted mid-impersonation.
-      if (!admin || admin.role !== 'admin') {
+      if (!admin || admin.role !== 'admin' || approvalRefusal(admin)) {
         clearSessionCookie(res);
         res.status(403).json({ error: 'Original account is no longer an administrator' });
         return;
@@ -580,7 +627,8 @@ interface LoginProviderSpec<TConfig = any> {
     loginUsername: string,
     displayName: string,
     avatarUrl: string | null,
-    role: string
+    role: string,
+    approvalStatus: ApprovalStatus
   ): Promise<any>;
 }
 
@@ -956,7 +1004,17 @@ function handleCallback(spec: LoginProviderSpec) {
         avatarUrl: profile.avatarUrl,
         emailVerified: profile.emailVerified,
         label: spec.label,
+        onPendingCreated: () =>
+          emitPendingUsersCount(req.app.get('io') as AdminSocketEmitter | undefined),
       });
+
+      // A new account waiting for an admin (or one an admin declined): no
+      // session cookie, no login body — only the reason, for the login screen.
+      const refusal = approvalRefusal(user);
+      if (refusal) {
+        res.status(403).json(refusal);
+        return;
+      }
 
       sendLoginResponse(res, user, { avatarUrl: user.avatar_url || profile.avatarUrl });
     } catch (err) {

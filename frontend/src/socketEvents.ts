@@ -58,6 +58,10 @@ export const WsEvents = {
   // desktop comes online/offline or changes its shared folder.
   BRIDGE_FOLDER_CHANGED: 'bridge:folder:changed',
 
+  // Admin sessions only: the number of OAuth accounts awaiting approval
+  // changed ({ count }) — a pending user was created, approved or rejected.
+  USERS_PENDING: 'users:pending',
+
   ERROR: 'error',
   HANDOFF_COMPLETE: 'agent:handoff:complete',
   HANDOFF_ERROR: 'agent:handoff:error',

@@ -361,6 +361,13 @@ const MIGRATIONS: Migration[] = [
     'ALTER TABLE api_keys ALTER COLUMN user_id SET NOT NULL',
     'ALTER TABLE api_keys ALTER COLUMN scope SET NOT NULL',
   ]),
+  // A new account signing in through an OAuth provider waits for an admin
+  // (routes/authLogin.ts findOrCreateOAuthUser). The DEFAULT grandfathers every
+  // existing row — and every non-OAuth creation — as approved.
+  sqlMigration('202610200001_users_approval_status', 'admin approval of new OAuth accounts', [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'approved'
+     CHECK (approval_status IN ('approved', 'pending', 'rejected'))`,
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

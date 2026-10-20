@@ -14,6 +14,11 @@ export const updateUserSchema = z.object({
   displayName: z.string().max(200).optional(),
 });
 
+/** POST /api/users/:id/approve — the role the account is let in with. */
+export const approveUserSchema = z.object({
+  role: z.enum(['admin', 'advanced', 'basic']).optional(),
+});
+
 export const userIdParamsSchema = z.object({
   id: z.string().uuid(),
 });

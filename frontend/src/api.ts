@@ -79,7 +79,10 @@ import type {
   TaskType,
   TermsAcceptedResponse,
   TutorialCompletedResponse,
+  PendingUsersCount,
+  PendingUsersResponse,
   User,
+  UserApprovedResponse,
   UserDirectoryEntry,
   UserMutationResult,
   UserRole,
@@ -460,6 +463,15 @@ function firstValidationDetail(data: object): string {
   return path ? `${path} — ${message}` : message;
 }
 
+/** The machine-readable `code` of an error body (`{ error, code }`), if any. */
+function errorCodeFromBody(data: unknown): string | undefined {
+  if (data && typeof data === 'object' && 'code' in data) {
+    const { code } = data;
+    if (typeof code === 'string' && code) return code;
+  }
+  return undefined;
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
   const text = await res.text();
   let data: unknown;
@@ -470,8 +482,12 @@ async function handleResponse<T>(res: Response): Promise<T> {
     data = {};
   }
   if (!res.ok) {
+    // `code` rides along when the body names one, so a caller can branch on it
+    // (e.g. ACCOUNT_PENDING_APPROVAL on a login) instead of on the message.
+    const code = errorCodeFromBody(data);
     throw Object.assign(new Error(errorFromBody(data, res.status)), {
       status: res.status,
+      ...(code && { code }),
     });
   }
   // ── THE TYPE BOUNDARY ──────────────────────────────────────────────────────
@@ -1337,6 +1353,18 @@ export const api = {
     put<UserMutationResult>(`/users/${id}`, updates),
 
   deleteUser: (id: string) => del<SuccessAck>(`/users/${id}`),
+
+  // New OAuth accounts awaiting admin approval (admin only). Approve/reject
+  // answer 404 for an unknown id and 409 when the user is no longer pending.
+  getPendingUsers: () => get<PendingUsersResponse>('/users/pending'),
+
+  getPendingUsersCount: () => get<PendingUsersCount>('/users/pending/count'),
+
+  // `role` omitted → the server's default ('advanced').
+  approveUser: (id: string, role?: UserRole) =>
+    post<UserApprovedResponse>(`/users/${id}/approve`, role ? { role } : {}),
+
+  rejectUser: (id: string) => post<SuccessAck>(`/users/${id}/reject`, {}),
 
   // Impersonation (admin only)
   impersonate: (userId: string) => post<ImpersonateResponse>(`/auth/impersonate/${userId}`),
