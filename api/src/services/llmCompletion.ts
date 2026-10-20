@@ -133,6 +133,7 @@ export function buildAgentPrompt(
       'IMPORTANT — how to deliver your answer:',
       `Write your complete final answer, and nothing else, to the file \`${answerPath}\` (create the parent directory if needed; overwrite the file if it exists).`,
       'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no notes about the file, no commentary about your process.',
+      'Write it in exactly the format the request asks for (plain text, Markdown, JSON, TOML, code…): when a raw format is asked for, write it raw — no Markdown code fence around it.',
       'Do not commit that file. Once it is written, reply briefly that you are done.',
     ].join('\n')
   );
@@ -420,7 +421,7 @@ export async function runAgentCompletion(
     );
   }
 
-  const answerPath = `${LLM_ANSWER_DIR}/${crypto.randomUUID()}.md`;
+  const answerPath = `${LLM_ANSWER_DIR}/${crypto.randomUUID()}.out`;
   const { prompt, images } = buildAgentPrompt(messages, answerPath);
 
   if (!images.length && runner.isTerminalDriven(agent.id)) {

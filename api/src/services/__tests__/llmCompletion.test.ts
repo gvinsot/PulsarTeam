@@ -89,11 +89,12 @@ test('the prompt carries the system instructions, the request and the answer fil
       { role: 'system', content: 'Answer in French.' },
       { role: 'user', content: 'What is 2+2?' },
     ],
-    '/tmp/pulsar-llm-api/x.md'
+    '/tmp/pulsar-llm-api/x.out'
   );
   assert.match(prompt, /Answer in French\./);
   assert.match(prompt, /Request:\nWhat is 2\+2\?/);
-  assert.match(prompt, /`\/tmp\/pulsar-llm-api\/x\.md`/);
+  assert.match(prompt, /`\/tmp\/pulsar-llm-api\/x\.out`/);
+  assert.match(prompt, /exactly the format the request asks for/);
   assert.deepEqual(images, []);
 });
 
@@ -111,7 +112,7 @@ test('a multi-turn conversation becomes a labelled transcript; inline images are
         ],
       },
     ],
-    '/tmp/a.md'
+    '/tmp/a.out'
   );
   assert.match(
     prompt,
@@ -127,7 +128,7 @@ test('the completion is the content of the answer file, which is then removed', 
   assert.equal(result.content, '4');
   assert.equal(result.source, 'file');
   assert.equal(removed.length, 1);
-  assert.match(removed[0], /^rm -f '\/tmp\/pulsar-llm-api\/[0-9a-f-]+\.md'$/);
+  assert.match(removed[0], /^rm -f '\/tmp\/pulsar-llm-api\/[0-9a-f-]+\.out'$/);
 });
 
 test('without an answer file, the chat reply is returned (reasoning stripped)', async () => {
