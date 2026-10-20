@@ -13,6 +13,8 @@
 // is used instead, so the caller still gets an answer.
 
 import crypto from 'node:crypto';
+import vm from 'node:vm';
+import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import { z } from 'zod';
 import { errorMessage } from '../lib/errors.js';
 import { closeLlmAnswer, llmAnswerFile, openLlmAnswer, takeLlmAnswer } from './llmAnswers.js';
@@ -58,6 +60,12 @@ export const chatCompletionRequestSchema = z.looseObject({
   messages: z.array(messageSchema).min(1).max(500),
   stream: z.boolean().optional().describe('`true` returns the answer as server-sent events.'),
   user: z.string().max(200).optional(),
+  // Read leniently by parseResponseFormat: a value it does not know is
+  // ignored, as before the field was read — never a 400 here.
+  response_format: z
+    .unknown()
+    .optional()
+    .describe('`json_object` or `json_schema`: the answer is a JSON document.'),
 });
 
 export type ChatCompletionRequest = z.infer<typeof chatCompletionRequestSchema>;
@@ -105,7 +113,28 @@ export type AnswerDelivery = { file: string } | { requestId: string };
 const FORMAT_RULE =
   'Give it in exactly the format the request asks for (plain text, Markdown, JSON, TOML, code…): when a raw format is asked for, give it raw — no Markdown code fence around it.';
 
-function deliveryInstructions(delivery: AnswerDelivery): string {
+/**
+ * What a conversation with the web_search tool adds before the delivery part:
+ * the pages it reports are the ones the agent's Web Browser calls return.
+ */
+const WEB_SEARCH_RULE =
+  'Search the web to answer this request: use the search_web tool of your Web Browser MCP server, read the relevant pages among its results with its crawl tool, and base your answer on the pages you consulted.';
+
+/** The rule a `response_format` asking for JSON adds after FORMAT_RULE. */
+function jsonFormatRules(format: JsonOutputFormat | null): string[] {
+  if (!format) return [];
+  const bare = 'with no text before or after it and no Markdown code block around it';
+  if (format.schema === null) return [`Your final answer is ONLY a JSON object, ${bare}.`];
+  return [
+    `Your final answer is ONLY a JSON document conforming to the following JSON schema, ${bare}:`,
+    JSON.stringify(format.schema),
+  ];
+}
+
+function deliveryInstructions(
+  delivery: AnswerDelivery,
+  format: JsonOutputFormat | null = null
+): string {
   if ('requestId' in delivery) {
     return [
       'IMPORTANT — how to deliver your answer:',
@@ -113,6 +142,7 @@ function deliveryInstructions(delivery: AnswerDelivery): string {
       `2. Call the \`submit_answer\` tool of the Pulsar Gateway MCP with request_id "${delivery.requestId}" and that file as \`file_path\`.`,
       'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no commentary about your process.',
       FORMAT_RULE,
+      ...jsonFormatRules(format),
       'Calling submit_answer is what completes the request — without it the caller gets no answer. If it reports an error, fix it and call it again. Then reply briefly that you are done.',
     ].join('\n');
   }
@@ -121,6 +151,7 @@ function deliveryInstructions(delivery: AnswerDelivery): string {
     `Write your complete final answer, and nothing else, to the file \`${delivery.file}\` (create the parent directory if needed; overwrite the file if it exists).`,
     'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no notes about the file, no commentary about your process.',
     FORMAT_RULE,
+    ...jsonFormatRules(format),
     'Do not commit that file. Once it is written, reply briefly that you are done.',
   ].join('\n');
 }
@@ -131,11 +162,15 @@ function deliveryInstructions(delivery: AnswerDelivery): string {
  *
  * A single user message is passed as-is (the common case reads naturally);
  * anything longer is rendered as a labelled transcript ending on the turn to
- * answer.
+ * answer. `format` (response_format) adds the JSON rule to the delivery part;
+ * without it the prompt is exactly the free-form one. `webSearch` (a
+ * conversation with the web_search tool) adds WEB_SEARCH_RULE before it.
  */
 export function buildAgentPrompt(
   messages: ChatMessage[],
-  delivery: AnswerDelivery
+  delivery: AnswerDelivery,
+  format: JsonOutputFormat | null = null,
+  webSearch = false
 ): { prompt: string; images: PromptImage[] } {
   const images: PromptImage[] = [];
   const rendered = messages.map(m => ({ role: m.role, text: contentText(m.content, images) }));
@@ -155,7 +190,8 @@ export function buildAgentPrompt(
     const transcript = turns.map(m => `### ${ROLE_LABEL[m.role]}\n${m.text}`).join('\n\n');
     parts.push(`Conversation so far (answer the last message as the Assistant):\n\n${transcript}`);
   }
-  parts.push(deliveryInstructions(delivery));
+  if (webSearch) parts.push(WEB_SEARCH_RULE);
+  parts.push(deliveryInstructions(delivery, format));
 
   let prompt = parts.join('\n\n');
   if (prompt.length > LLM_MAX_PROMPT_CHARS) {
@@ -191,6 +227,235 @@ export class LlmRequestError extends Error {
   toJSON() {
     return { error: { message: this.message, type: this.type, param: null, code: this.code } };
   }
+}
+
+// ── Structured output (response_format) ────────────────────────────────────
+//
+// `response_format: { type: 'json_object' }` or `{ type: 'json_schema',
+// json_schema: { name, schema, strict } }` asks for a JSON answer. The agent
+// is told so in its prompt, and its answer is checked after the turn: code
+// fence stripped, parsed, validated against the schema. A wrong one is handed
+// back to the agent once, quoting the error; still wrong → 502
+// invalid_json_output. `text`, no field, or a type not known here: the
+// free-form answer, prompt and result unchanged.
+//
+// The schema is the caller's, and its `pattern`s run on V8's backtracking
+// regex engine against an answer the caller can steer: compiling and
+// validating run under a time limit (runBounded), so a pathological schema or
+// pattern costs a bounded slice of the event loop, never minutes of it.
+
+/** The JSON answer a request asked for with `response_format`. */
+export interface JsonOutputFormat {
+  /** The JSON schema the answer conforms to (json_schema), or null (json_object). */
+  schema: Record<string, unknown> | boolean | null;
+  /** json_schema.strict: an answer off the schema is refused, not returned. */
+  strict: boolean;
+  /** `schema` compiled; null without one. */
+  validate: ValidateFunction | null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Longest response_format JSON schema accepted, serialized. */
+const MAX_JSON_SCHEMA_CHARS = 64_000;
+
+/** Time limits of compiling a schema and of validating one answer against it. */
+const SCHEMA_COMPILE_TIMEOUT_MS = 1000;
+const SCHEMA_VALIDATE_TIMEOUT_MS = 250;
+
+const boundedContext = vm.createContext({});
+const boundedCall = new vm.Script('run()');
+
+/**
+ * `fn()`, interrupted after `timeoutMs` — V8 terminates the execution, a
+ * backtracking regex included — with an ERR_SCRIPT_EXECUTION_TIMEOUT error.
+ */
+function runBounded<T>(fn: () => T, timeoutMs: number): T {
+  boundedContext.run = fn;
+  try {
+    return boundedCall.runInContext(boundedContext, { timeout: timeoutMs }) as T;
+  } finally {
+    boundedContext.run = undefined;
+  }
+}
+
+function isTimeout(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT';
+}
+
+/**
+ * The JSON answer `response_format` asks for, or null for a free-form one:
+ * `text`, absent, or anything this API does not know — ignored, as before the
+ * field was read. A json_schema without a schema is a json_object. Throws
+ * 400 on a schema that does not compile: better than a turn that cannot be
+ * checked.
+ */
+export function parseResponseFormat(raw: unknown): JsonOutputFormat | null {
+  if (!isPlainObject(raw)) return null;
+  if (raw.type === 'json_object') return { schema: null, strict: false, validate: null };
+  if (raw.type !== 'json_schema') return null;
+  const spec = isPlainObject(raw.json_schema) ? raw.json_schema : {};
+  const strict = spec.strict === true;
+  if (spec.schema == null) return { schema: null, strict, validate: null };
+
+  const invalid = (why: string) =>
+    new LlmRequestError(
+      400,
+      `Invalid response_format.json_schema.schema: ${why}`,
+      'invalid_request'
+    );
+  if (!isPlainObject(spec.schema) && typeof spec.schema !== 'boolean') {
+    throw invalid('not a JSON schema');
+  }
+  if (JSON.stringify(spec.schema).length > MAX_JSON_SCHEMA_CHARS) {
+    throw invalid(`longer than ${MAX_JSON_SCHEMA_CHARS} characters`);
+  }
+  // The dialect marker is dropped: callers send draft-07 as often as
+  // 2020-12, and the keywords they use are read alike. A fresh Ajv per
+  // request: its cache never grows, and a schema `$id` cannot collide.
+  const compiled = isPlainObject(spec.schema) ? { ...spec.schema } : spec.schema;
+  if (isPlainObject(compiled)) delete compiled.$schema;
+  let validate: ValidateFunction;
+  try {
+    const ajv = new Ajv2020({ strict: false, allErrors: true, validateFormats: false });
+    validate = runBounded(() => ajv.compile(compiled), SCHEMA_COMPILE_TIMEOUT_MS);
+  } catch (err) {
+    throw invalid(isTimeout(err) ? 'too complex to compile' : errorMessage(err));
+  }
+  // An $async schema validates through a promise, out of the time limit.
+  if ((validate as { $async?: unknown }).$async) {
+    throw invalid('$async schemas are not supported');
+  }
+  return { schema: spec.schema, strict, validate };
+}
+
+/**
+ * The answer without the code fence (```json … ```) wrapping it whole. No
+ * regex over the whole answer: the text is the agent's, steerable by the
+ * caller, and a backtracking one would block the event loop.
+ */
+function stripCodeFence(content: string): string {
+  const trimmed = content.trim();
+  if (trimmed.length < 6 || !trimmed.startsWith('```') || !trimmed.endsWith('```')) {
+    return trimmed;
+  }
+  const inner = trimmed.slice(3, -3);
+  // The info string (json, ts…): one anchored character class, linear.
+  const info = /^[\w.+-]*/.exec(inner)?.[0] ?? '';
+  return inner.slice(info.length).trim();
+}
+
+/** Longest error quoted back to the agent or the caller. */
+const MAX_JSON_ERROR_CHARS = 2000;
+
+export interface JsonOutputCheck {
+  /** The answer, code fence stripped — what is returned. */
+  text: string;
+  /** Why it is not the JSON asked for; null when it is. */
+  error: string | null;
+  /** It is JSON, only off the schema. */
+  offSchema: boolean;
+}
+
+/** Check an answer against the JSON `format` asked for. */
+export function checkJsonOutput(content: string, format: JsonOutputFormat): JsonOutputCheck {
+  const text = stripCodeFence(content);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (err) {
+    return { text, error: `it is not valid JSON (${errorMessage(err)})`, offSchema: false };
+  }
+  if (format.schema === null && !isPlainObject(value)) {
+    return { text, error: 'it is not a JSON object', offSchema: false };
+  }
+  const validate = format.validate;
+  let valid = true;
+  try {
+    valid = !validate || runBounded(() => validate(value) === true, SCHEMA_VALIDATE_TIMEOUT_MS);
+  } catch (err) {
+    if (!isTimeout(err)) throw err;
+    return {
+      text,
+      error: `it could not be checked against the JSON schema within ${SCHEMA_VALIDATE_TIMEOUT_MS} ms`,
+      offSchema: true,
+    };
+  }
+  if (validate && !valid) {
+    const errors = (validate.errors || [])
+      .map(e => `${e.instancePath || '/'} ${e.message || 'is invalid'}`)
+      .join('; ');
+    return {
+      text,
+      error: `it does not conform to the JSON schema: ${errors}`.slice(0, MAX_JSON_ERROR_CHARS),
+      offSchema: true,
+    };
+  }
+  return { text, error: null, offSchema: false };
+}
+
+/**
+ * The follow-up turn handing a wrong answer back to the agent, quoting the
+ * error, with the same delivery and JSON rules as the first turn.
+ */
+export function buildCorrectionPrompt(
+  error: string,
+  delivery: AnswerDelivery,
+  format: JsonOutputFormat
+): string {
+  return [
+    `Your answer to the request received through the OpenAI-compatible API of PulsarTeam was rejected: ${error.slice(0, MAX_JSON_ERROR_CHARS)}`,
+    'Give the corrected final answer.',
+    deliveryInstructions(delivery, format),
+  ].join('\n\n');
+}
+
+/**
+ * Hold the answer of a turn to the JSON `format`: a wrong one gets ONE
+ * correction turn (`retry`, in the same mode as the first), then 502
+ * invalid_json_output. A non-strict schema only steers: JSON off the schema
+ * is returned rather than refused.
+ */
+async function checkedJsonOutput(
+  agent: CompletionAgent,
+  first: CompletionResult,
+  format: JsonOutputFormat,
+  retry: (error: string) => Promise<CompletionResult>
+): Promise<CompletionResult> {
+  const firstCheck = checkJsonOutput(first.content, format);
+  if (!firstCheck.error) return { ...first, content: firstCheck.text };
+  const accepted = (check: JsonOutputCheck) => !check.error || (check.offSchema && !format.strict);
+  const refuse = (error: string) =>
+    new LlmRequestError(
+      502,
+      `Agent "${agent.name}" did not answer the JSON asked for by response_format: ${error}`,
+      'invalid_json_output'
+    );
+
+  let second: CompletionResult;
+  try {
+    second = await retry(firstCheck.error);
+  } catch (err) {
+    // A correction turn that gives no answer (none, busy, stopped, timed
+    // out, failed) leaves the first one standing; only a hang-up ends it all.
+    if (err instanceof LlmRequestError && err.code !== 'client_closed') {
+      if (accepted(firstCheck)) return { ...first, content: firstCheck.text };
+      throw refuse(firstCheck.error);
+    }
+    throw err;
+  }
+  const secondCheck = checkJsonOutput(second.content, format);
+  if (accepted(secondCheck)) {
+    return {
+      ...second,
+      content: secondCheck.text,
+      promptTokens: first.promptTokens + second.promptTokens,
+    };
+  }
+  if (accepted(firstCheck)) return { ...first, content: firstCheck.text };
+  throw refuse(secondCheck.error || firstCheck.error);
 }
 
 // ── Running the agent ───────────────────────────────────────────────────────
@@ -284,12 +549,29 @@ export const LLM_TERMINAL_QUIET_MS = (() => {
 /** Poll interval of a terminal turn (answer submitted? CLI quiet?). */
 const TERMINAL_POLL_MS = 1000;
 
-/** Tunables of a terminal turn, overridden by tests. */
+/** Tunables of a terminal turn, overridden by tests, and the answer format. */
 export interface CompletionOptions {
   pollMs?: number;
   timeoutMs?: number;
   quietMs?: number;
+  /** The JSON answer response_format asks for (parseResponseFormat); null: free-form. */
+  responseFormat?: JsonOutputFormat | null;
+  /** Tell the agent to search the web (a conversation with the web_search tool). */
+  webSearch?: boolean;
+  /**
+   * Called each time an agent turn has settled — chat: sendMessage returned
+   * or threw; terminal: the turn ended — before the answer is read. The agent
+   * may take other work from there on (the web_search capture stops).
+   */
+  onTurnSettled?: () => void;
 }
+
+/**
+ * How long a correction turn waits, past the CLI's quiet delay, for the agent
+ * to take a new terminal turn: it stays busy until its CLI-activity idle
+ * timer fires after the first one.
+ */
+const CORRECTION_START_GRACE_MS = 60_000;
 
 /** Waits `ms`, or less when `signal` aborts. */
 function pause(ms: number, signal?: AbortSignal): Promise<void> {
@@ -328,6 +610,9 @@ function hasInlineImages(messages: ChatMessage[]): boolean {
  * text). Except after an authentication error: the CLI is then quiet because
  * it waits for the user to log in, so the turn keeps waiting. The caller
  * hanging up, a Stop, or the timeout end it too.
+ *
+ * A JSON answer (response_format) that is wrong gets one correction turn, a
+ * new terminal turn with a new request id.
  */
 async function runTerminalCompletion(
   runner: CompletionRunner,
@@ -336,28 +621,82 @@ async function runTerminalCompletion(
   signal: AbortSignal | undefined,
   opts: CompletionOptions
 ): Promise<CompletionResult> {
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const asked = contentText(lastUser?.content, []).replace(/\s+/g, ' ').trim();
+  const label = `[LLM API] ${asked}`.slice(0, 200);
+  const format = opts.responseFormat ?? null;
+
+  const first = await runTerminalTurn(
+    runner,
+    agent,
+    label,
+    signal,
+    opts,
+    requestId => buildAgentPrompt(messages, { requestId }, format, opts.webSearch === true).prompt
+  );
+  if (!format) return first;
+  return checkedJsonOutput(agent, first, format, error =>
+    runTerminalTurn(
+      runner,
+      agent,
+      label,
+      signal,
+      opts,
+      requestId => buildCorrectionPrompt(error, { requestId }, format),
+      true
+    )
+  );
+}
+
+/**
+ * One terminal turn: `makePrompt` builds the prompt for the request id it is
+ * given. `afterTurn` (a correction) waits for the agent to be free again
+ * instead of answering 409 at once.
+ */
+async function runTerminalTurn(
+  runner: CompletionRunner,
+  agent: CompletionAgent,
+  label: string,
+  signal: AbortSignal | undefined,
+  opts: CompletionOptions,
+  makePrompt: (requestId: string) => string,
+  afterTurn = false
+): Promise<CompletionResult> {
   const clientClosed = () =>
     new LlmRequestError(499, 'The client closed the request', 'client_closed');
+  if (signal?.aborted) throw clientClosed();
   const requestId = openLlmAnswer(agent.id);
   try {
-    const { prompt } = buildAgentPrompt(messages, { requestId });
-    const lastUser = [...messages].reverse().find(m => m.role === 'user');
-    const asked = contentText(lastUser?.content, []).replace(/\s+/g, ' ').trim();
-    const label = `[LLM API] ${asked}`.slice(0, 200);
-
-    try {
-      await runner.startCliTurn(agent.id, prompt, label);
-    } catch (err) {
-      const msg = errorMessage(err);
-      if (/already processing/i.test(msg)) {
-        throw new LlmRequestError(409, `Agent "${agent.name}" is busy. Retry later.`, 'agent_busy');
-      }
-      throw new LlmRequestError(502, `Agent "${agent.name}" failed: ${msg}`, 'agent_error');
-    }
-
+    const prompt = makePrompt(requestId);
     const pollMs = opts.pollMs ?? TERMINAL_POLL_MS;
     const quietMs = opts.quietMs ?? LLM_TERMINAL_QUIET_MS;
     const timeoutMs = opts.timeoutMs ?? LLM_TERMINAL_TIMEOUT_MS;
+
+    const startBy = afterTurn
+      ? Date.now() + Math.min(timeoutMs, quietMs + CORRECTION_START_GRACE_MS)
+      : 0;
+    for (;;) {
+      try {
+        await runner.startCliTurn(agent.id, prompt, label);
+        break;
+      } catch (err) {
+        const msg = errorMessage(err);
+        if (/already processing/i.test(msg)) {
+          if (Date.now() < startBy) {
+            await pause(pollMs, signal);
+            if (signal?.aborted) throw clientClosed();
+            continue;
+          }
+          throw new LlmRequestError(
+            409,
+            `Agent "${agent.name}" is busy. Retry later.`,
+            'agent_busy'
+          );
+        }
+        throw new LlmRequestError(502, `Agent "${agent.name}" failed: ${msg}`, 'agent_error');
+      }
+    }
+
     const deadline = Date.now() + timeoutMs;
     // Interrupt the CLI on the way out unless it is done (answered, or quiet).
     let interrupt = true;
@@ -414,6 +753,7 @@ async function runTerminalCompletion(
       }
     } finally {
       runner.endCliTurn(agent.id, prompt, { interrupt });
+      opts.onTurnSettled?.();
     }
   } finally {
     closeLlmAnswer(requestId);
@@ -431,6 +771,10 @@ async function runTerminalCompletion(
  * A CLI agent answers in its shared terminal (runTerminalCompletion), unless
  * the request carries images: those can only reach the CLI through the chat
  * path.
+ *
+ * `opts.responseFormat` holds the answer to the JSON asked for, with one
+ * correction turn in the same mode (checkedJsonOutput). `opts.webSearch`
+ * adds the web search rule to the first turn's prompt.
  */
 export async function runAgentCompletion(
   runner: CompletionRunner,
@@ -458,8 +802,37 @@ export async function runAgentCompletion(
     return runTerminalCompletion(runner, agent, messages, signal, opts);
   }
 
+  const format = opts.responseFormat ?? null;
+  const first = await runChatTurn(runner, agent, signal, opts, file =>
+    buildAgentPrompt(messages, { file }, format, opts.webSearch === true)
+  );
+  if (!format) return first;
+  // The correction is another chat turn: the agent has its first answer in
+  // its history.
+  return checkedJsonOutput(agent, first, format, error =>
+    runChatTurn(runner, agent, signal, opts, file => ({
+      prompt: buildCorrectionPrompt(error, { file }, format),
+      images: [],
+    }))
+  );
+}
+
+/**
+ * One chat turn (sendMessage): `makePrompt` builds the prompt for the answer
+ * file it is given; that file, else the reply, is the answer.
+ */
+async function runChatTurn(
+  runner: CompletionRunner,
+  agent: CompletionAgent,
+  signal: AbortSignal | undefined,
+  opts: CompletionOptions,
+  makePrompt: (answerPath: string) => { prompt: string; images: PromptImage[] }
+): Promise<CompletionResult> {
+  const clientClosed = () =>
+    new LlmRequestError(499, 'The client closed the request', 'client_closed');
+  if (signal?.aborted) throw clientClosed();
   const answerPath = `${LLM_ANSWER_DIR}/${crypto.randomUUID()}.out`;
-  const { prompt, images } = buildAgentPrompt(messages, { file: answerPath });
+  const { prompt, images } = makePrompt(answerPath);
 
   const exec = runner.executionManager;
   // Best-effort cleanup; never fails the request.
@@ -520,6 +893,7 @@ export async function runAgentCompletion(
     turnRunning = false;
     if (retryTimer) clearTimeout(retryTimer);
     signal?.removeEventListener('abort', abortTurn);
+    opts.onTurnSettled?.();
   }
 
   if (signal?.aborted) {

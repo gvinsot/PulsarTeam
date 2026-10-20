@@ -31,6 +31,7 @@ import { createTaskFieldsSchema } from './mcp/taskInsertion.js';
 import { TASK_VIEW_KEYS } from './mcp/taskOperations.js';
 import { INSERT_RATE_LIMIT_PER_MINUTE } from '../routes/insertApi.js';
 import { LLM_KEY_RATE_LIMIT_PER_MINUTE, chatCompletionRequestSchema } from './llmCompletion.js';
+import { CONVERSATION_RETRY_AFTER_S, conversationRequestSchema } from './llmConversation.js';
 
 /** One tool as `tools/list` publishes it. */
 export interface DocumentedTool {
@@ -150,6 +151,63 @@ const errorSchema = {
   properties: { error: { type: 'string' } },
 };
 
+/**
+ * `response_format` of a chat completion. Its zod field is `unknown` — read
+ * leniently by parseResponseFormat, an unknown type being ignored — so what
+ * it takes is spelled out here.
+ */
+const responseFormatSchema = {
+  description:
+    'Opt-in JSON answer. `json_object`: the answer is a JSON object. `json_schema`: a JSON document conforming to `json_schema.schema` (JSON Schema up to 64 KB, validated server-side under a time limit). The agent is told so; its answer is returned without a surrounding code fence. An answer that is not valid JSON — or, with `strict: true`, not of the schema — is handed back to the agent once with the error, then refused with `502 invalid_json_output`. `text`, no field, or another type: free-form answer.',
+  oneOf: [
+    {
+      type: 'object',
+      title: 'Text',
+      required: ['type'],
+      properties: { type: { const: 'text' } },
+    },
+    {
+      type: 'object',
+      title: 'JSON object',
+      required: ['type'],
+      properties: { type: { const: 'json_object' } },
+    },
+    {
+      type: 'object',
+      title: 'JSON schema',
+      required: ['type', 'json_schema'],
+      properties: {
+        type: { const: 'json_schema' },
+        json_schema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+            schema: {
+              type: 'object',
+              description:
+                'The JSON Schema the answer conforms to. One that does not compile answers `400`.',
+            },
+            strict: {
+              type: 'boolean',
+              description:
+                '`true`: an answer off the schema is refused. Otherwise it is returned as long as it is JSON.',
+            },
+          },
+        },
+      },
+    },
+  ],
+};
+
+/** The chat completion body, `response_format` documented in full. */
+function chatCompletionRequestDoc(): JsonObject {
+  const json = bodySchema(chatCompletionRequestSchema);
+  const properties = json.properties as JsonObject;
+  properties.response_format = responseFormatSchema;
+  return json;
+}
+
 /** OpenAI's error envelope, used by the /api/llm surface. */
 const openAiErrorSchema = {
   type: 'object',
@@ -190,6 +248,81 @@ const chatCompletionSchema = {
           },
           finish_reason: { const: 'stop' },
         },
+      },
+    },
+    usage: {
+      type: 'object',
+      description: 'Estimated (≈4 characters per token).',
+      properties: {
+        prompt_tokens: { type: 'integer' },
+        completion_tokens: { type: 'integer' },
+        total_tokens: { type: 'integer' },
+      },
+    },
+  },
+};
+
+/** One page a web_search conversation reports. */
+const consultedPageSchema = {
+  type: 'object',
+  required: ['url', 'title'],
+  properties: {
+    url: { type: 'string', description: 'http(s) URL of the page.' },
+    title: { type: 'string', description: 'Title from the same tool result, else "".' },
+  },
+};
+
+/** Mistral's `conversation.response` object. */
+const conversationResponseSchema = {
+  type: 'object',
+  required: ['object', 'conversation_id', 'outputs', 'usage'],
+  properties: {
+    object: { const: 'conversation.response' },
+    conversation_id: {
+      type: 'string',
+      description: '`conv_` + 32 hex characters, new for every request (nothing is stored).',
+    },
+    outputs: {
+      type: 'array',
+      description:
+        'The `tool.execution` entries (with `web_search` only), one per Web Browser tool call in call order, then the `message.output` entry.',
+      items: {
+        oneOf: [
+          {
+            type: 'object',
+            required: ['object', 'type', 'name', 'arguments', 'info'],
+            properties: {
+              object: { const: 'entry' },
+              type: { const: 'tool.execution' },
+              name: { const: 'web_search' },
+              arguments: {
+                type: 'string',
+                description: 'The search query, as JSON: `{"query": …}`.',
+              },
+              info: {
+                type: 'object',
+                properties: {
+                  result: {
+                    type: 'array',
+                    description:
+                      'Pages this call consulted. Each URL is reported once per response, 100 pages at most in all.',
+                    items: { $ref: '#/components/schemas/ConsultedPage' },
+                  },
+                },
+              },
+            },
+          },
+          {
+            type: 'object',
+            required: ['object', 'type', 'role', 'content'],
+            properties: {
+              object: { const: 'entry' },
+              type: { const: 'message.output' },
+              role: { const: 'assistant' },
+              content: { type: 'string', description: 'Content of the answer file.' },
+            },
+          },
+        ],
       },
     },
     usage: {
@@ -408,7 +541,7 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         operationId: 'llm_list_models',
         summary: 'List the agents the key can address',
         description:
-          'OpenAI `GET /v1/models`: one entry per agent the key owner can edit. `id` is the agent name, to pass as `model`; `agent_id` is its id, accepted as `model` too.',
+          'OpenAI `GET /v1/models`: one entry per agent the key owner can edit. `id` is the agent name, to pass as `model`; `agent_id` is its id, accepted as `model` too. The entries are OpenAI-shaped: the Mistral SDK `models.list()` cannot read them — a Mistral client passes the agent name as `model` directly.',
         security: [{ llmKey: [] }],
         'x-api-key-scope': 'llm',
         responses: {
@@ -454,6 +587,7 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
           "OpenAI `POST /v1/chat/completions`, answered by the agent named in `model`. The conversation is handed to the agent, which writes its final answer to a file in its workspace; the content of that file is returned as the assistant message (the agent's chat reply is used if no file was written).\n\n" +
           'The agent works with its own LLM, tools, skills and MCP servers, so a request may take minutes. Sampling parameters (`temperature`, `max_tokens`…) are accepted and ignored. Inline `data:` images are passed to the agent; image URLs are not fetched. `usage` is an estimate.\n\n' +
           'With `stream: true` the answer arrives as server-sent `chat.completion.chunk` events — a role chunk, keep-alive comments while the agent works, the whole answer in one chunk, then `[DONE]`.\n\n' +
+          '`response_format` (`json_object`, or `json_schema` with a JSON Schema) asks for a JSON answer: it is checked after the turn, handed back to the agent once if it is not valid, then refused with `502 invalid_json_output`.\n\n' +
           `One request at a time per agent: a busy agent answers \`409\`. Rate limit: ${LLM_KEY_RATE_LIMIT_PER_MINUTE} requests/minute per key.`,
         security: [{ llmKey: [] }],
         'x-api-key-scope': 'llm',
@@ -480,6 +614,27 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
                     ],
                   },
                 },
+                jsonSchema: {
+                  summary: 'A JSON answer of a given schema',
+                  value: {
+                    model: 'Developer',
+                    messages: [{ role: 'user', content: 'List the open bugs of the project.' }],
+                    response_format: {
+                      type: 'json_schema',
+                      json_schema: {
+                        name: 'bugs',
+                        strict: true,
+                        schema: {
+                          type: 'object',
+                          required: ['bugs'],
+                          properties: {
+                            bugs: { type: 'array', items: { type: 'string' } },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
               },
             },
           },
@@ -493,13 +648,89 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
               'text/event-stream': { schema: { type: 'string' } },
             },
           },
-          '400': openAiError('Malformed body, ambiguous agent name, or conversation too long.'),
+          '400': openAiError(
+            'Malformed body, ambiguous agent name, conversation too long, or a `response_format` JSON schema that does not compile.'
+          ),
           '404': openAiError('No agent of that name or id that the key owner can edit.'),
           '409': openAiError('The agent is busy or disabled. Retry later.'),
           '429': openAiError(
             `More than ${LLM_KEY_RATE_LIMIT_PER_MINUTE} requests in a minute on this key.`
           ),
-          '502': openAiError('The agent failed or returned no answer.'),
+          '502': openAiError(
+            'The agent failed or returned no answer; or, with `response_format`, no valid JSON even after one correction (`invalid_json_output`).'
+          ),
+          ...keyErrors,
+        },
+      },
+    },
+    '/api/llm/v1/conversations': {
+      post: {
+        tags: ['LLM'],
+        operationId: 'llm_conversation',
+        summary: 'Ask an agent, get a Mistral conversation response',
+        description:
+          'The subset of Mistral `POST /v1/conversations` a Mistral client sends, answered by the agent named in `model` — the same turn as `/v1/chat/completions`: `instructions` is passed like a system message, a string `inputs` as one user message, a list as the conversation (role-less entries such as the `tool.execution` of a previous response are skipped). `completion_args` and `store` are accepted and ignored; nothing is stored, every request is a new conversation. Only `stream: false`. A Mistral SDK is pointed at `server_url = <origin>/api/llm` (it adds `/v1/…` itself).\n\n' +
+          '`tools: [{ "type": "web_search" }]` asks the agent to search the web with its Web Browser MCP server, and lists the pages it consulted as `tool.execution` entries before the answer, one per Web Browser tool call (a `search_web` with its query as `arguments`, a page tool with `{}`). Those pages are captured server-side from the agent\'s Web Browser tool calls during the turn — never taken from its answer: every `search_web` result, plus a page crawled (`crawl`, `crawl_many`, `extract`, `get_links`) successfully **only if** its URL came out of an earlier `search_web` of the same turn, so a URL picked up from injected text does not count. A CLI agent (its own web tools escape the capture) or an agent without the Web Browser MCP (agent plugins, board plugins, agent MCP servers) answers `400 web_search_unsupported_for_agent`.\n\n' +
+          `One request at a time per agent: a busy or disabled agent answers \`409\` with \`Retry-After: ${CONVERSATION_RETRY_AFTER_S}\`. A turn may take minutes; a CLI agent's turn is cut at 30 minutes (\`LLM_API_TERMINAL_TIMEOUT_MS\`, \`504 timeout\`). Rate limit: ${LLM_KEY_RATE_LIMIT_PER_MINUTE} requests/minute per key.`,
+        security: [{ llmKey: [] }],
+        'x-api-key-scope': 'llm',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ConversationRequest' },
+              examples: {
+                minimal: {
+                  summary: 'One question',
+                  value: {
+                    model: 'Developer',
+                    inputs: 'Summarize the README of the project.',
+                    store: false,
+                  },
+                },
+                webSearch: {
+                  summary: 'Answer from the web, with the pages consulted',
+                  value: {
+                    model: 'Researcher',
+                    instructions: 'Answer in French, citing your sources.',
+                    inputs: [{ role: 'user', content: 'What is new in Node.js 24?' }],
+                    tools: [{ type: 'web_search' }],
+                    completion_args: { temperature: 0.3 },
+                    store: false,
+                    stream: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'The conversation response.',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ConversationResponse' },
+              },
+            },
+          },
+          '400': openAiError(
+            'Malformed body (`invalid_request`), ambiguous agent name, conversation too long, `stream: true` (`stream_not_supported`), a tool other than `web_search` (`tool_not_supported`), or `web_search` for an agent that cannot serve it (`web_search_unsupported_for_agent`).'
+          ),
+          '404': openAiError('No agent of that name or id that the key owner can edit.'),
+          '409': {
+            ...openAiError('The agent is busy or disabled. Retry after `Retry-After` seconds.'),
+            headers: {
+              'Retry-After': {
+                description: 'Seconds to wait before retrying (`agent_busy`, `agent_disabled`).',
+                schema: { type: 'integer', examples: [CONVERSATION_RETRY_AFTER_S] },
+              },
+            },
+          },
+          '429': openAiError(
+            `More than ${LLM_KEY_RATE_LIMIT_PER_MINUTE} requests in a minute on this key.`
+          ),
+          '502': openAiError('The agent failed or returned no answer (`empty_answer`).'),
+          '504': openAiError('The agent gave no answer in time (`timeout`).'),
           ...keyErrors,
         },
       },
@@ -518,7 +749,7 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         '| Key | Opens |\n|---|---|\n' +
         '| `insert` | `/api/insert/*`, `/api/mcp/insert` — task creation on the one board it is bound to |\n' +
         '| `browser` | `/api/mcp/browser` — web search and crawling, no tenant data |\n' +
-        '| `llm` | `/api/llm/v1/*` — OpenAI-compatible chat completions answered by your agents |\n' +
+        '| `llm` | `/api/llm/v1/*` — OpenAI-compatible chat completions (and Mistral-compatible conversations) answered by your agents |\n' +
         '| `management` | `/api/mcp/management` |\n' +
         '| `admin` | `/api/mcp/admin` and `/api/mcp/management` |\n\n' +
         'Keys never cross these lines: an `admin` key does not open the insert surface (it has no board) nor the browser or llm ones, and a `browser` or `llm` key opens nothing else.',
@@ -530,7 +761,7 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
       {
         name: 'LLM',
         description:
-          'OpenAI-compatible endpoint answered by an agent. Point any OpenAI SDK at `<origin>/api/llm/v1` with an `llm` key as the API key, and use an agent name as `model`.',
+          'OpenAI-compatible endpoint answered by an agent. Point any OpenAI SDK at `base_url = <origin>/api/llm/v1` with an `llm` key as the API key, and use an agent name as `model`. A Mistral SDK takes `server_url = <origin>/api/llm` — it adds `/v1/…` itself — for `/v1/conversations` and `/v1/chat/completions`; its `models.list()` cannot read `/v1/models`.',
       },
     ],
     paths: {
@@ -689,8 +920,11 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         Error: errorSchema,
         ValidationError: validationErrorSchema,
         JsonRpcRequest: jsonRpcRequestSchema,
-        ChatCompletionRequest: bodySchema(chatCompletionRequestSchema),
+        ChatCompletionRequest: chatCompletionRequestDoc(),
         ChatCompletion: chatCompletionSchema,
+        ConversationRequest: bodySchema(conversationRequestSchema),
+        ConversationResponse: conversationResponseSchema,
+        ConsultedPage: consultedPageSchema,
         OpenAiError: openAiErrorSchema,
       },
       responses: {

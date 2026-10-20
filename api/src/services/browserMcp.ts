@@ -3,6 +3,7 @@ import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { assertPublicUrl } from '../lib/ssrfGuard.js';
+import { browserWebMeta } from './webCapture.js';
 
 const BROWSER_SERVICE_URL = process.env.BROWSER_SERVICE_URL || 'http://mcp-browser:8000';
 
@@ -32,6 +33,16 @@ async function assertPublicTarget(url: string): Promise<void> {
   } catch (err) {
     throw new Error(`Refused to fetch ${url}: ${(err as Error).message}`);
   }
+}
+
+/**
+ * The agent-visible text, plus — in the result `_meta`, never shown to the
+ * model — the URLs/titles of the response that the LLM API's web capture
+ * records (webCapture.ts). Responses without them get no `_meta`.
+ */
+function withWebMeta(out: string, response: unknown) {
+  const meta = browserWebMeta(response);
+  return meta ? { ...text(out), _meta: meta } : text(out);
 }
 
 async function browserRequest(path: string, body: any) {
@@ -64,7 +75,7 @@ export function createBrowserMcpServer() {
     async ({ query }) => {
       const result = await browserRequest('/search_web', { query });
       const out = result?.content ?? result?.error ?? 'No content.';
-      return text(out);
+      return withWebMeta(out, result);
     }
   );
 
@@ -84,7 +95,7 @@ export function createBrowserMcpServer() {
       await assertPublicTarget(url);
       const result = await browserRequest('/crawl', { url, word_count_threshold });
       const out = result?.content ?? result?.error ?? 'No content.';
-      return text(out);
+      return withWebMeta(out, result);
     }
   );
 
@@ -110,7 +121,7 @@ export function createBrowserMcpServer() {
       const out = pages.length
         ? pages.map((p: any) => `## ${p.url}\n\n${p.content || p.error || ''}`).join('\n\n---\n\n')
         : (result?.error ?? 'No pages.');
-      return text(out);
+      return withWebMeta(out, result);
     }
   );
 
@@ -124,7 +135,7 @@ export function createBrowserMcpServer() {
       await assertPublicTarget(url);
       const result = await browserRequest('/get_links', { url });
       const out = result?.error ? result.error : JSON.stringify(result?.links ?? {}, null, 2);
-      return text(out);
+      return withWebMeta(out, result);
     }
   );
 
@@ -143,7 +154,7 @@ export function createBrowserMcpServer() {
       await assertPublicTarget(url);
       const result = await browserRequest('/extract', { url, instruction, schema_json });
       const out = result?.content ?? result?.error ?? 'No content.';
-      return text(out);
+      return withWebMeta(out, result);
     }
   );
 

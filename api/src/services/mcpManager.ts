@@ -7,6 +7,7 @@ import { BUILTIN_MCP_SERVERS, INTERNAL_MCP_SERVERS } from '../data/mcpServers.js
 import { MCPClient } from './mcpClient.js';
 import { errorMessage } from '../lib/errors.js';
 import type { SkillManager } from './skillManager.js';
+import { beginWebToolCall, rememberWebMeta, trackWebToolCall } from './webCapture.js';
 
 /** One MCP tool advertised to an agent, flattened across every server it can reach. */
 interface AgentMcpTool {
@@ -561,12 +562,16 @@ export class MCPManager {
   /** Shape a raw MCP callTool result into the { success, result, images, raw } envelope. */
   _shape(result: any) {
     const extracted = extractMcpResult(result.content);
-    return {
+    const shaped = {
       success: !result.isError,
       result: extracted.text,
       images: extracted.images,
       raw: result.content,
     };
+    // Web Browser page data for the LLM API capture (webCapture.ts) — kept
+    // off the shaped object so tool output and history stay as they are.
+    if (result._meta) rememberWebMeta(shaped, result._meta);
+    return shaped;
   }
 
   /** Heuristic sniffing of session/token expiry from an MCP call error. */
@@ -709,25 +714,38 @@ export class MCPManager {
       );
     }
 
+    // Pages consulted for the LLM API's web_search (webCapture.ts): null after
+    // one Map lookup unless a capture is active for this agent.
+    const webCall = agentId ? beginWebToolCall(agentId, server.id, toolName, args) : null;
+
     // Check if agent has custom auth for this server
     if (server.remoteAuth) {
       if (server.enabled === false) throw new Error('MCP désactivé');
       const { remoteScopeForAgent, useRemoteClient } = await import('./remoteMcp.js');
       const scope = await remoteScopeForAgent(server.id, agentId);
-      return useRemoteClient(server, scope, async client =>
-        this._shape(await client.callTool(toolName, args))
+      return trackWebToolCall(
+        webCall,
+        useRemoteClient(server, scope, async client =>
+          this._shape(await client.callTool(toolName, args))
+        )
       );
     }
     const agentAuth = agentMcpAuth[server.id];
     if (agentId && agentAuth?.apiKey) {
-      return this._callToolWithAgentAuth(server, toolName, args, agentId, agentAuth.apiKey);
+      return trackWebToolCall(
+        webCall,
+        this._callToolWithAgentAuth(server, toolName, args, agentId, agentAuth.apiKey)
+      );
     }
 
     // For internal OAuth-based MCPs (OneDrive, Gmail, …): always use per-agent
     // connection to pass agentId context so the MCP handler can resolve
     // agent-specific OAuth tokens (see INTERNAL_MCP_SERVERS.agentContext).
     if (agentId && INTERNAL_MCP_SERVERS.get(server.url)?.agentContext) {
-      return this._callToolWithAgentContext(server, toolName, args, agentId, boardId);
+      return trackWebToolCall(
+        webCall,
+        this._callToolWithAgentContext(server, toolName, args, agentId, boardId)
+      );
     }
 
     // No per-agent auth — use global connection
@@ -743,7 +761,7 @@ export class MCPManager {
         );
       }
     }
-    return this.callTool(server.id, toolName, args);
+    return trackWebToolCall(webCall, this.callTool(server.id, toolName, args));
   }
 
   /**

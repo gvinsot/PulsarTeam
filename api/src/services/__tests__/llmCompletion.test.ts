@@ -12,8 +12,11 @@ import {
   buildAgentPrompt,
   chatCompletionBody,
   chatCompletionRequestSchema,
+  checkJsonOutput,
+  parseResponseFormat,
   runAgentCompletion,
   type CompletionRunner,
+  type JsonOutputFormat,
 } from '../llmCompletion.js';
 import { closeLlmAnswer, openLlmAnswer, submitLlmAnswer } from '../llmAnswers.js';
 
@@ -413,6 +416,409 @@ test('a CLI agent already at work answers 409; images keep the chat path', async
   assert.equal(chatTurns, 1);
   assert.equal(withImage.pasted.length, 0);
   assert.equal(result.content, 'A cat.');
+});
+
+// ── response_format ─────────────────────────────────────────────────────────
+
+const FR_ASK = [
+  { role: 'system' as const, content: 'Answer in French.' },
+  { role: 'user' as const, content: 'What is 2+2?' },
+];
+
+/** The prompt as it was before response_format was read — byte for byte. */
+const FREE_FORM_FILE_PROMPT = [
+  'You are answering a request received through the OpenAI-compatible API of PulsarTeam.',
+  '',
+  'Instructions from the caller:',
+  'Answer in French.',
+  '',
+  'Request:',
+  'What is 2+2?',
+  '',
+  'IMPORTANT — how to deliver your answer:',
+  'Write your complete final answer, and nothing else, to the file `/tmp/pulsar-llm-api/x.out` (create the parent directory if needed; overwrite the file if it exists).',
+  'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no notes about the file, no commentary about your process.',
+  'Give it in exactly the format the request asks for (plain text, Markdown, JSON, TOML, code…): when a raw format is asked for, give it raw — no Markdown code fence around it.',
+  'Do not commit that file. Once it is written, reply briefly that you are done.',
+].join('\n');
+
+const FREE_FORM_TOOL_PROMPT = [
+  'You are answering a request received through the OpenAI-compatible API of PulsarTeam.',
+  '',
+  'Instructions from the caller:',
+  'Answer in French.',
+  '',
+  'Request:',
+  'What is 2+2?',
+  '',
+  'IMPORTANT — how to deliver your answer:',
+  '1. Write your complete final answer, and nothing else, to the file `~/pulsar-llm-api/req-1.out` (create the parent directory if needed).',
+  '2. Call the `submit_answer` tool of the Pulsar Gateway MCP with request_id "req-1" and that file as `file_path`.',
+  'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no commentary about your process.',
+  'Give it in exactly the format the request asks for (plain text, Markdown, JSON, TOML, code…): when a raw format is asked for, give it raw — no Markdown code fence around it.',
+  'Calling submit_answer is what completes the request — without it the caller gets no answer. If it reports an error, fix it and call it again. Then reply briefly that you are done.',
+].join('\n');
+
+test('without a JSON response_format the prompt is byte-for-byte the free-form one', () => {
+  for (const raw of [
+    undefined,
+    null,
+    'json',
+    { type: 'text' },
+    { type: 'xml' },
+    { type: 'json_schema_v2', json_schema: 5 },
+  ]) {
+    const format = parseResponseFormat(raw);
+    assert.equal(format, null, `${JSON.stringify(raw)} is free-form`);
+    assert.equal(
+      buildAgentPrompt(FR_ASK, { file: '/tmp/pulsar-llm-api/x.out' }, format).prompt,
+      FREE_FORM_FILE_PROMPT
+    );
+    assert.equal(
+      buildAgentPrompt(FR_ASK, { requestId: 'req-1' }, format).prompt,
+      FREE_FORM_TOOL_PROMPT
+    );
+  }
+  assert.equal(
+    buildAgentPrompt(FR_ASK, { file: '/tmp/pulsar-llm-api/x.out' }).prompt,
+    FREE_FORM_FILE_PROMPT
+  );
+  assert.equal(buildAgentPrompt(FR_ASK, { requestId: 'req-1' }).prompt, FREE_FORM_TOOL_PROMPT);
+});
+
+test('the request schema lets any response_format through — unknown ones are ignored', () => {
+  for (const response_format of [
+    null,
+    'json',
+    { type: 'xml' },
+    { type: 'json_schema', json_schema: 5 },
+  ]) {
+    const parsed = chatCompletionRequestSchema.safeParse({
+      model: 'Dev',
+      messages: ASK,
+      response_format,
+    });
+    assert.ok(parsed.success, JSON.stringify(response_format));
+  }
+});
+
+const N_SCHEMA = {
+  $schema: 'http://json-schema.org/draft-07/schema#',
+  type: 'object',
+  required: ['n'],
+  properties: { n: { type: 'number' } },
+  additionalProperties: false,
+};
+
+function jsonSchemaFormat(strict: boolean): JsonOutputFormat {
+  const format = parseResponseFormat({
+    type: 'json_schema',
+    json_schema: { name: 'n', schema: N_SCHEMA, strict },
+  });
+  assert.ok(format);
+  return format;
+}
+
+test('response_format json_object / json_schema are parsed; a schema that does not compile is a 400', () => {
+  assert.deepEqual(parseResponseFormat({ type: 'json_object' }), {
+    schema: null,
+    strict: false,
+    validate: null,
+  });
+  const noSchema = parseResponseFormat({ type: 'json_schema', json_schema: { name: 'x' } });
+  assert.equal(noSchema?.schema, null, 'a json_schema without schema is a json_object');
+
+  const format = jsonSchemaFormat(true);
+  assert.equal(format.strict, true);
+  assert.equal(format.schema, N_SCHEMA, 'the schema quoted to the agent is the caller’s');
+  assert.ok(format.validate);
+  assert.equal(N_SCHEMA.$schema, 'http://json-schema.org/draft-07/schema#', 'not mutated');
+
+  assert.throws(
+    () => parseResponseFormat({ type: 'json_schema', json_schema: { schema: { type: 'nope' } } }),
+    (e: unknown) =>
+      e instanceof LlmRequestError &&
+      e.status === 400 &&
+      e.toJSON().error.code === 'invalid_request'
+  );
+  assert.throws(
+    () => parseResponseFormat({ type: 'json_schema', json_schema: { schema: 'object' } }),
+    (e: unknown) => e instanceof LlmRequestError && e.status === 400
+  );
+});
+
+test('a JSON response_format adds its rule (and schema) to both delivery modes', () => {
+  const format = jsonSchemaFormat(true);
+  const schemaRule =
+    'Your final answer is ONLY a JSON document conforming to the following JSON schema, with no text before or after it and no Markdown code block around it:\n' +
+    JSON.stringify(N_SCHEMA);
+  for (const delivery of [{ file: '/tmp/pulsar-llm-api/x.out' }, { requestId: 'req-1' }]) {
+    const { prompt } = buildAgentPrompt(FR_ASK, delivery, format);
+    assert.ok(prompt.includes(`no Markdown code fence around it.\n${schemaRule}\n`), prompt);
+  }
+  const { prompt } = buildAgentPrompt(
+    FR_ASK,
+    { requestId: 'req-1' },
+    parseResponseFormat({ type: 'json_object' })
+  );
+  assert.ok(
+    prompt.includes(
+      'no Markdown code fence around it.\nYour final answer is ONLY a JSON object, with no text before or after it and no Markdown code block around it.\nCalling submit_answer'
+    )
+  );
+});
+
+test('a JSON answer is cleaned of its code fence, parsed and validated', () => {
+  const format = jsonSchemaFormat(true);
+  assert.deepEqual(checkJsonOutput('```json\n{"n": 4}\n```\n', format), {
+    text: '{"n": 4}',
+    error: null,
+    offSchema: false,
+  });
+  const jsonObject = parseResponseFormat({ type: 'json_object' });
+  assert.ok(jsonObject);
+  assert.equal(checkJsonOutput('```\n[1, 2]\n```', jsonObject).text, '[1, 2]');
+  for (const notObject of ['[1, 2]', '"text"', '4', 'null']) {
+    assert.deepEqual(
+      checkJsonOutput(notObject, jsonObject),
+      { text: notObject, error: 'it is not a JSON object', offSchema: false },
+      `json_object: ${notObject} is refused`
+    );
+  }
+  assert.equal(checkJsonOutput('{"a": [1]}', jsonObject).error, null);
+  const notJson = checkJsonOutput('Here it is: {"n": 4}', format);
+  assert.match(notJson.error || '', /not valid JSON/);
+  assert.equal(notJson.offSchema, false);
+  const offSchema = checkJsonOutput('{"n": "four"}', format);
+  assert.match(offSchema.error || '', /does not conform to the JSON schema: \/n must be number/);
+  assert.equal(offSchema.offSchema, true);
+});
+
+test('the code fence is stripped in linear time, whatever the answer', () => {
+  const format = parseResponseFormat({ type: 'json_object' });
+  assert.ok(format);
+  assert.equal(checkJsonOutput('```json {"a": 1}```', format).text, '{"a": 1}');
+  assert.equal(checkJsonOutput('``` \n{"a": 1}\n \t```', format).text, '{"a": 1}');
+  assert.equal(checkJsonOutput('`````', format).text, '`````');
+  const started = Date.now();
+  for (const hostile of [
+    '```' + ' '.repeat(200_000) + 'x',
+    '```\n' + ' '.repeat(200_000) + 'x',
+    '```' + ' \t'.repeat(100_000) + '\n```x',
+  ]) {
+    assert.match(checkJsonOutput(hostile, format).error || '', /not valid JSON/);
+  }
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
+});
+
+test('a caller schema costs a bounded time: size cap, $async refused, slow patterns cut short', () => {
+  const isBadSchema = (e: unknown) =>
+    e instanceof LlmRequestError && e.status === 400 && e.code === 'invalid_request';
+  const big = { type: 'object', description: 'x'.repeat(70_000) };
+  assert.throws(
+    () => parseResponseFormat({ type: 'json_schema', json_schema: { schema: big } }),
+    (e: unknown) => isBadSchema(e) && /longer than 64000 characters/.test((e as Error).message)
+  );
+  assert.throws(
+    () =>
+      parseResponseFormat({
+        type: 'json_schema',
+        json_schema: { schema: { $async: true, type: 'string' } },
+      }),
+    (e: unknown) => isBadSchema(e) && /\$async/.test((e as Error).message)
+  );
+
+  // Exponential backtracking: ~minutes unbounded, cut at the validation limit.
+  const format = parseResponseFormat({
+    type: 'json_schema',
+    json_schema: { schema: { type: 'string', pattern: '^(a+)+$' }, strict: true },
+  });
+  assert.ok(format);
+  const started = Date.now();
+  const check = checkJsonOutput(JSON.stringify('a'.repeat(40) + '!'), format);
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+  assert.equal(check.offSchema, true);
+  assert.match(check.error || '', /could not be checked against the JSON schema within 250 ms/);
+  // The same pattern on a well-behaved answer is checked as usual.
+  assert.equal(checkJsonOutput('"aaa"', format).error, null);
+  assert.match(checkJsonOutput('"ab"', format).error || '', /must match pattern/);
+});
+
+/** A chat agent whose successive turns write `answers` to their answer files. */
+function chatSequence(answers: string[]) {
+  const { runner } = fakeRunner();
+  const prompts: string[] = [];
+  const files = new Map<string, string>();
+  runner.sendMessage = async (_id, prompt) => {
+    prompts.push(prompt);
+    const path = new RegExp('`(' + LLM_ANSWER_DIR + '/[^`]+)`').exec(prompt)?.[1] ?? '';
+    files.set(path, answers[prompts.length - 1] ?? '');
+    return 'Done.';
+  };
+  runner.executionManager = {
+    async readFile(_id, path) {
+      const content = files.get(path);
+      if (content === undefined) throw new Error('No such file');
+      return content;
+    },
+    async exec() {
+      return { stdout: '', stderr: '' };
+    },
+  };
+  return { runner, prompts };
+}
+
+const isInvalidJson = (e: unknown) =>
+  e instanceof LlmRequestError &&
+  e.status === 502 &&
+  e.toJSON().error.code === 'invalid_json_output';
+
+test('chat path: a valid JSON answer takes one turn and is returned clean', async () => {
+  const { runner, prompts } = chatSequence(['```json\n{"n": 4}\n```']);
+  const result = await runAgentCompletion(runner, AGENT, ASK, undefined, {
+    responseFormat: jsonSchemaFormat(true),
+  });
+  assert.equal(result.content, '{"n": 4}');
+  assert.equal(prompts.length, 1);
+});
+
+test('chat path: a wrong answer gets one correction turn quoting the error', async () => {
+  const { runner, prompts } = chatSequence(['{"n": "four"}', '{"n": 4}']);
+  const result = await runAgentCompletion(runner, AGENT, ASK, undefined, {
+    responseFormat: jsonSchemaFormat(true),
+  });
+  assert.equal(result.content, '{"n": 4}');
+  assert.equal(prompts.length, 2);
+  assert.match(
+    prompts[1],
+    /was rejected: it does not conform to the JSON schema: \/n must be number/
+  );
+  assert.match(prompts[1], /Your final answer is ONLY a JSON document conforming/);
+  const files = prompts.map(p => new RegExp('`(' + LLM_ANSWER_DIR + '/[^`]+)`').exec(p)?.[1]);
+  assert.notEqual(files[0], files[1], 'a new answer file');
+});
+
+test('chat path: still wrong after the correction → 502 invalid_json_output', async () => {
+  const { runner, prompts } = chatSequence(['not json', 'still not json']);
+  await assert.rejects(
+    runAgentCompletion(runner, AGENT, ASK, undefined, {
+      responseFormat: parseResponseFormat({ type: 'json_object' }),
+    }),
+    isInvalidJson
+  );
+  assert.equal(prompts.length, 2, 'one correction only');
+
+  const strict = chatSequence(['{"n": "four"}', '{"n": "4"}']);
+  await assert.rejects(
+    runAgentCompletion(strict.runner, AGENT, ASK, undefined, {
+      responseFormat: jsonSchemaFormat(true),
+    }),
+    isInvalidJson
+  );
+});
+
+test('a correction turn that fails leaves the first answer standing', async () => {
+  for (const [strict, first] of [
+    [false, '{"n": "four"}'],
+    [true, '{"n": "four"}'],
+  ] as const) {
+    const { runner, prompts } = chatSequence([first]);
+    const send = runner.sendMessage;
+    runner.sendMessage = async (...args) => {
+      if (prompts.length === 1) {
+        prompts.push(args[1]);
+        throw new Error('Agent is already processing a message');
+      }
+      return send(...args);
+    };
+    const run = runAgentCompletion(runner, AGENT, ASK, undefined, {
+      responseFormat: jsonSchemaFormat(strict),
+    });
+    if (strict) await assert.rejects(run, isInvalidJson, 'strict: 502, not the 409');
+    else assert.equal((await run).content, first, 'non-strict: the first answer');
+    assert.equal(prompts.length, 2);
+  }
+  // A hang-up during the correction is still the hang-up.
+  const controller = new AbortController();
+  const { runner, prompts } = chatSequence(['{"n": "four"}']);
+  const send = runner.sendMessage;
+  runner.sendMessage = async (...args) => {
+    if (prompts.length === 1) {
+      prompts.push(args[1]);
+      controller.abort();
+      throw new Error('aborted');
+    }
+    return send(...args);
+  };
+  await assert.rejects(
+    runAgentCompletion(runner, AGENT, ASK, controller.signal, {
+      responseFormat: jsonSchemaFormat(false),
+    }),
+    (e: unknown) => e instanceof LlmRequestError && e.code === 'client_closed'
+  );
+});
+
+test('onTurnSettled fires once the chat turn settles, before the answer file is read', async () => {
+  const events: string[] = [];
+  const { runner } = fakeRunner({ fileContent: 'Answer' });
+  const exec = runner.executionManager;
+  assert.ok(exec);
+  const read = exec.readFile;
+  exec.readFile = async (id, path) => {
+    events.push('read');
+    return read(id, path);
+  };
+  const send = runner.sendMessage;
+  runner.sendMessage = async (...args) => {
+    const reply = await send(...args);
+    events.push('sent');
+    return reply;
+  };
+  const result = await runAgentCompletion(runner, AGENT, ASK, undefined, {
+    onTurnSettled: () => events.push('settled'),
+  });
+  assert.equal(result.content, 'Answer');
+  assert.deepEqual(events, ['sent', 'settled', 'read']);
+});
+
+test('a non-strict schema only steers: JSON off the schema is returned', async () => {
+  const { runner, prompts } = chatSequence(['{"n": "four"}', '{"n": "4"}']);
+  const result = await runAgentCompletion(runner, AGENT, ASK, undefined, {
+    responseFormat: jsonSchemaFormat(false),
+  });
+  assert.equal(prompts.length, 2, 'the agent is still asked to correct it');
+  assert.equal(result.content, '{"n": "4"}');
+});
+
+test('terminal path: the correction is a new terminal turn with a new request id', async () => {
+  const answers = ['{"n": "four"}', '{"n": 4}'];
+  const t = terminalRunner();
+  const start = t.runner.startCliTurn;
+  let refused = 0;
+  t.runner.startCliTurn = async (id, prompt, label) => {
+    // Busy a moment after the first turn, until its idle timer fires.
+    if (t.pasted.length === 1 && refused < 2) {
+      refused++;
+      throw new Error('Agent is already processing a message (its terminal is active)');
+    }
+    return start(id, prompt, label);
+  };
+  t.runner.isCliTurnActive = (_id, prompt) => {
+    const requestId = /request_id "([0-9a-f-]+)"/.exec(prompt)?.[1] ?? '';
+    submitLlmAnswer(requestId, AGENT.id, answers[t.pasted.length - 1]);
+    return true;
+  };
+  const result = await runAgentCompletion(t.runner, AGENT, ASK, undefined, {
+    ...FAST,
+    responseFormat: jsonSchemaFormat(true),
+  });
+  assert.deepEqual([result.content, result.source], ['{"n": 4}', 'tool']);
+  assert.equal(refused, 2, 'waited for the agent to be free again');
+  assert.equal(t.pasted.length, 2);
+  const ids = t.pasted.map(p => /request_id "([0-9a-f-]+)"/.exec(p)?.[1]);
+  assert.notEqual(ids[0], ids[1]);
+  assert.match(t.pasted[1], /was rejected: it does not conform to the JSON schema/);
+  assert.deepEqual(t.ended, [{ interrupt: false }, { interrupt: false }]);
 });
 
 test('the response is a chat.completion object', () => {

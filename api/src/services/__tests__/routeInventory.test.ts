@@ -588,6 +588,7 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   // ladder guard here would let a key handed out for completions manage tasks.
   'GET /api/llm/v1/models': ['requireApiKeyScope(llm)'],
   'POST /api/llm/v1/chat/completions': ['requireApiKeyScope(llm)'],
+  'POST /api/llm/v1/conversations': ['requireApiKeyScope(llm)'],
 
   // ── /api/health ───────────────────────────────────────────────────
   // Liveness/readiness probe. Polled by Docker, Swarm and Traefik, none of which

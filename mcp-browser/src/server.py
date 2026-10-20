@@ -27,6 +27,7 @@ from crawl4ai import (
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
+from ddg_results import parse_ddg_results
 from flaresolverr import make_fallback
 
 # ---------------------------------------------------------------------------
@@ -389,7 +390,8 @@ async def crawl(req: CrawlRequest):
     
     result = await _arun_with_recovery(url=req.url, config=config)
     if result.success:
-        return {"content": page_markdown(result)}
+        # `url` tells the caller this page was fetched (crawl_many does the same).
+        return {"url": result.url, "content": page_markdown(result)}
     return {"error": f"status={result.status_code}, {result.error_message}"}
 
 
@@ -441,7 +443,7 @@ async def get_links(req: GetLinksRequest):
     )
     result = await _arun_with_recovery(url=req.url, config=config)
     if result.success:
-        return {"links": result.links}
+        return {"url": result.url, "links": result.links}
     return {"error": result.error_message}
 
 
@@ -489,7 +491,10 @@ async def extract(req: ExtractRequest):
         )
         result = await _arun_with_recovery(url=req.url, config=config)
         if result.success:
-            return {"content": result.extracted_content or "No content extracted."}
+            return {
+                "url": result.url,
+                "content": result.extracted_content or "No content extracted.",
+            }
         return {"error": result.error_message}
     except Exception as e:
         logger.error(f"Error in extract: {e}")
@@ -500,7 +505,8 @@ async def extract(req: ExtractRequest):
     "/search_web",
     summary="Search the web",
     description="Search the web via DuckDuckGo and return structured results as clean Markdown. "
-    "Uses crawl4ai to crawl the DuckDuckGo search results page and extract content automatically.",
+    "Uses crawl4ai to crawl the DuckDuckGo search results page and extract content automatically. "
+    "`results` lists the result pages as {url, title}, in page order.",
 )
 async def search_web(req: SearchRequest):
     from urllib.parse import quote_plus
@@ -529,13 +535,23 @@ async def search_web(req: SearchRequest):
         result = await _arun_with_recovery(url=search_url, config=config)
         
         if result.success:
+            # The result list, read from the raw page's result anchors. Never
+            # allowed to fail the search: the Markdown alone is still an answer.
+            try:
+                results = parse_ddg_results(result.html or "")
+            except Exception as e:
+                logger.warning(f"Could not parse DuckDuckGo results: {e}")
+                results = []
             content = page_markdown(result)
             if content != NO_CONTENT:
                 # Add a header to make it clear these are search results
                 formatted_content = f"# Search Results for: {req.query}\n\n{content}"
-                return {"content": formatted_content}
+                return {"content": formatted_content, "results": results}
             else:
-                return {"content": f"# Search Results for: {req.query}\n\nNo results found."}
+                return {
+                    "content": f"# Search Results for: {req.query}\n\nNo results found.",
+                    "results": results,
+                }
         else:
             logger.error(f"Failed to crawl DuckDuckGo: {result.error_message}")
             return {"error": f"Failed to fetch search results: {result.error_message}"}

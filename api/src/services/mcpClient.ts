@@ -131,13 +131,13 @@ export class MCPClient {
    * Call a tool on the connected server.
    * @param {string} name — tool name
    * @param {object} args — tool arguments
-   * @returns {{ content: Array, isError: boolean }}
+   * @returns {{ content: Array, isError: boolean, _meta? }}
    */
   async callTool(
     name: string,
     args: Record<string, any> = {},
     { timeoutMs }: { timeoutMs?: number } = {}
-  ): Promise<{ content: any[]; isError: boolean }> {
+  ): Promise<{ content: any[]; isError: boolean; _meta?: Record<string, unknown> }> {
     if (!this.client) throw new Error('Not connected');
 
     // onprogress is required for resetTimeoutOnProgress to work: the SDK only
@@ -150,6 +150,9 @@ export class MCPClient {
     return {
       content: (result.content as any[]) || [],
       isError: (result.isError as boolean) || false,
+      // Result metadata (never shown to the model) — carries the Web Browser
+      // page data for the LLM API web capture (webCapture.ts).
+      ...(result._meta ? { _meta: result._meta } : {}),
     };
   }
 
