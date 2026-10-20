@@ -624,7 +624,7 @@ services:
     tmpfs:
       - /tmp:size=512M,mode=1777
     deploy:
-      replicas: 1
+      replicas: 0
       placement:
         constraints:
           - node.labels.gpu == none
@@ -651,6 +651,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+
   vibe-service:
     init: true # reap reparented tmux/CLI children (see claudecode-service)
     image: registry.methodinfo.fr/vibe-service:latest
@@ -737,7 +738,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
-
 
   codex-service:
     init: true # reap reparented tmux/CLI children (see claudecode-service)
@@ -874,7 +874,7 @@ services:
     tmpfs:
       - /tmp:size=512M,mode=1777
     deploy:
-      replicas: 1
+      replicas: 0
       placement:
         constraints:
           - node.labels.gpu == none
