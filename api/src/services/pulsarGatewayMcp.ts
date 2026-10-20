@@ -7,6 +7,8 @@ import { getBoardById } from './database.js';
 import { resolveAgentCurrentTask } from './agentManager/currentTask.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 import { confinedTaskId, isAgentConfined } from './security/externalRunProfile.js';
+import { readAnswerFile, removeAnswerFile, submitLlmAnswer } from './llmAnswers.js';
+import { errorMessage } from '../lib/errors.js';
 
 /**
  * Pulsar Gateway MCP — the SINGLE MCP server injected into every CLI runner
@@ -237,6 +239,53 @@ export function createPulsarGatewayMcpServer(
         })),
         hint: 'Invoke a tool with call_mcp_tool({ server, tool, args }). To move your task between columns or mark it finished, use update_task({ status, comment }).',
       });
+    }
+  );
+
+  // ── submit_answer ─────────────────────────────────────────────────────────
+  // Delivers the answer to a request received through the OpenAI-compatible
+  // API (llmCompletion.runTerminalCompletion). The call is the answer AND the
+  // "done" signal; the request's prompt names the id.
+  server.tool(
+    'submit_answer',
+    'Deliver your final answer to an API request. Only call it when a request tells you to, with the request_id it gives. Write the answer to a file of your workspace first, then pass that file: its content is returned verbatim to the caller.',
+    {
+      request_id: z.string().describe('The request id given in the request.'),
+      file_path: z
+        .string()
+        .describe(
+          'A file of your workspace holding exactly your final answer and nothing else (relative to your working directory, or absolute).'
+        ),
+    },
+    async ({ request_id, file_path }) => {
+      if (!callerAgentId) {
+        return jsonError('No agent context. submit_answer is only available to CLI runner agents.');
+      }
+      // Read through the runner, under the agent's UID, without the answer
+      // going through the model again. Failures go back to the agent, which
+      // can fix the file and retry.
+      const id = request_id.trim();
+      let content: string;
+      try {
+        content = await readAnswerFile(agentManager.executionManager, callerAgentId, file_path);
+      } catch (err) {
+        return jsonError(
+          `Could not read the answer: ${errorMessage(err) || 'unknown error'}. Fix it and call submit_answer again.`
+        );
+      }
+      if (!content.trim()) {
+        return jsonError(`${file_path} is empty. Write your answer to it and call submit_answer again.`);
+      }
+      const outcome = submitLlmAnswer(id, callerAgentId, content);
+      if (outcome === 'accepted') {
+        removeAnswerFile(agentManager.executionManager, callerAgentId, id);
+        return jsonOk({ success: true, hint: 'Answer delivered. Reply briefly that you are done.' });
+      }
+      return jsonError(
+        outcome === 'not_yours'
+          ? 'This request was not sent to you.'
+          : 'No API request is waiting under this id (already answered, cancelled or timed out).'
+      );
     }
   );
 

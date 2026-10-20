@@ -15,6 +15,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { errorMessage } from '../lib/errors.js';
+import { closeLlmAnswer, llmAnswerFile, openLlmAnswer, takeLlmAnswer } from './llmAnswers.js';
 
 /** Calls an `llm` key may make per minute — each one is a full agent turn. */
 export const LLM_KEY_RATE_LIMIT_PER_MINUTE = 20;
@@ -98,9 +99,35 @@ const ROLE_LABEL: Record<ChatMessage['role'], string> = {
   function: 'Tool result',
 };
 
+/** How the agent hands its answer back: a file it writes, or a tool it calls. */
+export type AnswerDelivery = { file: string } | { requestId: string };
+
+const FORMAT_RULE =
+  'Give it in exactly the format the request asks for (plain text, Markdown, JSON, TOML, code…): when a raw format is asked for, give it raw — no Markdown code fence around it.';
+
+function deliveryInstructions(delivery: AnswerDelivery): string {
+  if ('requestId' in delivery) {
+    return [
+      'IMPORTANT — how to deliver your answer:',
+      `1. Write your complete final answer, and nothing else, to the file \`${llmAnswerFile(delivery.requestId)}\` (create the parent directory if needed).`,
+      `2. Call the \`submit_answer\` tool of the Pulsar Gateway MCP with request_id "${delivery.requestId}" and that file as \`file_path\`.`,
+      'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no commentary about your process.',
+      FORMAT_RULE,
+      'Calling submit_answer is what completes the request — without it the caller gets no answer. If it reports an error, fix it and call it again. Then reply briefly that you are done.',
+    ].join('\n');
+  }
+  return [
+    'IMPORTANT — how to deliver your answer:',
+    `Write your complete final answer, and nothing else, to the file \`${delivery.file}\` (create the parent directory if needed; overwrite the file if it exists).`,
+    'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no notes about the file, no commentary about your process.',
+    FORMAT_RULE,
+    'Do not commit that file. Once it is written, reply briefly that you are done.',
+  ].join('\n');
+}
+
 /**
  * Flatten an OpenAI conversation into the one message an agent receives, plus
- * the instruction to write the final answer to `answerPath`.
+ * the instruction on how to deliver the final answer.
  *
  * A single user message is passed as-is (the common case reads naturally);
  * anything longer is rendered as a labelled transcript ending on the turn to
@@ -108,7 +135,7 @@ const ROLE_LABEL: Record<ChatMessage['role'], string> = {
  */
 export function buildAgentPrompt(
   messages: ChatMessage[],
-  answerPath: string
+  delivery: AnswerDelivery
 ): { prompt: string; images: PromptImage[] } {
   const images: PromptImage[] = [];
   const rendered = messages.map(m => ({ role: m.role, text: contentText(m.content, images) }));
@@ -128,15 +155,7 @@ export function buildAgentPrompt(
     const transcript = turns.map(m => `### ${ROLE_LABEL[m.role]}\n${m.text}`).join('\n\n');
     parts.push(`Conversation so far (answer the last message as the Assistant):\n\n${transcript}`);
   }
-  parts.push(
-    [
-      'IMPORTANT — how to deliver your answer:',
-      `Write your complete final answer, and nothing else, to the file \`${answerPath}\` (create the parent directory if needed; overwrite the file if it exists).`,
-      'The content of that file is returned verbatim to the caller as the assistant message: no preamble, no notes about the file, no commentary about your process.',
-      'Write it in exactly the format the request asks for (plain text, Markdown, JSON, TOML, code…): when a raw format is asked for, write it raw — no Markdown code fence around it.',
-      'Do not commit that file. Once it is written, reply briefly that you are done.',
-    ].join('\n')
-  );
+  parts.push(deliveryInstructions(delivery));
 
   let prompt = parts.join('\n\n');
   if (prompt.length > LLM_MAX_PROMPT_CHARS) {
@@ -237,8 +256,9 @@ function cleanReply(reply: unknown): string {
 
 export interface CompletionResult {
   content: string;
-  /** Where the content came from: the answer file, or the chat reply fallback. */
-  source: 'file' | 'reply';
+  /** Where the content came from: submit_answer (terminal turn), the answer
+   * file, or the chat reply fallback (chat path). */
+  source: 'tool' | 'file' | 'reply';
   promptTokens: number;
 }
 
@@ -252,8 +272,8 @@ export const LLM_TERMINAL_TIMEOUT_MS = (() => {
 })();
 
 /**
- * A CLI quiet this long with no answer file has finished its turn without
- * writing it — the delay after which the agent itself goes idle again
+ * A CLI quiet this long without having submitted its answer has finished its
+ * turn without it — the delay after which the agent itself goes idle again
  * (cliActivity.CLI_ACTIVITY_IDLE_MS).
  */
 export const LLM_TERMINAL_QUIET_MS = (() => {
@@ -261,8 +281,8 @@ export const LLM_TERMINAL_QUIET_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 30_000;
 })();
 
-/** Answer-file poll interval of a terminal turn. */
-const TERMINAL_POLL_MS = 2000;
+/** Poll interval of a terminal turn (answer submitted? CLI quiet?). */
+const TERMINAL_POLL_MS = 1000;
 
 /** Tunables of a terminal turn, overridden by tests. */
 export interface CompletionOptions {
@@ -284,106 +304,119 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Whether the conversation carries inline images (only the chat path takes them). */
+function hasInlineImages(messages: ChatMessage[]): boolean {
+  const images: PromptImage[] = [];
+  for (const m of messages) contentText(m.content, images);
+  return images.length > 0;
+}
+
 /**
  * A CLI agent's turn, run in its SHARED terminal — the one the UI shows — the
  * way the workflow runs its tasks, instead of a headless CLI nobody sees. The
  * user watches the request being worked on and can step in: run /login when
  * the CLI is not authenticated, answer a question it asks.
  *
- * The turn has no task, so nothing calls update_task to end it: it ends when
- * the answer file exists and stopped changing between two polls. A CLI that
- * stays quiet for LLM_TERMINAL_QUIET_MS without that file has finished its
- * turn without writing it (502 no_answer_file — the runner never hands back
- * terminal text, so there is no other answer to return). Except after an
- * authentication error: the CLI is then quiet because it waits for the user
- * to log in, so the turn keeps waiting. The caller hanging up, a Stop, or the
- * timeout end it too.
+ * The agent delivers its answer by calling the Pulsar Gateway's
+ * `submit_answer` tool with the request id (services/llmAnswers.ts): that call
+ * is the answer and the end of the turn. No file to share: the file-based
+ * first version answered "no answer" to an agent that had written its file —
+ * the CLI and the API's read did not see the same /tmp.
+ *
+ * A CLI quiet for LLM_TERMINAL_QUIET_MS without having submitted has finished
+ * its turn without it (502 no_answer — the runner never hands back terminal
+ * text). Except after an authentication error: the CLI is then quiet because
+ * it waits for the user to log in, so the turn keeps waiting. The caller
+ * hanging up, a Stop, or the timeout end it too.
  */
 async function runTerminalCompletion(
   runner: CompletionRunner,
   agent: CompletionAgent,
-  prompt: string,
-  label: string,
-  answerPath: string,
+  messages: ChatMessage[],
   signal: AbortSignal | undefined,
   opts: CompletionOptions
 ): Promise<CompletionResult> {
-  const exec = runner.executionManager;
   const clientClosed = () =>
     new LlmRequestError(499, 'The client closed the request', 'client_closed');
+  const requestId = openLlmAnswer(agent.id);
   try {
-    await runner.startCliTurn(agent.id, prompt, label);
-  } catch (err) {
-    const msg = errorMessage(err);
-    if (/already processing/i.test(msg)) {
-      throw new LlmRequestError(409, `Agent "${agent.name}" is busy. Retry later.`, 'agent_busy');
+    const { prompt } = buildAgentPrompt(messages, { requestId });
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    const asked = contentText(lastUser?.content, []).replace(/\s+/g, ' ').trim();
+    const label = `[LLM API] ${asked}`.slice(0, 200);
+
+    try {
+      await runner.startCliTurn(agent.id, prompt, label);
+    } catch (err) {
+      const msg = errorMessage(err);
+      if (/already processing/i.test(msg)) {
+        throw new LlmRequestError(409, `Agent "${agent.name}" is busy. Retry later.`, 'agent_busy');
+      }
+      throw new LlmRequestError(502, `Agent "${agent.name}" failed: ${msg}`, 'agent_error');
     }
-    throw new LlmRequestError(502, `Agent "${agent.name}" failed: ${msg}`, 'agent_error');
-  }
 
-  const pollMs = opts.pollMs ?? TERMINAL_POLL_MS;
-  const quietMs = opts.quietMs ?? LLM_TERMINAL_QUIET_MS;
-  const deadline = Date.now() + (opts.timeoutMs ?? LLM_TERMINAL_TIMEOUT_MS);
-  // Interrupt the CLI on the way out unless it is done (answered, or quiet).
-  let interrupt = true;
-  let authNoted = false;
-  let quietSince: number | null = null;
-  let previous = '';
-  try {
-    for (;;) {
-      if (signal?.aborted) throw clientClosed();
-      if (!runner.isCliTurnActive(agent.id, prompt)) {
-        throw new LlmRequestError(409, `Agent "${agent.name}" was stopped`, 'agent_stopped');
-      }
-      if (Date.now() > deadline) {
-        throw new LlmRequestError(
-          504,
-          `Agent "${agent.name}" wrote no answer within ${Math.round((opts.timeoutMs ?? LLM_TERMINAL_TIMEOUT_MS) / 1000)}s`,
-          'timeout'
-        );
-      }
-
-      let content = '';
-      try {
-        content = ((await exec?.readFile(agent.id, answerPath)) || '').replace(/\s+$/, '');
-      } catch {
-        // Not written yet.
-      }
-      if (content.trim() && content === previous) {
-        interrupt = false;
-        return { content, source: 'file', promptTokens: estimateTokens(prompt) };
-      }
-      previous = content;
-
-      if (!authNoted) {
-        const authError = await runner._checkTerminalAuthError(agent.id);
-        if (authError) {
-          authNoted = true;
-          console.warn(`🔌 [LLM API] "${agent.name}" needs authentication: ${authError}`);
-          runner.addActionLog(
-            agent.id,
-            'warning',
-            'LLM API request waiting: the CLI needs authentication. Log in from the agent terminal (e.g. /login), then resubmit the request there (↑ then Enter).',
-            authError
+    const pollMs = opts.pollMs ?? TERMINAL_POLL_MS;
+    const quietMs = opts.quietMs ?? LLM_TERMINAL_QUIET_MS;
+    const timeoutMs = opts.timeoutMs ?? LLM_TERMINAL_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
+    // Interrupt the CLI on the way out unless it is done (answered, or quiet).
+    let interrupt = true;
+    let authNoted = false;
+    let quietSince: number | null = null;
+    try {
+      for (;;) {
+        const answer = takeLlmAnswer(requestId);
+        if (answer !== null) {
+          interrupt = false;
+          return {
+            content: answer.replace(/\s+$/, ''),
+            source: 'tool',
+            promptTokens: estimateTokens(prompt),
+          };
+        }
+        if (signal?.aborted) throw clientClosed();
+        if (!runner.isCliTurnActive(agent.id, prompt)) {
+          throw new LlmRequestError(409, `Agent "${agent.name}" was stopped`, 'agent_stopped');
+        }
+        if (Date.now() > deadline) {
+          throw new LlmRequestError(
+            504,
+            `Agent "${agent.name}" gave no answer within ${Math.round(timeoutMs / 1000)}s`,
+            'timeout'
           );
         }
-      }
 
-      const quiet = !authNoted && !content.trim() && (await runner._isCliQuiet(agent.id));
-      quietSince = quiet ? (quietSince ?? Date.now()) : null;
-      if (quietSince !== null && Date.now() - quietSince >= quietMs) {
-        interrupt = false;
-        throw new LlmRequestError(
-          502,
-          `Agent "${agent.name}" finished its turn without writing its answer — see its terminal`,
-          'no_answer_file'
-        );
+        if (!authNoted) {
+          const authError = await runner._checkTerminalAuthError(agent.id);
+          if (authError) {
+            authNoted = true;
+            console.warn(`🔌 [LLM API] "${agent.name}" needs authentication: ${authError}`);
+            runner.addActionLog(
+              agent.id,
+              'warning',
+              'LLM API request waiting: the CLI needs authentication. Log in from the agent terminal (e.g. /login), then resubmit the request there (↑ then Enter).',
+              authError
+            );
+          }
+        }
+
+        const quiet = !authNoted && (await runner._isCliQuiet(agent.id));
+        quietSince = quiet ? (quietSince ?? Date.now()) : null;
+        if (quietSince !== null && Date.now() - quietSince >= quietMs) {
+          interrupt = false;
+          throw new LlmRequestError(
+            502,
+            `Agent "${agent.name}" finished its turn without submitting its answer — see its terminal`,
+            'no_answer'
+          );
+        }
+        await pause(pollMs, signal);
       }
-      await pause(pollMs, signal);
+    } finally {
+      runner.endCliTurn(agent.id, prompt, { interrupt });
     }
   } finally {
-    runner.endCliTurn(agent.id, prompt, { interrupt });
-    exec?.exec(agent.id, `rm -f '${answerPath}'`, { timeout: 10_000 }).catch(() => {});
+    closeLlmAnswer(requestId);
   }
 }
 
@@ -421,15 +454,12 @@ export async function runAgentCompletion(
     );
   }
 
-  const answerPath = `${LLM_ANSWER_DIR}/${crypto.randomUUID()}.out`;
-  const { prompt, images } = buildAgentPrompt(messages, answerPath);
-
-  if (!images.length && runner.isTerminalDriven(agent.id)) {
-    const lastUser = [...messages].reverse().find(m => m.role === 'user');
-    const asked = contentText(lastUser?.content, []).replace(/\s+/g, ' ').trim();
-    const label = `[LLM API] ${asked}`.slice(0, 200);
-    return runTerminalCompletion(runner, agent, prompt, label, answerPath, signal, opts);
+  if (runner.isTerminalDriven(agent.id) && !hasInlineImages(messages)) {
+    return runTerminalCompletion(runner, agent, messages, signal, opts);
   }
+
+  const answerPath = `${LLM_ANSWER_DIR}/${crypto.randomUUID()}.out`;
+  const { prompt, images } = buildAgentPrompt(messages, { file: answerPath });
 
   const exec = runner.executionManager;
   // Best-effort cleanup; never fails the request.

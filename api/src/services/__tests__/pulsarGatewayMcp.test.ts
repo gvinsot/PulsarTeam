@@ -177,6 +177,63 @@ test('update_task auto-resolves the active task and moves its column', async () 
   assert.equal(am._calls.recordTaskCompletion.length, 0);
 });
 
+test('submit_answer reads the answer file through the runner and delivers it', async () => {
+  const { openLlmAnswer, takeLlmAnswer, closeLlmAnswer, llmAnswerFile } = await import(
+    '../llmAnswers.js'
+  );
+  const requestId = openLlmAnswer('agent-1');
+  const answerFile = llmAnswerFile(requestId);
+  // The agent's runner: one file in its HOME, `~/` expanded by the shell.
+  const files: Record<string, string> = {
+    [`"$HOME"/'pulsar-llm-api/${requestId}.out'`]: 'name = "x"\n',
+    "'empty.out'": '',
+  };
+  const commands: string[] = [];
+  const gateway = (agentId: string | null) => {
+    const am: any = makeFakeAgentManager();
+    am.executionManager = {
+      async exec(_agentId: string, command: string) {
+        commands.push(command);
+        const path = Object.keys(files).find(p => command.includes(p));
+        if (command.startsWith('if [ ! -e')) {
+          return { stdout: path ? String(Buffer.byteLength(files[path])) : 'MISSING', stderr: '' };
+        }
+        if (command.startsWith('cat ')) return { stdout: files[path!], stderr: '' };
+        return { stdout: '', stderr: '' };
+      },
+    };
+    return createPulsarGatewayMcpServer(
+      am,
+      makeFakeMcpManager() as any,
+      fakeSkillManager as any,
+      agentId,
+      'board-1'
+    );
+  };
+  const submit = (agentId: string, file_path: string) =>
+    getToolHandler(gateway(agentId), 'submit_answer')({ request_id: requestId, file_path });
+
+  const missing = await submit('agent-1', 'nowhere.out');
+  assert.match(parseResult(missing).error, /nowhere\.out does not exist/);
+  const empty = await submit('agent-1', 'empty.out');
+  assert.match(parseResult(empty).error, /is empty/);
+  const foreign = await submit('agent-2', answerFile);
+  assert.match(parseResult(foreign).error, /not sent to you/);
+  assert.equal(takeLlmAnswer(requestId), null);
+
+  const result = await submit('agent-1', answerFile);
+  assert.notEqual(result.isError, true);
+  assert.equal(takeLlmAnswer(requestId), 'name = "x"\n');
+  assert.ok(
+    commands.some(c => c === `rm -f "$HOME"/'pulsar-llm-api/${requestId}.out'`),
+    'the suggested answer file is removed once delivered'
+  );
+
+  closeLlmAnswer(requestId);
+  const late = await submit('agent-1', answerFile);
+  assert.match(parseResult(late).error, /No API request is waiting/);
+});
+
 test('update_task errors with no agent context', async () => {
   const am = makeFakeAgentManager();
   const server = createPulsarGatewayMcpServer(

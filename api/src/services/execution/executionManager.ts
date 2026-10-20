@@ -334,7 +334,7 @@ export class ExecutionManager {
   async exec(
     agentId: string,
     command: string,
-    options: { cwd?: string; timeout?: number } = {}
+    options: { cwd?: string; timeout?: number; maxOutput?: number } = {}
   ): Promise<{ stdout: string; stderr: string }> {
     return this._providerFor(agentId).exec(agentId, command, options);
   }

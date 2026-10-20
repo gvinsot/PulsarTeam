@@ -1,6 +1,7 @@
 /**
- * The OpenAI-compatible completion (services/llmCompletion.ts): the agent is
- * asked to write its answer to a file, and that file is the completion.
+ * The OpenAI-compatible completion (services/llmCompletion.ts): a CLI agent
+ * answers in its shared terminal through submit_answer; on the chat path the
+ * agent writes its answer to a file, and that file is the completion.
  */
 
 import test from 'node:test';
@@ -14,6 +15,7 @@ import {
   runAgentCompletion,
   type CompletionRunner,
 } from '../llmCompletion.js';
+import { closeLlmAnswer, openLlmAnswer, submitLlmAnswer } from '../llmAnswers.js';
 
 const AGENT = { id: 'agent-1', name: 'Dev', status: 'idle', enabled: true };
 
@@ -89,7 +91,7 @@ test('the prompt carries the system instructions, the request and the answer fil
       { role: 'system', content: 'Answer in French.' },
       { role: 'user', content: 'What is 2+2?' },
     ],
-    '/tmp/pulsar-llm-api/x.out'
+    { file: '/tmp/pulsar-llm-api/x.out' }
   );
   assert.match(prompt, /Answer in French\./);
   assert.match(prompt, /Request:\nWhat is 2\+2\?/);
@@ -112,7 +114,7 @@ test('a multi-turn conversation becomes a labelled transcript; inline images are
         ],
       },
     ],
-    '/tmp/a.out'
+    { file: '/tmp/a.out' }
   );
   assert.match(
     prompt,
@@ -251,8 +253,8 @@ test('a turn refused before running opens no stream — the running turn keeps i
 });
 
 /**
- * A CLI agent whose shared terminal "answers" by writing `answer` to the answer
- * file `writeAfter` polls after the prompt was pasted.
+ * A CLI agent whose shared terminal "answers" by calling submit_answer with
+ * `answer`, `writeAfter` polls after the prompt was pasted.
  */
 function terminalRunner(
   opts: {
@@ -265,7 +267,6 @@ function terminalRunner(
   } = {}
 ) {
   const { runner, removed } = fakeRunner();
-  const files = new Map<string, string>();
   const pasted: string[] = [];
   const ended: { interrupt: boolean }[] = [];
   const logs: string[] = [];
@@ -280,7 +281,15 @@ function terminalRunner(
     lock = prompt;
     pasted.push(prompt);
   };
-  runner.isCliTurnActive = (_id, prompt) => lock === prompt;
+  // Polled once per wait iteration: the CLI "works", then submits.
+  runner.isCliTurnActive = (_id, prompt) => {
+    polls++;
+    if (opts.answer != null && polls === (opts.writeAfter ?? 1) + 1) {
+      const requestId = /request_id "([0-9a-f-]+)"/.exec(prompt)![1];
+      assert.equal(submitLlmAnswer(requestId, AGENT.id, opts.answer), 'accepted');
+    }
+    return lock === prompt;
+  };
   runner.endCliTurn = (_id, prompt, o) => {
     if (lock !== prompt) return;
     lock = null;
@@ -289,12 +298,6 @@ function terminalRunner(
   runner._checkTerminalAuthError = async () => opts.authError ?? null;
   runner._isCliQuiet = async () => !!opts.quiet;
   runner.addActionLog = (_id, type, message) => logs.push(`${type}: ${message}`);
-  runner.executionManager!.readFile = async (_id, path) => {
-    polls++;
-    if (opts.answer != null && polls > (opts.writeAfter ?? 1)) files.set(path, opts.answer);
-    if (!files.has(path)) throw new Error('No such file');
-    return files.get(path)!;
-  };
   return {
     runner,
     removed,
@@ -310,21 +313,32 @@ function terminalRunner(
 const FAST = { pollMs: 5, timeoutMs: 2000 };
 const ASK = [{ role: 'user' as const, content: '2+2?' }];
 
-test('a CLI agent answers in its shared terminal, once the answer file stops changing', async () => {
+test('a CLI agent answers in its shared terminal by calling submit_answer', async () => {
   const t = terminalRunner({ answer: '4\n', writeAfter: 2 });
   const result = await runAgentCompletion(t.runner, AGENT, ASK, undefined, FAST);
-  assert.deepEqual([result.content, result.source], ['4', 'file']);
+  assert.deepEqual([result.content, result.source], ['4', 'tool']);
   assert.equal(t.pasted.length, 1);
   assert.match(t.pasted[0], /Request:\n2\+2\?/);
+  assert.match(t.pasted[0], /`submit_answer` tool of the Pulsar Gateway/);
+  assert.match(t.pasted[0], /`~\/pulsar-llm-api\/[0-9a-f-]+\.out`/, 'answer file out of the repo');
+  assert.doesNotMatch(t.pasted[0], /\/tmp\//);
   assert.deepEqual(t.ended, [{ interrupt: false }]);
-  assert.equal(t.removed.length, 1);
 });
 
-test('a CLI gone quiet without the answer file has finished: 502, not interrupted', async () => {
+test('submit_answer takes only the pending request of the agent it was sent to', () => {
+  const id = openLlmAnswer('agent-1');
+  assert.equal(submitLlmAnswer(id, 'agent-2', 'x'), 'not_yours');
+  assert.equal(submitLlmAnswer('nope', 'agent-1', 'x'), 'unknown');
+  assert.equal(submitLlmAnswer(id, 'agent-1', 'x'), 'accepted');
+  closeLlmAnswer(id);
+  assert.equal(submitLlmAnswer(id, 'agent-1', 'y'), 'unknown', 'closed once the wait ended');
+});
+
+test('a CLI gone quiet without submitting has finished: 502, not interrupted', async () => {
   const t = terminalRunner({ answer: null, quiet: true });
   await assert.rejects(
     runAgentCompletion(t.runner, AGENT, ASK, undefined, { ...FAST, quietMs: 20 }),
-    (e: any) => e.status === 502 && e.toJSON().error.code === 'no_answer_file'
+    (e: any) => e.status === 502 && e.toJSON().error.code === 'no_answer'
   );
   assert.deepEqual(t.ended, [{ interrupt: false }]);
 });
@@ -352,7 +366,6 @@ test('a client hanging up interrupts the terminal turn', async () => {
   setTimeout(() => client.abort(), 20);
   await assert.rejects(pending, isClientClosed);
   assert.deepEqual(t.ended, [{ interrupt: true }]);
-  assert.equal(t.removed.length, 1);
 });
 
 test('a Stop ends the terminal wait; a timeout interrupts the CLI', async () => {

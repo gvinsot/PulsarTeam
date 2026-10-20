@@ -77,7 +77,7 @@ export function guessMimeType(filename: string): string {
 }
 
 /** Shell-quote a string for safe inclusion in a bash command. */
-function shQuote(value: string): string {
+export function shQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
