@@ -4,6 +4,7 @@ import { api } from '../api';
 import type { LadderApiKeyScope, ScopedApiKey, ScopedApiKeyCreated, ShowToastFn } from '../types';
 import InsertKeysSection from './apiKeys/InsertKeysSection';
 import BrowserKeysSection from './apiKeys/BrowserKeysSection';
+import LlmKeysSection from './apiKeys/LlmKeysSection';
 import ApiDocsPanel, { type ApiDocsSection } from './apiKeys/ApiDocsPanel';
 
 interface ApiKeyModalProps {
@@ -60,6 +61,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
   const [freshScoped, setFreshScoped] = useState<Partial<Record<LadderApiKeyScope, string>>>({});
   const [freshInsert, setFreshInsert] = useState<ScopedApiKeyCreated | null>(null);
   const [freshBrowser, setFreshBrowser] = useState<ScopedApiKeyCreated | null>(null);
+  const [freshLlm, setFreshLlm] = useState<ScopedApiKeyCreated | null>(null);
   const [minting, setMinting] = useState<LadderApiKeyScope | null>(null);
 
   const reloadMyKeys = useCallback(async () => {
@@ -125,6 +127,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
 
   const insertKeys = myKeys.filter(k => k.scope === 'insert');
   const browserKeys = myKeys.filter(k => k.scope === 'browser');
+  const llmKeys = myKeys.filter(k => k.scope === 'llm');
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
@@ -190,6 +193,7 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
                 browser: myKeys.some(k => k.id === freshBrowser?.id)
                   ? freshBrowser?.key
                   : undefined,
+                llm: myKeys.some(k => k.id === freshLlm?.id) ? freshLlm?.key : undefined,
               }}
             />
           ) : (
@@ -233,6 +237,27 @@ export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
                     keys={browserKeys}
                     onChanged={reloadMyKeys}
                     onOpenDocs={() => openDocs('MCP')}
+                    showToast={showToast}
+                  />
+                )}
+              </div>
+
+              {/* ── LLM keys ──────────────────────────────────────────────── */}
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-sm font-medium text-dark-300">LLM API</h3>
+                  <p className="text-xs text-dark-500 mt-1">
+                    Let another service use one of your agents as an OpenAI-compatible LLM endpoint.
+                  </p>
+                </div>
+                {loading ? (
+                  <div className="text-center py-4 text-dark-400 text-sm">Loading...</div>
+                ) : (
+                  <LlmKeysSection
+                    onCreated={setFreshLlm}
+                    keys={llmKeys}
+                    onChanged={reloadMyKeys}
+                    onOpenDocs={() => openDocs('LLM')}
                     showToast={showToast}
                   />
                 )}

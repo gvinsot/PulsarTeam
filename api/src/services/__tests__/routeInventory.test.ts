@@ -56,7 +56,7 @@ type RoutePolicy = typeof PUBLIC | readonly string[];
  * recognizable only if it has a name. The four factories that used to return
  * anonymous functions now name what they return, permission level included:
  *   requireRole(admin) / requireRole(admin|advanced)  — middleware/auth.ts
- *   requireApiKeyScope(admin|management|insert|browser) — middleware/apiKeyAuth.ts
+ *   requireApiKeyScope(admin|management|insert|browser|llm) — middleware/apiKeyAuth.ts
  *   authorizeBoardAccess(read|edit|admin)             — middleware/authz.ts
  *   authorizeProjectAccess(read|edit|admin)           — middleware/authz.ts
  *   agentAccess(read|edit)                            — lib/agentAccess.ts
@@ -581,6 +581,13 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   // Swapping it for a ladder guard would turn a key given out for scraping
   // into one that reaches the tenant's tasks.
   'ALL /api/mcp/browser': ['requireApiKeyScope(browser)'],
+
+  // ── /api/llm ──────────────────────────────────────────────────────
+  // `llm` keys, OFF the ladder: an OpenAI-compatible endpoint answered by the
+  // owner's agents. The router re-checks agent EDIT access per request; a
+  // ladder guard here would let a key handed out for completions manage tasks.
+  'GET /api/llm/v1/models': ['requireApiKeyScope(llm)'],
+  'POST /api/llm/v1/chat/completions': ['requireApiKeyScope(llm)'],
 
   // ── /api/health ───────────────────────────────────────────────────
   // Liveness/readiness probe. Polled by Docker, Swarm and Traefik, none of which

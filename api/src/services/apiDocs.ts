@@ -30,6 +30,7 @@ import { BROWSER_KEY_RATE_LIMIT_PER_MINUTE, createBrowserMcpServer } from './bro
 import { createTaskFieldsSchema } from './mcp/taskInsertion.js';
 import { TASK_VIEW_KEYS } from './mcp/taskOperations.js';
 import { INSERT_RATE_LIMIT_PER_MINUTE } from '../routes/insertApi.js';
+import { LLM_KEY_RATE_LIMIT_PER_MINUTE, chatCompletionRequestSchema } from './llmCompletion.js';
 
 /** One tool as `tools/list` publishes it. */
 export interface DocumentedTool {
@@ -147,6 +148,60 @@ const errorSchema = {
   type: 'object',
   required: ['error'],
   properties: { error: { type: 'string' } },
+};
+
+/** OpenAI's error envelope, used by the /api/llm surface. */
+const openAiErrorSchema = {
+  type: 'object',
+  required: ['error'],
+  properties: {
+    error: {
+      type: 'object',
+      properties: {
+        message: { type: 'string' },
+        type: { type: 'string', examples: ['invalid_request_error', 'rate_limit_error'] },
+        param: { type: ['string', 'null'] },
+        code: { type: ['string', 'null'], examples: ['model_not_found', 'agent_busy'] },
+      },
+    },
+  },
+};
+
+/** OpenAI's `chat.completion` object. */
+const chatCompletionSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    object: { const: 'chat.completion' },
+    created: { type: 'integer' },
+    model: { type: 'string' },
+    choices: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          index: { type: 'integer' },
+          message: {
+            type: 'object',
+            properties: {
+              role: { const: 'assistant' },
+              content: { type: 'string', description: 'Content of the answer file.' },
+            },
+          },
+          finish_reason: { const: 'stop' },
+        },
+      },
+    },
+    usage: {
+      type: 'object',
+      description: 'Estimated (≈4 characters per token).',
+      properties: {
+        prompt_tokens: { type: 'integer' },
+        completion_tokens: { type: 'integer' },
+        total_tokens: { type: 'integer' },
+      },
+    },
+  },
 };
 
 const validationErrorSchema = {
@@ -342,6 +397,115 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
     ])
   );
 
+  const openAiError = (description: string) => ({
+    description,
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/OpenAiError' } } },
+  });
+  const llmPaths = {
+    '/api/llm/v1/models': {
+      get: {
+        tags: ['LLM'],
+        operationId: 'llm_list_models',
+        summary: 'List the agents the key can address',
+        description:
+          'OpenAI `GET /v1/models`: one entry per agent the key owner can edit. `id` is the agent name, to pass as `model`; `agent_id` is its id, accepted as `model` too.',
+        security: [{ llmKey: [] }],
+        'x-api-key-scope': 'llm',
+        responses: {
+          '200': {
+            description: 'The agents, as models.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    object: { const: 'list' },
+                    data: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string', description: 'Agent name.' },
+                          object: { const: 'model' },
+                          created: { type: 'integer' },
+                          owned_by: { type: 'string' },
+                          agent_id: { type: 'string', description: 'Agent id.' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '429': openAiError(
+            `More than ${LLM_KEY_RATE_LIMIT_PER_MINUTE} requests in a minute on this key.`
+          ),
+          ...keyErrors,
+        },
+      },
+    },
+    '/api/llm/v1/chat/completions': {
+      post: {
+        tags: ['LLM'],
+        operationId: 'llm_chat_completion',
+        summary: 'Ask an agent, get an OpenAI chat completion',
+        description:
+          "OpenAI `POST /v1/chat/completions`, answered by the agent named in `model`. The conversation is handed to the agent, which writes its final answer to a file in its workspace; the content of that file is returned as the assistant message (the agent's chat reply is used if no file was written).\n\n" +
+          'The agent works with its own LLM, tools, skills and MCP servers, so a request may take minutes. Sampling parameters (`temperature`, `max_tokens`…) are accepted and ignored. Inline `data:` images are passed to the agent; image URLs are not fetched. `usage` is an estimate.\n\n' +
+          'With `stream: true` the answer arrives as server-sent `chat.completion.chunk` events — a role chunk, keep-alive comments while the agent works, the whole answer in one chunk, then `[DONE]`.\n\n' +
+          `One request at a time per agent: a busy agent answers \`409\`. Rate limit: ${LLM_KEY_RATE_LIMIT_PER_MINUTE} requests/minute per key.`,
+        security: [{ llmKey: [] }],
+        'x-api-key-scope': 'llm',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ChatCompletionRequest' },
+              examples: {
+                minimal: {
+                  summary: 'One question',
+                  value: {
+                    model: 'Developer',
+                    messages: [{ role: 'user', content: 'Summarize the README of the project.' }],
+                  },
+                },
+                conversation: {
+                  summary: 'System prompt and history',
+                  value: {
+                    model: 'Developer',
+                    messages: [
+                      { role: 'system', content: 'Answer in French, in three bullet points.' },
+                      { role: 'user', content: 'What changed in the last release?' },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description:
+              'The completion (`application/json`), or server-sent events with `stream: true`.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ChatCompletion' } },
+              'text/event-stream': { schema: { type: 'string' } },
+            },
+          },
+          '400': openAiError('Malformed body, ambiguous agent name, or conversation too long.'),
+          '404': openAiError('No agent of that name or id that the key owner can edit.'),
+          '409': openAiError('The agent is busy or disabled. Retry later.'),
+          '429': openAiError(
+            `More than ${LLM_KEY_RATE_LIMIT_PER_MINUTE} requests in a minute on this key.`
+          ),
+          '502': openAiError('The agent failed or returned no answer.'),
+          ...keyErrors,
+        },
+      },
+    },
+  };
+
   return {
     openapi: '3.1.0',
     info: {
@@ -354,14 +518,20 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         '| Key | Opens |\n|---|---|\n' +
         '| `insert` | `/api/insert/*`, `/api/mcp/insert` — task creation on the one board it is bound to |\n' +
         '| `browser` | `/api/mcp/browser` — web search and crawling, no tenant data |\n' +
+        '| `llm` | `/api/llm/v1/*` — OpenAI-compatible chat completions answered by your agents |\n' +
         '| `management` | `/api/mcp/management` |\n' +
         '| `admin` | `/api/mcp/admin` and `/api/mcp/management` |\n\n' +
-        'Keys never cross these lines: an `admin` key does not open the insert surface (it has no board) nor the browser one, and a `browser` key opens nothing else.',
+        'Keys never cross these lines: an `admin` key does not open the insert surface (it has no board) nor the browser or llm ones, and a `browser` or `llm` key opens nothing else.',
     },
     servers: [{ url: '/' }],
     tags: [
       { name: 'Insert', description: 'REST task creation with a board-bound `insert` key.' },
       { name: 'MCP', description: 'Model Context Protocol surfaces for AI clients.' },
+      {
+        name: 'LLM',
+        description:
+          'OpenAI-compatible endpoint answered by an agent. Point any OpenAI SDK at `<origin>/api/llm/v1` with an `llm` key as the API key, and use an agent name as `model`.',
+      },
     ],
     paths: {
       '/api/insert/board': {
@@ -476,6 +646,7 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         },
       },
       ...mcpPaths,
+      ...llmPaths,
     },
     components: {
       securitySchemes: {
@@ -486,6 +657,10 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         browserKey: bearer(
           'Browser',
           'Opens the web browser tools and nothing of the tenant. Several may exist per user, one per calling service, each revoked on its own.'
+        ),
+        llmKey: bearer(
+          'LLM',
+          'Opens the OpenAI-compatible endpoint and nothing else. Addresses any agent its owner can edit, re-checked on every request. Several may exist per user, one per calling service, each revoked on its own.'
         ),
         managementKey: bearer('Management', 'One per user; minting again rotates it.'),
         adminKey: bearer('Admin', 'One per user; also opens the management surface.'),
@@ -514,6 +689,9 @@ export async function buildOpenApiDocument(managers: ApiDocsManagers): Promise<J
         Error: errorSchema,
         ValidationError: validationErrorSchema,
         JsonRpcRequest: jsonRpcRequestSchema,
+        ChatCompletionRequest: bodySchema(chatCompletionRequestSchema),
+        ChatCompletion: chatCompletionSchema,
+        OpenAiError: openAiErrorSchema,
       },
       responses: {
         MissingKey: errorResponse('No `Authorization: Bearer <key>` header.'),

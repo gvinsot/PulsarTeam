@@ -65,7 +65,7 @@ export interface OpenApiOperation {
   description?: string;
   deprecated?: boolean;
   security?: Record<string, string[]>[];
-  /** Which key opens it: 'insert' | 'browser' | 'management' | 'admin'. */
+  /** Which key opens it: 'insert' | 'browser' | 'llm' | 'management' | 'admin'. */
   'x-api-key-scope'?: string;
   /** MCP surfaces only. */
   'x-mcp-tools'?: McpToolDoc[];

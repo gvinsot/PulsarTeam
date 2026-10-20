@@ -31,6 +31,7 @@ const toExpressPath = (path: string) => path.replace(/\{(\w+)\}/g, ':$1');
 const GUARD_OF_SCHEME: Record<string, string> = {
   insertKey: 'requireApiKeyScope(insert)',
   browserKey: 'requireApiKeyScope(browser)',
+  llmKey: 'requireApiKeyScope(llm)',
   managementKey: 'requireApiKeyScope(management)',
   adminKey: 'requireApiKeyScope(admin)',
 };

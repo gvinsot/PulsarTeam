@@ -1,6 +1,6 @@
 # Scoped key surfaces — `/api/mcp/*`, `/api/insert/*`
 
-Sources: `api/src/middleware/apiKeyAuth.ts`, `api/src/services/apiKeyManager.ts`, `api/src/services/browserMcp.ts`, `api/src/services/mcp/adminMcp.ts`, `api/src/services/mcp/managementMcp.ts`, `api/src/services/mcp/insertMcp.ts`, `api/src/services/mcp/taskInsertion.ts`, `api/src/services/mcp/actorScope.ts`, `api/src/routes/apiKeys.ts`, `api/src/routes/insertApi.ts`, `api/src/services/apiDocs.ts`, `api/src/routes/apiDocs.ts`.
+Sources: `api/src/middleware/apiKeyAuth.ts`, `api/src/services/apiKeyManager.ts`, `api/src/services/browserMcp.ts`, `api/src/services/llmCompletion.ts`, `api/src/routes/llmApi.ts`, `api/src/services/mcp/adminMcp.ts`, `api/src/services/mcp/managementMcp.ts`, `api/src/services/mcp/insertMcp.ts`, `api/src/services/mcp/taskInsertion.ts`, `api/src/services/mcp/actorScope.ts`, `api/src/routes/apiKeys.ts`, `api/src/routes/insertApi.ts`, `api/src/services/apiDocs.ts`, `api/src/routes/apiDocs.ts`.
 
 ---
 
@@ -19,15 +19,16 @@ Before these surfaces, the only key-authenticated MCP endpoint was `/api/swarm/m
 
 ## 2. API keys
 
-`api_keys` holds three kinds of row (migrations `202609010001_api_keys_user_scope`, `202609150001_api_keys_insert_scope`, `202610160001_remove_legacy_api_keys`).
+`api_keys` holds four kinds of row (migrations `202609010001_api_keys_user_scope`, `202609150001_api_keys_insert_scope`, `202610160001_remove_legacy_api_keys`).
 
 | | `user_id` | `scope` | `board_id` | Accepted on | Managed from |
 |---|---|---|---|---|---|
 | **Ladder** | set | `admin` \| `management` | `NULL` | `/api/mcp/admin`, `/api/mcp/management` | `GET`/`POST /api/settings/api-key/mine`, `DELETE /api/settings/api-key/mine/:id` (any user, own keys only) |
 | **Insert** | set | `insert` | set | `/api/insert/*`, `/api/mcp/insert` | same routes; `POST` takes `{ scope: 'insert', board_id, name }` and requires **edit** on the board |
 | **Browser** | set | `browser` | `NULL` | `/api/mcp/browser` | same routes; `POST` takes `{ scope: 'browser', name }` (any user) |
+| **LLM** | set | `llm` | `NULL` | `/api/llm/v1/*` | same routes; `POST` takes `{ scope: 'llm', name }` (any user) |
 
-A row that is none of these exactly — an owner without a scope, an insert key without its board, a ladder or browser key with one — resolves to **nothing** and is refused everywhere.
+A row that is none of these exactly — an owner without a scope, an insert key without its board, a ladder, browser or llm key with one — resolves to **nothing** and is refused everywhere.
 
 Both are stored as `HMAC-SHA256(key, server_secret)`; the plaintext is returned exactly once, at mint time.
 
@@ -35,18 +36,19 @@ Both are stored as `HMAC-SHA256(key, server_secret)`; the plaintext is returned 
 
 Minting a ladder scope you already hold **rotates** it: the previous key for that pair stops working immediately. Each `DELETE` is narrowed by its owner predicate, so one user's rotation never touches another's keys.
 
-Insert keys are **not** unique: a user holds as many as they like — one per form, webhook or script — each revoked on its own. Minting one never replaces another, and rotating a ladder key never touches them. `board_id` cascades: deleting the board deletes its insert keys. Browser keys accumulate the same way — one per consuming service.
+Insert keys are **not** unique: a user holds as many as they like — one per form, webhook or script — each revoked on its own. Minting one never replaces another, and rotating a ladder key never touches them. `board_id` cascades: deleting the board deletes its insert keys. Browser and llm keys accumulate the same way — one per consuming service.
 
 ### Scope ladder
 
-`admin` > `management`, one way only. `insert` and `browser` are **off the ladder in both directions**.
+`admin` > `management`, one way only. `insert`, `browser` and `llm` are **off the ladder in both directions**.
 
-| Key scope | `/api/mcp/management` | `/api/mcp/admin` | `/api/insert/*`, `/api/mcp/insert` | `/api/mcp/browser` |
-|---|---|---|---|---|
-| `management` | ✅ | ❌ `403` | ❌ `403` | ❌ `403` |
-| `admin` | ✅ | ✅ | ❌ `403` — the insert surface takes its board from the key, and a ladder key has none | ❌ `403` |
-| `insert` | ❌ `403` | ❌ `403` | ✅ | ❌ `403` |
-| `browser` | ❌ `403` | ❌ `403` | ❌ `403` | ✅ |
+| Key scope | `/api/mcp/management` | `/api/mcp/admin` | `/api/insert/*`, `/api/mcp/insert` | `/api/mcp/browser` | `/api/llm/v1/*` |
+|---|---|---|---|---|---|
+| `management` | ✅ | ❌ `403` | ❌ `403` | ❌ `403` | ❌ `403` |
+| `admin` | ✅ | ✅ | ❌ `403` — the insert surface takes its board from the key, and a ladder key has none | ❌ `403` | ❌ `403` |
+| `insert` | ❌ `403` | ❌ `403` | ✅ | ❌ `403` | ❌ `403` |
+| `browser` | ❌ `403` | ❌ `403` | ❌ `403` | ✅ | ❌ `403` |
+| `llm` | ❌ `403` | ❌ `403` | ❌ `403` | ❌ `403` | ✅ |
 
 ### Claims are read live, never baked into the key
 
@@ -170,6 +172,24 @@ Rate limit: 30 requests/minute **per key** (`BROWSER_KEY_RATE_LIMIT_PER_MINUTE`,
 
 ---
 
+## 4e. LLM surface — scope `llm`
+
+`/api/llm/v1` is an **OpenAI-compatible** endpoint answered by one of the key owner's agents (`routes/llmApi.ts`, `services/llmCompletion.ts`). Any OpenAI SDK works with `base_url = <origin>/api/llm/v1` and the key as `api_key`.
+
+- `GET /api/llm/v1/models` — one `model` per agent the owner can **edit** (`id` = agent name, `agent_id` = its id).
+- `POST /api/llm/v1/chat/completions` — classic body (`model`, `messages`, optional `stream`). `model` is an agent name (case-insensitive) or id, among the agents the owner can edit — re-checked on every request (`checkAgentAccess(…, 'edit')`, the level `POST /api/agents/:id/chat` demands). Unknown and foreign agents both answer `404 model_not_found`.
+
+The conversation is flattened into one agent message (system/developer messages as caller instructions, a single user message as-is, anything longer as a labelled transcript) and the agent is told to write its **final answer only** to `/tmp/pulsar-llm-api/<uuid>.md` in its workspace. After the turn the API reads that file through the execution manager, deletes it, and returns its content as `choices[0].message.content`. If no file was written, the agent's chat reply (reasoning blocks stripped) is returned instead; an empty answer is `502 empty_answer`.
+
+- Sampling parameters are accepted and ignored; inline `data:` images are passed to the agent, image URLs are never fetched (no SSRF primitive). `usage` is a ≈4 chars/token estimate.
+- `stream: true` answers server-sent `chat.completion.chunk` events: role chunk, keep-alive comments every 15 s, the whole answer in one chunk, a `stop` chunk, `[DONE]`.
+- One turn at a time per agent: a busy or disabled agent answers `409` (`agent_busy` / `agent_disabled`). The turn is part of the agent's conversation history.
+- Errors use OpenAI's envelope `{ error: { message, type, param, code } }`.
+
+Rate limit: 20 requests/minute **per key** (`LLM_KEY_RATE_LIMIT_PER_MINUTE`), on top of the global 300/minute per IP.
+
+---
+
 ## 4c. Generated documentation — `GET /api/settings/api-docs/openapi.json`
 
 Session-authenticated. An OpenAPI 3.1 document built by `services/apiDocs.ts` and rendered by the **Documentation** tab of the API keys dialog (downloadable as `openapi.json`, with `servers` set to the instance origin).
@@ -180,7 +200,7 @@ Nothing that can drift is hand-written:
 - each MCP surface's `x-mcp-tools` is the `tools/list` answer of a **real** server instance, over an in-memory MCP transport;
 - the `Task` response covers exactly `TASK_VIEW_KEYS`.
 
-`apiDocs.test.ts` fails when a key-guarded route is mounted but undocumented, when a documented operation is not mounted behind the guard its `security` names, or when a catalogue differs from the registered tools. Operations carry `x-api-key-scope` (`insert` | `browser` | `management` | `admin`).
+`apiDocs.test.ts` fails when a key-guarded route is mounted but undocumented, when a documented operation is not mounted behind the guard its `security` names, or when a catalogue differs from the registered tools. Operations carry `x-api-key-scope` (`insert` | `browser` | `llm` | `management` | `admin`).
 
 ---
 

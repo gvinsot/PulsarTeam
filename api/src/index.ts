@@ -65,6 +65,7 @@ import { createAutoLearnMcpHandler } from './services/autoLearnMcp.js';
 import { apiKeyRoutes } from './routes/apiKeys.js';
 import { apiDocsRoutes } from './routes/apiDocs.js';
 import { insertApiRoutes } from './routes/insertApi.js';
+import { llmApiRoutes } from './routes/llmApi.js';
 import { settingsRoutes } from './routes/settings.js';
 import { createSwarmApiMcpHandler } from './services/swarmApiMcp.js';
 import { createPulsarGatewayMcpHandler } from './services/pulsarGatewayMcp.js';
@@ -390,6 +391,14 @@ const browserKeyLimiter = rateLimit({
 app.all('/api/mcp/browser', requireApiKeyScope('browser'), (req, res) =>
   browserKeyLimiter(req, res, () => browserKeyMcpHandler(req, res))
 );
+
+// ── LLM surface — `llm` keys ───────────────────────────────────────────────
+//
+// An OpenAI-compatible chat-completions endpoint answered by one of the key
+// owner's agents (`model` = agent name or id, which the owner must be able to
+// edit — re-checked per request in routes/llmApi.ts). Off the ladder: only an
+// llm key opens it, and it opens nothing else.
+app.use('/api/llm', requireApiKeyScope('llm'), llmApiRoutes(agentManager));
 
 // Public liveness/readiness probe — unauthenticated, because it is what Docker,
 // Swarm and Traefik poll.

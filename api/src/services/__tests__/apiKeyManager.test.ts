@@ -144,6 +144,7 @@ const {
   createScopedApiKey,
   createInsertApiKey,
   createBrowserApiKey,
+  createLlmApiKey,
   listApiKeysForUser,
   revokeScopedApiKey,
   scopeSatisfies,
@@ -432,6 +433,34 @@ test('browser is off the ladder in both directions, and apart from insert', () =
   for (const other of ['admin', 'management', 'insert'] as const) {
     assert.equal(scopeSatisfies('browser', other), false, `browser opens no ${other} surface`);
     assert.equal(scopeSatisfies(other, 'browser'), false, `${other} does not open browser`);
+  }
+});
+
+test('llm keys name their owner and no board, and accumulate', async () => {
+  reset();
+  await ensureApiKeysTable();
+  const first = await createLlmApiKey({ userId: 'user-1', name: 'chatbot' });
+  const second = await createLlmApiKey({ userId: 'user-1' });
+  assert.equal(first.scope, 'llm');
+  assert.equal(first.board_id, null);
+  assert.equal(second.name, 'llm key');
+  assert.deepEqual(await resolveApiKey(first.key), {
+    id: first.id,
+    userId: 'user-1',
+    scope: 'llm',
+    boardId: null,
+    allowedColumns: null,
+  });
+  assert.equal(await revokeScopedApiKey(first.id, 'user-1'), true);
+  assert.equal(await resolveApiKey(first.key), null);
+  assert.ok(await resolveApiKey(second.key), 'revoking one llm key spares the others');
+});
+
+test('llm is off the ladder in both directions', () => {
+  assert.equal(scopeSatisfies('llm', 'llm'), true);
+  for (const other of ['admin', 'management', 'insert', 'browser'] as const) {
+    assert.equal(scopeSatisfies('llm', other), false, `llm opens no ${other} surface`);
+    assert.equal(scopeSatisfies(other, 'llm'), false, `${other} does not open llm`);
   }
 });
 

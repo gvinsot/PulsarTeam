@@ -1149,6 +1149,13 @@ export const api = {
   createBrowserApiKey: (name?: string) =>
     post<ScopedApiKeyCreated>('/settings/api-key/mine', { scope: 'browser', name }),
 
+  /**
+   * Mint a NEW llm key (never rotates another one), opening only the
+   * OpenAI-compatible endpoint answered by the caller's agents. Returns the key once.
+   */
+  createLlmApiKey: (name?: string) =>
+    post<ScopedApiKeyCreated>('/settings/api-key/mine', { scope: 'llm', name }),
+
   /** The generated OpenAPI 3.1 document of every key-authenticated surface. */
   getApiDocs: () => get<OpenApiDocument>('/settings/api-docs/openapi.json'),
 

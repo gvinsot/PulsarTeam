@@ -28,6 +28,10 @@ const CURRENT_HASH_VERSION = 2;
  *     same tools agents get, FlareSolverr fallback included), for another
  *     service to use. No board, no tenant data. Several per user, one per
  *     consuming service, each revoked on its own.
+ *   – `llm`: opens only the OpenAI-compatible completion endpoint
+ *     (/api/llm/v1/*), which hands a chat request to one of the owner's agents
+ *     and returns its answer. No board. Several per user, one per consuming
+ *     service, each revoked on its own.
  *
  * The original ownerless instance-wide ("legacy") key has been removed for
  * good: migration 202610160001 deletes any such row, and a row that is not
@@ -54,7 +58,7 @@ const CURRENT_HASH_VERSION = 2;
  * to. `browser` opens the web browser tools and nothing of the tenant. Both are
  * off the ladder — see `scopeSatisfies`.
  */
-export const API_KEY_SCOPES = ['admin', 'management', 'insert', 'browser'] as const;
+export const API_KEY_SCOPES = ['admin', 'management', 'insert', 'browser', 'llm'] as const;
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 
 /** The scopes that sit on the ladder: one key per (user, scope), no board. */
@@ -72,12 +76,12 @@ export function isApiKeyScope(value: unknown): value is ApiKeyScope {
 }
 
 /** The scopes that sit off the ladder: each opens its own surface and no other. */
-const OFF_LADDER_SCOPES: readonly ApiKeyScope[] = ['insert', 'browser'];
+const OFF_LADDER_SCOPES: readonly ApiKeyScope[] = ['insert', 'browser', 'llm'];
 
 /**
  * Does a key granted `granted` satisfy an endpoint demanding `required`?
  *
- * `insert` and `browser` are off the ladder in BOTH directions. Such a key
+ * `insert`, `browser` and `llm` are off the ladder in BOTH directions. Such a key
  * opens nothing but its own surface, however high the ladder is read. And no
  * ladder key opens theirs — not even `admin`: the insert surface takes its
  * board from the key, and a key handed to another service for browsing must
@@ -407,6 +411,33 @@ export async function createBrowserApiKey({
   );
 
   return { id, key, prefix, scope: 'browser' as const, name: label, board_id: null };
+}
+
+/**
+ * Mint an `llm` key. Never replaces anything: a user may hold several, one per
+ * service calling the OpenAI-compatible endpoint, each revoked on its own with
+ * `revokeScopedApiKey`. Bound to no board: the agent is chosen per request
+ * (`model`), among the agents the owner can edit — re-checked on every call.
+ *
+ * Returns the full key — the only time it is visible in clear.
+ */
+export async function createLlmApiKey({ userId, name }: { userId: string; name?: string | null }) {
+  const pool = getPool();
+  if (!pool) throw new Error('Database not available');
+
+  const key = generateApiKey();
+  const id = crypto.randomUUID();
+  const prefix = key.slice(0, 12) + '...' + key.slice(-4);
+  const keyHash = hmacKey(key);
+  const label = (name || '').trim() || 'llm key';
+
+  await pool.query(
+    `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version, user_id, scope, name)
+     VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7)`,
+    [id, keyHash, prefix, CURRENT_HASH_VERSION, userId, 'llm', label]
+  );
+
+  return { id, key, prefix, scope: 'llm' as const, name: label, board_id: null };
 }
 
 /** The caller's own scoped keys (every kind), metadata only. */

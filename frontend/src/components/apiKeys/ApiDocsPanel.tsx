@@ -29,7 +29,7 @@ import {
 const markdownPlugins = [remarkGfm];
 
 /** Section anchors the Keys tab can deep-link to. */
-export type ApiDocsSection = 'overview' | 'quickstart' | 'Insert' | 'MCP' | 'errors';
+export type ApiDocsSection = 'overview' | 'quickstart' | 'Insert' | 'MCP' | 'LLM' | 'errors';
 
 interface ApiDocsPanelProps {
   /** Scroll to this section once the document is loaded. */
@@ -611,6 +611,7 @@ export default function ApiDocsPanel({ focus, freshKeys = {} }: ApiDocsPanelProp
                 freshKey={
                   entry.op['x-api-key-scope'] === 'insert' ||
                   entry.op['x-api-key-scope'] === 'browser' ||
+                  entry.op['x-api-key-scope'] === 'llm' ||
                   entry.op['x-api-key-scope'] === 'management' ||
                   entry.op['x-api-key-scope'] === 'admin'
                     ? freshKeys[entry.op['x-api-key-scope']]

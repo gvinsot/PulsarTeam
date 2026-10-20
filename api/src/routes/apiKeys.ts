@@ -5,6 +5,7 @@ import {
   API_KEY_SCOPES,
   createBrowserApiKey,
   createInsertApiKey,
+  createLlmApiKey,
   createScopedApiKey,
   listApiKeysForUser,
   revokeScopedApiKey,
@@ -20,7 +21,8 @@ import { validateBody } from '../lib/validate.js';
  * keys under `/mine`: one per (user, scope) for `admin` / `management` (what
  * open /api/mcp/admin and /api/mcp/management), any number of board-bound
  * `insert` keys (what open /api/insert/* and /api/mcp/insert), and any number
- * of `browser` keys (what open /api/mcp/browser). They are
+ * of `browser` keys (what open /api/mcp/browser) and of `llm` keys (what open
+ * the OpenAI-compatible /api/llm/v1/*). They are
  * personal credentials: an admin cannot list, mint or read another user's keys
  * through this router. The ownerless instance-wide ("legacy") key no longer
  * exists.
@@ -84,6 +86,7 @@ router.get(
 //    able to edit — the same level POST /api/tasks demands. The middleware
 //    re-checks that level on every request the key later makes.
 //  • browser: always a new key, bound to nothing — one per consuming service.
+//  • llm: same — the agent is chosen per request, among those the owner can edit.
 router.post(
   '/mine',
   validateBody(createScopedKeySchema),
@@ -131,6 +134,16 @@ router.post(
         return res.status(201).json(result);
       } catch (err) {
         console.error('Failed to create browser API key:', errorMessage(err));
+        return res.status(500).json({ error: 'Failed to create API key' });
+      }
+    }
+
+    if (req.body.scope === 'llm') {
+      try {
+        const result = await createLlmApiKey({ userId: user.userId, name: req.body.name });
+        return res.status(201).json(result);
+      } catch (err) {
+        console.error('Failed to create llm API key:', errorMessage(err));
         return res.status(500).json({ error: 'Failed to create API key' });
       }
     }

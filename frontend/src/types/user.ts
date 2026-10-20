@@ -220,12 +220,14 @@ export interface AppUser {
  * one board, it opens /api/insert/* and /api/mcp/insert and nothing else, and
  * no ladder key opens those. `browser` is off the ladder too: it opens the web
  * browser tools at /api/mcp/browser, for another service, and nothing else.
+ * `llm` is off the ladder as well: it opens the OpenAI-compatible endpoint
+ * /api/llm/v1/* answered by the owner's agents, and nothing else.
  * Closed union, rule 1(a): `z.enum(API_KEY_SCOPES)` in api/src/routes/apiKeys.ts.
  */
-export type ApiKeyScope = 'admin' | 'management' | 'insert' | 'browser';
+export type ApiKeyScope = 'admin' | 'management' | 'insert' | 'browser' | 'llm';
 
 /** The scopes on the ladder: one key per (user, scope), never bound to a board. */
-export type LadderApiKeyScope = Exclude<ApiKeyScope, 'insert' | 'browser'>;
+export type LadderApiKeyScope = Exclude<ApiKeyScope, 'insert' | 'browser' | 'llm'>;
 
 /**
  * One of the caller's OWN scoped keys. Produced by
