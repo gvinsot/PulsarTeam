@@ -759,6 +759,20 @@ def test_vibe_idle_cat_animation_is_masked_from_screen_digest():
     assert mask(["codex"], frame_a) == frame_a
 
 
+def test_vibe_cat_frames_with_moving_cells_mask_identically():
+    # Real petit_chat frames (Vibe 3.0.2): Vibe renders an EMPTY Braille cell
+    # as a plain space, so as the tail/head move, cells flip glyph <-> space.
+    # Deleting the glyphs left a different number of spaces per frame.
+    mask = pty_session_module.mask_idle_animation
+    frames = [
+        "  ⡠⣒⠄  ⡔⢄⠔⡄  │ Sign in\n ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣  │\n  ⠉⠒⠣⠤⠵⠤⠬⠮⠆  │ > ▌\n",
+        " ⢠⢢    ⡔⢄⠔⡄  │ Sign in\n ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣  │\n ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆  │ > ▌\n",
+        "  ⡠⣒⠄  ⡠⡀⡠⡀  │ Sign in\n ⢸⠸⣀⡔⢉⢑⠇⠨⡠⢇  │\n  ⠉⠒⠣⠤⠵⠭⠭⠯⠇  │ > ▌\n",
+    ]
+    masked = {mask(["vibe"], f.encode()) for f in frames}
+    assert len(masked) == 1
+
+
 @pytest.mark.asyncio
 async def test_blinking_software_cursor_is_not_activity(monkeypatch):
     # Some CLIs draw their own cursor and blink it (glyph ↔ blank): the screen

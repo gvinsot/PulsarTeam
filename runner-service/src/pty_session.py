@@ -345,6 +345,10 @@ _READY_RECIPES: dict[str, _ReadyRecipe] = {
 # the agent never went idle. Masking the Braille block is safe: a running Vibe
 # turn also renders an elapsed counter (`(3s Esc/Ctrl+C to interrupt)`) that
 # ticks every second, so real work is still seen as screen activity.
+# Each Braille cell is replaced by a space, not deleted: Vibe renders an EMPTY
+# cell as a plain space, so as the cat moves (tail, head, blinking eyes) cells
+# flip between a Braille glyph and a space — deleting the glyphs would still
+# leave a different number of spaces on the line from frame to frame.
 _BRAILLE_RE = re.compile(rb"\xe2(?:\xa0|\xa1|\xa2|\xa3)[\x80-\xbf]")
 _SCREEN_ANIMATION_MASKS: dict[str, re.Pattern[bytes]] = {
     "vibe": _BRAILLE_RE,
@@ -356,7 +360,7 @@ def mask_idle_animation(cmd: list[str], screen: bytes) -> bytes:
     from a captured pane so it does not register as a screen change."""
     executable = os.path.basename(cmd[0]).lower() if cmd else ""
     mask = _SCREEN_ANIMATION_MASKS.get(executable)
-    return mask.sub(b"", screen) if mask else screen
+    return mask.sub(b" ", screen) if mask else screen
 
 
 def _ready_recipe(cmd: list[str]) -> _ReadyRecipe:
