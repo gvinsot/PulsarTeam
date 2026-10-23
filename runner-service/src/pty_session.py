@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import os
 import errno
-import hashlib
 import pty
 import json
 import fcntl
@@ -94,6 +93,45 @@ READ_CHUNK = 4096
 # the last capture) to tell real activity from no-op redraws — see
 # _sample_screen.
 SCREEN_SAMPLE_INTERVAL_SEC = float(os.getenv("TERMINAL_SCREEN_SAMPLE_SEC", "1.0"))
+
+# Glyphs TUIs draw as their own (software) cursor. Some CLIs blink it by
+# alternating such a glyph with a blank cell, which changes the screen text
+# every half second while the agent sits idle at its prompt.
+CURSOR_GLYPHS = frozenset(" _|\u2588\u2589\u258a\u258b\u258c\u258d\u258e\u258f"
+                          "\u2590\u2581\u2582\u2583\u2584\u2585\u2586\u2587"
+                          "\u2502\u2503\u25ae\u25af\u00a0")
+# A software cursor is at most this many cells wide (wide/double cursors).
+_MAX_CURSOR_CELLS = 2
+
+
+def is_cursor_blink(before: Optional[str], after: Optional[str]) -> bool:
+    """True when two captures of the screen differ only by a blinking cursor:
+    one line changed, in at most _MAX_CURSOR_CELLS adjacent cells, each going
+    between a cursor glyph and a blank (or another cursor glyph)."""
+    if before is None or after is None or before == after:
+        return False
+    a = [line.rstrip() for line in before.splitlines()]
+    b = [line.rstrip() for line in after.splitlines()]
+    # Trailing blank lines are not significant (a cursor alone on the last
+    # line vanishes from the capture when it blinks off).
+    while a and not a[-1]:
+        a.pop()
+    while b and not b[-1]:
+        b.pop()
+    height = max(len(a), len(b))
+    a += [""] * (height - len(a))
+    b += [""] * (height - len(b))
+    changed = [i for i in range(height) if a[i] != b[i]]
+    if len(changed) != 1:
+        return False
+    la, lb = a[changed[0]], b[changed[0]]
+    width = max(len(la), len(lb))
+    la, lb = la.ljust(width), lb.ljust(width)
+    cells = [i for i in range(width) if la[i] != lb[i]]
+    if not cells or len(cells) > _MAX_CURSOR_CELLS or cells[-1] - cells[0] >= _MAX_CURSOR_CELLS:
+        return False
+    return all(la[i] in CURSOR_GLYPHS and lb[i] in CURSOR_GLYPHS for i in cells)
+
 
 # ── Execution-scoped history capture ────────────────────────────────────────
 #
@@ -663,7 +701,8 @@ class PtySession:
     # those as activity kept finished CLI agents "busy" forever. This is what
     # status() reports as idle_seconds. Fed by _screen_watch_loop.
     _last_screen_change_at: float = 0.0
-    _screen_digest: Optional[bytes] = None
+    # Visible pane text at the last capture (see _sample_screen).
+    _screen_text: Optional[str] = None
     # _last_output_at as of the last screen capture: output newer than this
     # has not been classified yet.
     _screen_sampled_output_at: float = 0.0
@@ -1839,8 +1878,8 @@ class PtySession:
             and not self._pane_dead_handled
         )
 
-    def _capture_screen_digest(self) -> Optional[bytes]:
-        """Digest of the visible pane text (no attributes), None on failure."""
+    def _capture_screen_text(self) -> Optional[str]:
+        """Visible pane text (no attributes), None on failure."""
         if not self._tmux_session:
             return None
         try:
@@ -1850,20 +1889,23 @@ class PtySession:
         if result.returncode != 0:
             return None
         screen = mask_idle_animation(self.cmd, result.stdout)
-        return hashlib.blake2b(screen, digest_size=16).digest()
+        return screen.decode("utf-8", errors="replace")
 
     async def _sample_screen(self) -> None:
         """Classify the output printed since the last sample: did it change
-        what is on screen? Only then does it count as activity."""
+        what is on screen? Only then does it count as activity. A change that
+        is only a blinking cursor glyph is not activity either."""
         output_at = self._last_output_at
         if output_at <= self._screen_sampled_output_at:
             return
-        digest = await asyncio.to_thread(self._capture_screen_digest)
+        text = await asyncio.to_thread(self._capture_screen_text)
         self._screen_sampled_output_at = output_at
         # A failed capture cannot prove the output was a no-op: count it.
-        if digest is None or digest != self._screen_digest:
+        if text is None or (
+            text != self._screen_text and not is_cursor_blink(self._screen_text, text)
+        ):
             self._last_screen_change_at = max(self._last_screen_change_at, output_at)
-        self._screen_digest = digest
+        self._screen_text = text
 
     async def _screen_watch_loop(self) -> None:
         while not self._closed:

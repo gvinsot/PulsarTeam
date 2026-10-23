@@ -42,7 +42,7 @@ import { ensureTerminalWorkspace } from '../services/execution/agentWorkspace.js
 import { isCliRunner } from '../services/runners.js';
 import { runnerServiceUrlFor } from '../services/execution/runnerRegistry.js';
 import { buildRunnerTerminalDial } from '../services/execution/runnerTerminalDial.js';
-import { noteCliActivity } from '../services/agentManager/cliActivity.js';
+import { isCursorOnlyOutput, noteCliActivity } from '../services/agentManager/cliActivity.js';
 
 // Which runners get a terminal is the single source of truth in runners.ts
 // (isCliRunner — recognises the deprecated 'coder' alias and lowercases). The
@@ -319,8 +319,13 @@ function wireProxy(
     // Reflect PTY activity as agent.status='busy' so the UI/workflow sees the
     // CLI is currently working. Text frames are control envelopes (exit,
     // resize), not CLI output — skip them. The grace window suppresses the
-    // scrollback replay sent right after attach.
-    if (isBinary && Date.now() - connectionOpenedAt > REPLAY_GRACE_MS) {
+    // scrollback replay sent right after attach. A blinking cursor keeps
+    // printing while the CLI sits idle at its prompt — that is not activity.
+    if (
+      isBinary &&
+      Date.now() - connectionOpenedAt > REPLAY_GRACE_MS &&
+      !isCursorOnlyOutput(data)
+    ) {
       noteCliActivity(agentManager, agentId);
     }
   });

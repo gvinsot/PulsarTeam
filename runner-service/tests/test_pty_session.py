@@ -757,3 +757,41 @@ def test_vibe_idle_cat_animation_is_masked_from_screen_digest():
     assert mask(["vibe"], busy_a) != mask(["vibe"], busy_b)
     # Other CLIs keep Braille spinners as activity.
     assert mask(["codex"], frame_a) == frame_a
+
+
+@pytest.mark.asyncio
+async def test_blinking_software_cursor_is_not_activity(monkeypatch):
+    # Some CLIs draw their own cursor and blink it (glyph ↔ blank): the screen
+    # text changes every half second while the agent sits idle at its prompt.
+    screens = ["> Ask anything\n│ █\n"]
+    session = _screen_session(monkeypatch, screens)
+    now = time.monotonic()
+    session._last_output_at = now - 100
+    session._last_screen_change_at = now - 100
+    await session._sample_screen()  # baseline frame
+
+    for frame in ["> Ask anything\n│\n", "> Ask anything\n│ █\n", "> Ask anything\n│ ▌\n"]:
+        screens[0] = frame
+        session._last_output_at = time.monotonic()
+        await session._sample_screen()
+        assert session.status()["idle_seconds"] >= 99, frame
+
+    # Real text appearing next to the cursor is still activity.
+    screens[0] = "> Ask anything\n│ fix the bug█\n"
+    session._last_output_at = time.monotonic()
+    await session._sample_screen()
+    assert session.status()["idle_seconds"] < 1
+
+
+def test_is_cursor_blink():
+    from pty_session import is_cursor_blink
+
+    assert is_cursor_blink("a\nb█", "a\nb")
+    assert is_cursor_blink("a\n█", "a")  # cursor alone on the last line
+    assert is_cursor_blink("x ██ y", "x    y")  # double-width cursor
+    assert not is_cursor_blink("a", "a")
+    assert not is_cursor_blink(None, "a")
+    assert not is_cursor_blink("a\nb█", "a\nbc")  # a real character
+    assert not is_cursor_blink("█\n█", "\n")  # two lines changed
+    assert not is_cursor_blink("█ █", "   ")  # non-adjacent cells
+    assert not is_cursor_blink("⠋ Working", "⠙ Working")  # spinner tick
