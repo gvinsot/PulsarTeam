@@ -38,6 +38,7 @@ import { externalVoiceRoutes } from './routes/externalVoice.js';
 import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
 import { readSecret, validateProductionSecrets } from './secrets.js';
+import { assertPatchedRuntime, rejectBrotliRequestBodies } from './lib/runtimeSecurity.js';
 import {
   buildCorsOptions,
   getCorsOrigins,
@@ -213,6 +214,7 @@ app.use(function lockEnvironmentFromHost(req, _res, next) {
   next();
 });
 
+app.use(rejectBrotliRequestBodies);
 app.use(express.json({ limit: '1mb' }));
 
 // Global API rate limiter — 300 requests per minute per IP
@@ -612,6 +614,7 @@ setupSocketHandlers(io, agentManager);
 const PORT = process.env.PORT || 3001;
 
 async function start() {
+  assertPatchedRuntime();
   validateProductionSecrets();
   validateCorsConfig();
   await initDatabase();
