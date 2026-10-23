@@ -742,3 +742,18 @@ async def test_failed_screen_capture_counts_output_as_activity(monkeypatch):
     session._last_output_at = time.monotonic()
     await session._sample_screen()
     assert session.status()["idle_seconds"] < 1
+
+
+def test_vibe_idle_cat_animation_is_masked_from_screen_digest():
+    """Vibe's idle cat mascot animates in Braille cells forever; two frames
+    that differ only there must hash the same, or the agent never goes idle."""
+    mask = pty_session_module.mask_idle_animation
+    frame_a = "⠈⠢⡀    ⢀⠔⠁\n│ > ▌\n".encode()
+    frame_b = "⠐⠤⣀    ⣀⠤⠂\n│ > ▌\n".encode()
+    assert mask(["/usr/local/bin/vibe"], frame_a) == mask(["vibe"], frame_b)
+    # The busy elapsed counter still changes the masked screen.
+    busy_a = "⠋ Thinking (1s Esc/Ctrl+C to interrupt)".encode()
+    busy_b = "⠙ Thinking (2s Esc/Ctrl+C to interrupt)".encode()
+    assert mask(["vibe"], busy_a) != mask(["vibe"], busy_b)
+    # Other CLIs keep Braille spinners as activity.
+    assert mask(["codex"], frame_a) == frame_a

@@ -300,6 +300,27 @@ _READY_RECIPES: dict[str, _ReadyRecipe] = {
 }
 
 
+# Per-CLI screen regions that animate on their own while the CLI sits idle, and
+# must therefore not count as activity in the screen-change digest. Vibe's
+# idle banner (`petit_chat`) is a cat mascot drawn in Braille cells (U+2800–
+# U+28FF) that animates forever, so every frame looked like a fresh change and
+# the agent never went idle. Masking the Braille block is safe: a running Vibe
+# turn also renders an elapsed counter (`(3s Esc/Ctrl+C to interrupt)`) that
+# ticks every second, so real work is still seen as screen activity.
+_BRAILLE_RE = re.compile(rb"\xe2(?:\xa0|\xa1|\xa2|\xa3)[\x80-\xbf]")
+_SCREEN_ANIMATION_MASKS: dict[str, re.Pattern[bytes]] = {
+    "vibe": _BRAILLE_RE,
+}
+
+
+def mask_idle_animation(cmd: list[str], screen: bytes) -> bytes:
+    """Blank out the CLI's idle-time animation (see _SCREEN_ANIMATION_MASKS)
+    from a captured pane so it does not register as a screen change."""
+    executable = os.path.basename(cmd[0]).lower() if cmd else ""
+    mask = _SCREEN_ANIMATION_MASKS.get(executable)
+    return mask.sub(b"", screen) if mask else screen
+
+
 def _ready_recipe(cmd: list[str]) -> _ReadyRecipe:
     executable = os.path.basename(cmd[0]).lower() if cmd else ""
     return _READY_RECIPES.get(executable, _DEFAULT_READY_RECIPE)
@@ -1828,7 +1849,8 @@ class PtySession:
             return None
         if result.returncode != 0:
             return None
-        return hashlib.blake2b(result.stdout, digest_size=16).digest()
+        screen = mask_idle_animation(self.cmd, result.stdout)
+        return hashlib.blake2b(screen, digest_size=16).digest()
 
     async def _sample_screen(self) -> None:
         """Classify the output printed since the last sample: did it change
