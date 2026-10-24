@@ -797,6 +797,34 @@ async def test_blinking_software_cursor_is_not_activity(monkeypatch):
     assert session.status()["idle_seconds"] < 1
 
 
+@pytest.mark.asyncio
+async def test_continuous_idle_animation_lets_idle_seconds_grow(monkeypatch):
+    # Regression: Vibe redraws its cat several times per second, so output was
+    # always pending classification when the API polled — and pending output
+    # counted as a change, pinning idle_seconds near 0 although every sampled
+    # frame masked to the same screen.
+    screens = ["  ⡠⣒⠄  ⡔⢄⠔⡄  │ Mistral Vibe\n│ > ▌\n"]
+    session = _screen_session(monkeypatch, screens)
+    session.cmd = ["vibe"]
+    now = time.monotonic()
+    session._last_output_at = now - 100
+    session._last_screen_change_at = now - 100
+    await session._sample_screen()  # baseline frame
+
+    for frame in ["  ⡠⣒⠄  ⡠⡀⡠⡀  │ Mistral Vibe\n│ > ▌\n", " ⢠⢢    ⡔⢄⠔⡄  │ Mistral Vibe\n│ > ▌\n"]:
+        screens[0] = frame
+        session._last_output_at = time.monotonic()
+        await session._sample_screen()
+        session._last_output_at = time.monotonic()  # next frame already printed
+        assert session.status()["idle_seconds"] >= 99, frame
+
+    # Real work after the animation is seen at the next sample.
+    screens[0] = "⠋ Thinking (1s Esc/Ctrl+C to interrupt)\n│ > ▌\n"
+    session._last_output_at = time.monotonic()
+    await session._sample_screen()
+    assert session.status()["idle_seconds"] < 1
+
+
 def test_is_cursor_blink():
     from pty_session import is_cursor_blink
 

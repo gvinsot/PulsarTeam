@@ -5,7 +5,8 @@
 // busy/idle status is derived from ACTIVITY signals instead:
 //
 //   • console output relayed to a browser terminal (routes/terminal.ts), except
-//     chunks that only blink the cursor (isCursorOnlyOutput);
+//     chunks that only blink the cursor or redraw an idle animation such as
+//     Vibe's cat (isCursorOnlyOutput);
 //   • the runner's own `idle_seconds` — seconds since the PTY last printed,
 //     tracked runner-side whether or not a viewer is attached — polled by a
 //     heartbeat for as long as a terminal-driven task is being watched;
@@ -55,12 +56,28 @@ const CURSOR_GLYPHS = new Set(' _|█▉▊▋▌▍▎▏▐▁▂▃▄▅▆�
 const MAX_CURSOR_CELLS = 2;
 
 /**
+ * Per-runner idle animations: glyphs a CLI keeps redrawing while it sits idle,
+ * stripped (with whitespace) before judging a chunk. Mirrors the runner's
+ * pty_session._SCREEN_ANIMATION_MASKS. Vibe's idle banner (`petit_chat`) is an
+ * animated cat drawn in Braille cells (U+2800–U+28FF) whose empty cells render
+ * as spaces; a running Vibe turn still prints text (elapsed counter, output),
+ * so real work is still seen.
+ */
+const IDLE_ANIMATION_RE: Record<string, RegExp> = {
+  vibe: /[⠀-⣿\s]/g,
+};
+
+/**
  * True when a chunk of PTY output prints nothing but terminal control and, at
  * most, a cursor glyph — what a blinking cursor (hardware show/hide toggles or
  * a software block redrawn every half second) emits while the CLI sits idle at
- * its prompt. Such output is not agent activity.
+ * its prompt — or, for `runner`, only frames of its idle animation
+ * (IDLE_ANIMATION_RE). Such output is not agent activity.
  */
-export function isCursorOnlyOutput(chunk: Buffer | ArrayBuffer | Buffer[] | string): boolean {
+export function isCursorOnlyOutput(
+  chunk: Buffer | ArrayBuffer | Buffer[] | string,
+  runner?: string
+): boolean {
   const raw =
     typeof chunk === 'string'
       ? chunk
@@ -70,9 +87,11 @@ export function isCursorOnlyOutput(chunk: Buffer | ArrayBuffer | Buffer[] | stri
             ? chunk
             : Buffer.from(chunk)
         ).toString('utf8');
-  const text = raw
+  let text = raw
     .replace(ANSI_SEQUENCE_RE, '')
     .replace(CONTROL_CHARS_RE, '');
+  const animation = runner ? IDLE_ANIMATION_RE[runner.toLowerCase()] : undefined;
+  if (animation) text = text.replace(animation, '');
   const glyphs = [...text];
   return glyphs.length <= MAX_CURSOR_CELLS && glyphs.every(g => CURSOR_GLYPHS.has(g));
 }

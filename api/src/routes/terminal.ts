@@ -320,11 +320,12 @@ function wireProxy(
     // CLI is currently working. Text frames are control envelopes (exit,
     // resize), not CLI output — skip them. The grace window suppresses the
     // scrollback replay sent right after attach. A blinking cursor keeps
-    // printing while the CLI sits idle at its prompt — that is not activity.
+    // printing while the CLI sits idle at its prompt, and so does an idle
+    // animation (Vibe's cat) — that is not activity.
     if (
       isBinary &&
       Date.now() - connectionOpenedAt > REPLAY_GRACE_MS &&
-      !isCursorOnlyOutput(data)
+      !isCursorOnlyOutput(data, runner)
     ) {
       noteCliActivity(agentManager, agentId);
     }

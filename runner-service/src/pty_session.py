@@ -1924,12 +1924,17 @@ class PtySession:
     def activity_idle_seconds(self) -> Optional[float]:
         """Seconds since the CLI last did something VISIBLE: the screen text
         changed. Output not yet classified by the sampler counts as a change
-        (conservative: it is at most one sample interval old). None when the
-        PTY never printed."""
+        (conservative: it is at most one sample interval old) — unless the
+        last classified output was a no-op: a CLI that keeps redrawing an idle
+        animation (Vibe's cat, a blinking cursor) always has unclassified
+        output pending, which would pin idle_seconds near 0 forever. Its next
+        bytes wait for the sampler instead. None when the PTY never printed."""
         if not self._last_output_at:
             return None
         now = time.monotonic()
-        if not self._last_screen_change_at or self._last_output_at > self._screen_sampled_output_at:
+        pending = self._last_output_at > self._screen_sampled_output_at
+        last_sample_was_noop = self._screen_sampled_output_at > self._last_screen_change_at
+        if not self._last_screen_change_at or (pending and not last_sample_was_noop):
             last = max(self._last_output_at, self._last_screen_change_at)
         else:
             last = self._last_screen_change_at

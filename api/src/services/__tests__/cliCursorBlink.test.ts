@@ -29,3 +29,14 @@ test('real output is still activity', () => {
   assert.equal(isCursorOnlyOutput(Buffer.from('\x1b[2K\rRunning tests')), false);
   assert.equal(isCursorOnlyOutput(Buffer.from('███')), false); // a progress bar, not a cursor
 });
+
+test("Vibe's idle cat animation is not activity for the vibe runner", () => {
+  // petit_chat redraws Braille cells (empty cells render as spaces).
+  const frame = '\x1b[2;3H\x1b[38;5;208m⡠⣒⠄  ⡔⢄⠔⡄\x1b[3;2H⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣\x1b[0m';
+  assert.equal(isCursorOnlyOutput(Buffer.from(frame), 'vibe'), true);
+  assert.equal(isCursorOnlyOutput(Buffer.from(frame + '\x1b[20;3H█'), 'Vibe'), true);
+  // Other runners keep Braille as activity (spinners).
+  assert.equal(isCursorOnlyOutput(Buffer.from(frame), 'codex'), false);
+  // A running Vibe turn still prints text.
+  assert.equal(isCursorOnlyOutput(Buffer.from('⠋ Thinking (2s Esc/Ctrl+C to interrupt)'), 'vibe'), false);
+});
