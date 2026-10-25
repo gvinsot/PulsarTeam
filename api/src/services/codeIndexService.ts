@@ -1650,6 +1650,38 @@ export class CodeIndexService {
     return repos.filter(r => r.name.toLowerCase() === normalizedName);
   }
 
+  /**
+   * Resolve the repo a tool call targets: an explicit `repoId` wins (and is used
+   * as-is, for backward compatibility); otherwise `repoName` is matched
+   * case-insensitively against repo names, then against the basename of their
+   * root folder. No match or several matches throw an error listing the
+   * candidates, so the caller can retry with a precise `repoId`.
+   */
+  async resolveRepoId({ repoId, repoName }: { repoId?: string | null; repoName?: string | null }) {
+    const id = repoId?.trim();
+    if (id) return id;
+    const name = repoName?.trim();
+    if (!name) throw new Error('Either repoId or repoName is required');
+
+    let matches = await this.findReposByProject(name);
+    if (matches.length === 0) {
+      const normalizedName = name.toLowerCase();
+      matches = (await this.listRepos()).filter(
+        repo => path.basename(repo.rootPath).toLowerCase() === normalizedName
+      );
+    }
+
+    if (matches.length === 1) return matches[0].id;
+    if (matches.length === 0) {
+      const known = (await this.listRepos()).map(repo => `"${repo.name}"`);
+      throw new Error(
+        `No indexed repo named "${name}"${known.length ? ` (indexed repos: ${known.join(', ')})` : ' (no repos indexed yet)'}; index it with index_folder`
+      );
+    }
+    const candidates = matches.map(repo => `${repo.id} (${repo.rootPath})`).join(', ');
+    throw new Error(`Repo name "${name}" is ambiguous: ${candidates}; pass repoId instead`);
+  }
+
   async invalidate(repoId: string) {
     return this._withRepoLock(repoId, async () => {
       this._invalidateCache(repoId);

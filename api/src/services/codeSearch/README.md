@@ -13,23 +13,32 @@ Built-in MCP server (`ALL /api/code-index/mcp`, defined in `../codeIndexMcp.ts`)
 
 ## Tools
 
-| Tool               | Arguments                                                           | Purpose                                             |
-| ------------------ | ------------------------------------------------------------------- | --------------------------------------------------- |
-| `index_folder`     | `path`, `repoName?`, `maxFiles?`, `maxFileSize?`                    | Index a folder (symbols, vectors, reference graph)  |
-| `index_workspace`  | `subpath?`, `repoName?`, `maxFiles?`, `maxFileSize?`                | Index the backend workspace or a subpath            |
-| `list_repos`       | —                                                                   | Indexed repos and their `repoId`                    |
-| `get_repo_summary` | `repoId`                                                            | Counts by kind/language, skipped files              |
-| `get_file_tree`    | `repoId`                                                            | Indexed file tree                                   |
-| `get_file_outline` | `repoId`, `filePath`                                                | Symbols of one file                                 |
-| `get_symbol`       | `repoId`, `symbolId`, `verify?`, `contextLines?`                    | Source + metadata of a symbol, optional drift check |
-| `read_file_range`  | `repoId`, `filePath`, `startLine`, `endLine?`                       | Lines of an indexed file, always drift-checked      |
-| `search_symbols`   | `repoId`, `query`, `kind?`, `topK?`                                 | Lexical search on names/signatures/summaries        |
-| `search_semantic`  | `repoId`, `query`, `topK?`                                          | Embedding search                                    |
-| `search_text`      | `repoId`, `query`, `topK?`                                          | Exact text search in symbol bodies                  |
-| `find_references`  | `repoId`, `symbolId`, `limit?`, `minConfidence?`, `includeImports?` | Every place referencing a symbol                    |
-| `find_callers`     | `repoId`, `symbolId`, `limit?`, `minConfidence?`                    | The symbols calling a function/method/constructor   |
-| `update_files`     | `repoId`, `files[{ path, content? }]`                               | Incremental re-index (symbols, vectors and graph)   |
-| `delete_repo`      | `repoId`                                                            | Drop an index                                       |
+| Tool                    | Arguments                                                                      | Purpose                                             |
+| ----------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------- |
+| `index_folder`          | `path`, `repoName?`, `maxFiles?`, `maxFileSize?`                               | Index a folder (symbols, vectors, reference graph)  |
+| `index_workspace`       | `subpath?`, `repoName?`, `maxFiles?`, `maxFileSize?`                           | Index the backend workspace or a subpath            |
+| `list_repos`            | —                                                                              | Indexed repos and their `repoId`                    |
+| `find_repos_by_project` | `project`                                                                      | Indexed repos of a project, matched by name         |
+| `get_repo_summary`      | `repoId`/`repoName`                                                            | Counts by kind/language, skipped files              |
+| `get_file_tree`         | `repoId`/`repoName`                                                            | Indexed file tree                                   |
+| `get_file_outline`      | `repoId`/`repoName`, `filePath`                                                | Symbols of one file                                 |
+| `get_symbol`            | `repoId`/`repoName`, `symbolId`, `verify?`, `contextLines?`                    | Source + metadata of a symbol, optional drift check |
+| `read_file_range`       | `repoId`/`repoName`, `filePath`, `startLine`, `endLine?`                       | Lines of an indexed file, always drift-checked      |
+| `search_symbols`        | `repoId`/`repoName`, `query`, `kind?`, `topK?`                                 | Lexical search on names/signatures/summaries        |
+| `search_semantic`       | `repoId`/`repoName`, `query`, `topK?`                                          | Embedding search                                    |
+| `search_text`           | `repoId`/`repoName`, `query`, `topK?`                                          | Exact text search in symbol bodies                  |
+| `find_references`       | `repoId`/`repoName`, `symbolId`, `limit?`, `minConfidence?`, `includeImports?` | Every place referencing a symbol                    |
+| `find_callers`          | `repoId`/`repoName`, `symbolId`, `limit?`, `minConfidence?`                    | The symbols calling a function/method/constructor   |
+| `update_files`          | `repoId`/`repoName`, `files[{ path, content? }]`                               | Incremental re-index (symbols, vectors and graph)   |
+| `delete_repo`           | `repoId`/`repoName`                                                            | Drop an index                                       |
+
+`repoId`/`repoName`: every tool working on one repo takes either the opaque `repoId` or a
+`repoName` such as `"PulsarTeam"`, matched case-insensitively against the repo names, then
+against the basename of their root folder (`CodeIndexService.resolveRepoId`). `repoId` wins when
+both are passed, so existing calls keep working. An unknown name, or one shared by several
+indexes (same name, different folders), is rejected with the candidates; pass `repoId` then.
+`find_repos_by_project` returns the repos of a project name, to check that the agent's
+current project is indexed before searching.
 
 Symbol IDs look like `src/auth.js::AuthService.login#method`; get them from
 `get_file_outline` or the `search_*` tools.

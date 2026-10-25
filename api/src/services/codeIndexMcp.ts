@@ -94,6 +94,23 @@ interface RenderedCallers {
 const GRAPH_MISSING_NOTE =
   'Note: this index predates the reference graph — re-run index_folder to get references.';
 
+/**
+ * Every tool working on one repo takes either its `repoId` or its `repoName`
+ * (resolved by CodeIndexService.resolveRepoId); `repoId` wins when both are set.
+ */
+const REPO_SELECTOR = {
+  repoId: z
+    .string()
+    .optional()
+    .describe('Indexed repository ID (from list_repos). Either repoId or repoName is required'),
+  repoName: z
+    .string()
+    .optional()
+    .describe(
+      'Repository/project name, e.g. "PulsarTeam" (case-insensitive), resolved to its repoId. Alternative to repoId'
+    ),
+};
+
 async function pathExists(targetPath: string) {
   try {
     await fs.access(targetPath);
@@ -309,12 +326,41 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
   );
 
   server.tool(
+    'find_repos_by_project',
+    'List the indexed repositories of a project, matched by name (case-insensitive). Use it to check whether the current project is indexed and get its repoId.',
+    {
+      project: z.string().min(1).describe('Project/repository name, e.g. "PulsarTeam"'),
+    },
+    async ({ project }) => {
+      const repos = await codeIndexService.findReposByProject(project);
+      const summary = repos.length
+        ? repos
+            .map(
+              repo =>
+                `- ${repo.name} (${repo.id}) — ${repo.rootPath}, ${repo.filesIndexed} files, ${repo.symbolsIndexed} symbols`
+            )
+            .join('\\n')
+        : `No indexed repository for project "${project}" — index it with index_folder.`;
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summary}\\n\\nJSON:\\n${formatJson(repos)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
     'get_repo_summary',
     'Get metadata and counts for an indexed repository.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
     },
-    async ({ repoId }) => {
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const summary = await codeIndexService.getRepoSummary(repoId);
       return {
         content: [
@@ -331,9 +377,10 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'get_file_tree',
     'Get the indexed file tree for a repository.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
     },
-    async ({ repoId }) => {
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const tree = await codeIndexService.getFileTree(repoId);
       return {
         content: [
@@ -350,10 +397,11 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'get_file_outline',
     'Get the symbol outline for a specific indexed file.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       filePath: z.string().describe('Indexed file path, relative to repo root'),
     },
-    async ({ repoId, filePath }) => {
+    async ({ repoId: repoIdArg, repoName, filePath }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const outline = await codeIndexService.getFileOutline(repoId, filePath);
       return {
         content: [
@@ -370,7 +418,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'get_symbol',
     'Get the stored source and metadata for a symbol.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
       verify: z
         .boolean()
@@ -384,7 +432,8 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .optional()
         .describe('Extra context lines around the symbol'),
     },
-    async ({ repoId, symbolId, verify = false, contextLines = 0 }) => {
+    async ({ repoId: repoIdArg, repoName, symbolId, verify = false, contextLines = 0 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const symbol = await codeIndexService.getSymbol(repoId, symbolId, { verify, contextLines });
       return {
         content: [
@@ -401,7 +450,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'read_file_range',
     'Read a line range of an indexed file (imports, config, code outside symbols). Always checks the live file against the index and reports drift.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       filePath: z.string().describe('Indexed file path, relative to repo root'),
       startLine: z.number().int().min(1).describe('First line to read (1-based, inclusive)'),
       endLine: z
@@ -413,7 +462,8 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
           'Last line to read (inclusive, clamped to the file length; default startLine+199, max 2000 lines)'
         ),
     },
-    async ({ repoId, filePath, startLine, endLine }) => {
+    async ({ repoId: repoIdArg, repoName, filePath, startLine, endLine }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const range = await codeIndexService.readFileRange(repoId, filePath, { startLine, endLine });
       const width = String(range.endLine).length;
       const numbered = range.content
@@ -439,7 +489,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'search_symbols',
     'Perform lexical symbol search by name/signature/summary.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       query: z.string().describe('Search query'),
       kind: z
         .enum(['function', 'class', 'method'])
@@ -447,7 +497,8 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .describe('Optional symbol kind filter'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
     },
-    async ({ repoId, query, kind, topK = 10 }) => {
+    async ({ repoId: repoIdArg, repoName, query, kind, topK = 10 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const results = await codeIndexService.searchSymbols(repoId, { query, kind, topK });
       return {
         content: [
@@ -464,11 +515,12 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'search_semantic',
     'Perform semantic code search over indexed symbols.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       query: z.string().describe('Semantic search query'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
     },
-    async ({ repoId, query, topK = 10 }) => {
+    async ({ repoId: repoIdArg, repoName, query, topK = 10 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const results = await codeIndexService.searchSemantic(repoId, { query, topK });
       return {
         content: [
@@ -485,11 +537,12 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'search_text',
     'Perform exact text-style search over indexed symbol bodies and summaries.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       query: z.string().describe('Text search query'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
     },
-    async ({ repoId, query, topK = 10 }) => {
+    async ({ repoId: repoIdArg, repoName, query, topK = 10 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const results = await codeIndexService.searchText(repoId, { query, topK });
       return {
         content: [
@@ -520,7 +573,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'find_references',
     'Find every place that references a symbol (call sites, imports, other uses), resolved through the import/call graph built at indexing. Use it before renaming or changing a signature to see what would break. Each hit has file, line, kind (call/import/reference), confidence (high/medium/low) and the enclosing symbol.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
       limit: limitSchema,
       minConfidence: confidenceSchema,
@@ -529,7 +582,8 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .optional()
         .describe('Include import/re-export statements (default true)'),
     },
-    async ({ repoId, symbolId, limit, minConfidence, includeImports }) => {
+    async ({ repoId: repoIdArg, repoName, symbolId, limit, minConfidence, includeImports }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const result = await codeIndexService.findReferences(repoId, symbolId, {
         limit,
         minConfidence,
@@ -550,12 +604,13 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'find_callers',
     'Find the functions/methods that call a symbol (function, method or class constructor), one entry per caller with its call lines. Callers carry a symbolId, so the call graph can be walked upwards by calling find_callers again.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
       limit: limitSchema,
       minConfidence: confidenceSchema,
     },
-    async ({ repoId, symbolId, limit, minConfidence }) => {
+    async ({ repoId: repoIdArg, repoName, symbolId, limit, minConfidence }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const result = await codeIndexService.findCallers(repoId, symbolId, { limit, minConfidence });
       return {
         content: [
@@ -572,7 +627,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'update_files',
     'Incrementally update specific files in an indexed repository without full re-indexing.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       files: z
         .array(
           z.object({
@@ -587,7 +642,8 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .max(100)
         .describe('Files to update'),
     },
-    async ({ repoId, files }) => {
+    async ({ repoId: repoIdArg, repoName, files }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const result = await codeIndexService.updateFiles(repoId, files);
       return {
         content: [
@@ -604,9 +660,10 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'delete_repo',
     'Delete an indexed repository from the code index.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
     },
-    async ({ repoId }) => {
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const result = await codeIndexService.invalidate(repoId);
       return {
         content: [
