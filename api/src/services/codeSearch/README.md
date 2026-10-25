@@ -16,10 +16,13 @@ Built-in MCP server (`ALL /api/code-index/mcp`, defined in `../codeIndexMcp.ts`)
 | Tool                    | Arguments                                                                      | Purpose                                             |
 | ----------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------- |
 | `index_folder`          | `path`, `repoName?`, `maxFiles?`, `maxFileSize?`                               | Index a folder (symbols, vectors, reference graph)  |
+| `ensure_indexed`        | `path`, `repoName?`                                                            | Index if absent, sync if stale; returns `repoId`    |
+| `sync`                  | `repoId`/`repoName`                                                            | Incremental re-index of what changed on disk        |
+| `check_freshness`       | `repoId`/`repoName`                                                            | Index age, git commit, files changed since indexing |
 | `index_workspace`       | `subpath?`, `repoName?`, `maxFiles?`, `maxFileSize?`                           | Index the backend workspace or a subpath            |
 | `list_repos`            | —                                                                              | Indexed repos and their `repoId`                    |
 | `find_repos_by_project` | `project`                                                                      | Indexed repos of a project, matched by name         |
-| `get_repo_summary`      | `repoId`/`repoName`                                                            | Counts by kind/language, skipped files              |
+| `get_repo_summary`      | `repoId`/`repoName`                                                            | Counts by kind/language, skipped files, freshness   |
 | `get_file_tree`         | `repoId`/`repoName`                                                            | Indexed file tree                                   |
 | `get_file_outline`      | `repoId`/`repoName`, `filePath`                                                | Symbols of one file                                 |
 | `get_symbol`            | `repoId`/`repoName`, `symbolId`, `verify?`, `contextLines?`                    | Source + metadata of a symbol, optional drift check |
@@ -42,6 +45,57 @@ current project is indexed before searching.
 
 Symbol IDs look like `src/auth.js::AuthService.login#method`; get them from
 `get_file_outline` or the `search_*` tools.
+
+## Freshness and sync
+
+Indexes are snapshots. Every `search_symbols` / `search_semantic` / `search_text` response (and
+`get_repo_summary`, `check_freshness`) starts with the index freshness, and its JSON is
+`{ freshness, results }`:
+
+```json
+{
+  "stale": true,
+  "indexedAt": "2026-10-25T10:00:00.000Z",
+  "lastRefreshedAt": "2026-10-25T10:12:00.000Z",
+  "indexAgeMs": 180000,
+  "indexAge": "3m",
+  "changedFileCount": 2,
+  "changedFiles": { "modified": ["src/auth.ts"], "added": ["src/new.ts"], "deleted": [] },
+  "changedFilesTruncated": false,
+  "git": {
+    "indexedCommit": "83722a7e…",
+    "currentCommit": "49391ee8…",
+    "branch": "main",
+    "headMoved": true
+  },
+  "checkedAt": "2026-10-25T10:15:00.000Z"
+}
+```
+
+- `stale` is true when an indexable file was modified, added or deleted on disk since it was
+  indexed. Files are compared by size + mtime (stored per file at indexing) and confirmed by
+  content hash, so a file touched without changes is not stale. `null` with an `error` when
+  the scan failed (e.g. the root folder is gone).
+- `lastRefreshedAt` is the latest full index, `update_files` or `sync`; `indexAge` is measured
+  from it. Up to 20 paths are listed per category (`changedFilesTruncated` when more).
+- `git` (null outside a git work tree): the HEAD recorded at the last index/sync and the current
+  one. A moved HEAD alone does not make the index stale — only file contents matter to results.
+- Results are cached for 5 s so a burst of searches scans the repo once; any index write drops
+  the cache. `check_freshness` always rescans.
+
+`sync` re-indexes incrementally: discovery runs with the limits of the original index, files
+whose size and mtime match are skipped without being read, the others are hashed — only real
+changes are re-parsed (symbols, vectors, reference graph), deleted files are dropped, touched
+files just get their new mtime, and the git HEAD is recorded. Indexes written before mtimes were
+tracked are hashed in full once, then healed by the first sync.
+
+`ensure_indexed(path)` is the one-shot entry point: it reuses the index of that root folder
+(whatever its name; `repoName` names a new index or picks among several of the same folder),
+indexes the folder when none exists, syncs when it is stale or git HEAD moved, and otherwise
+does nothing. It returns `repoId`, `action` (`indexed` / `synced` / `fresh`) and the freshness.
+
+The agent manager still pushes edits made through its own file tools via a debounced
+`update_files`; `sync` / `ensure_indexed` catch everything else (git pulls, other processes).
 
 ## Reading file ranges
 

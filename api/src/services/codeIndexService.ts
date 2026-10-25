@@ -1,6 +1,8 @@
+import { execFile } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
+import { promisify } from 'util';
 import {
   createHashedEmbedding,
   EMBEDDING_DIMENSION,
@@ -35,6 +37,12 @@ const DEFAULT_STORAGE_ROOT = path.resolve(process.cwd(), '.data', 'code-index');
 const REPO_CACHE_TTL_MS = 60_000;
 const FILE_IO_CONCURRENCY = 32;
 const MAX_STORED_SOURCE_LENGTH = 16384;
+/** How long a getFreshness result is reused, so a burst of searches scans the repo once. */
+const FRESHNESS_CACHE_TTL_MS = 5_000;
+/** Paths listed per change category in freshness/sync reports (the counts stay exact). */
+const MAX_LISTED_CHANGES = 20;
+const GIT_TIMEOUT_MS = 3_000;
+const execFileAsync = promisify(execFile);
 const DEFAULT_ALLOWED_EXTENSIONS = new Set([
   '.js',
   '.jsx',
@@ -79,6 +87,14 @@ interface DiscoveredFile {
   absolutePath: string;
   relativePath: string;
   size: number;
+  mtimeMs: number;
+}
+
+/** The git HEAD of a repo root, when it lives in a git work tree. */
+interface GitState {
+  commit: string;
+  /** Null on a detached HEAD. */
+  branch: string | null;
 }
 
 /** The `repo` header stored in every index file, and the shape listRepos returns. */
@@ -93,6 +109,12 @@ interface RepoInfo {
   vectorBackend: string;
   /** Only present on repos that went through an incremental updateFiles pass. */
   lastUpdatedAt?: string;
+  /** Only present on repos that went through a syncRepo pass. */
+  lastSyncedAt?: string;
+  /** Git HEAD at the last full index or sync; null outside a git work tree, absent on old indexes. */
+  git?: GitState | null;
+  /** Discovery limits of the full index, reused by syncRepo. Absent on old indexes. */
+  options?: { maxFiles: number; maxFileSize: number };
 }
 
 /** One entry of `files` in an index (built by _indexFileContent). */
@@ -101,6 +123,12 @@ interface FileRecord {
   language: string;
   size: number;
   contentHash: string;
+  /**
+   * File mtime when its content was indexed. syncRepo/getFreshness skip re-reading
+   * files whose size and mtime still match; absent on old indexes and on files
+   * indexed from caller-provided content that differs from disk.
+   */
+  mtimeMs?: number;
   symbolIds: string[];
   /**
    * The file's side of the reference graph. Absent on indexes written before the
@@ -364,6 +392,110 @@ function toSearchHit(
   };
 }
 
+/** Files whose on-disk state differs from the index, as found by _scanChanges. */
+interface ChangeScan {
+  added: DiscoveredFile[];
+  modified: DiscoveredFile[];
+  deleted: string[];
+  /** Files with a new mtime/size but the indexed content: only their mtime needs refreshing. */
+  touched: DiscoveredFile[];
+  /** Content read while comparing hashes, reused by syncRepo. */
+  contents: Map<string, string>;
+  unchanged: number;
+}
+
+/** The changed paths of a scan, capped at MAX_LISTED_CHANGES per category. */
+interface ChangedFileList {
+  modified: string[];
+  added: string[];
+  deleted: string[];
+}
+
+/**
+ * How current an index is, attached to every search response. `stale` is true when
+ * at least one indexed file changed on disk, appeared or disappeared since it was
+ * indexed (compared by size+mtime, confirmed by content hash). A moved git HEAD
+ * alone does not make an index stale — only file contents matter to results.
+ */
+export interface IndexFreshness {
+  /** Null when the scan itself failed (see `error`); the age is still reported. */
+  stale: boolean | null;
+  indexedAt: string;
+  /** Latest of indexedAt / lastUpdatedAt / lastSyncedAt. */
+  lastRefreshedAt: string;
+  indexAgeMs: number;
+  /** Human-readable indexAgeMs, e.g. "3m" or "2h 5m". */
+  indexAge: string;
+  changedFileCount: number;
+  changedFiles: ChangedFileList;
+  changedFilesTruncated: boolean;
+  git: {
+    indexedCommit: string | null;
+    currentCommit: string | null;
+    branch: string | null;
+    headMoved: boolean;
+  } | null;
+  checkedAt: string;
+  error?: string;
+}
+
+/** What syncRepo returns. */
+export interface SyncResult {
+  repoId: string;
+  added: number;
+  updated: number;
+  removed: number;
+  /** Files whose mtime changed but whose content did not: mtime refreshed, nothing re-parsed. */
+  touched: number;
+  unchanged: number;
+  changedFiles: ChangedFileList;
+  changedFilesTruncated: boolean;
+  git: GitState | null;
+  durationMs: number;
+  repo: RepoInfo;
+}
+
+/** What ensureIndexed returns. */
+export interface EnsureIndexedResult {
+  repoId: string;
+  /** indexed: no index existed; synced: it was stale (or HEAD moved); fresh: nothing to do. */
+  action: 'indexed' | 'synced' | 'fresh';
+  repo: RepoInfo;
+  sync?: SyncResult;
+  freshness: IndexFreshness;
+}
+
+export function formatIndexAge(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
+function lastRefreshedAt(repo: RepoInfo): string {
+  return [repo.indexedAt, repo.lastUpdatedAt, repo.lastSyncedAt]
+    .filter((value): value is string => Boolean(value))
+    .reduce((latest, value) => (value > latest ? value : latest));
+}
+
+function listChanges(scan: ChangeScan): { changedFiles: ChangedFileList; truncated: boolean } {
+  const cap = (paths: string[]) => paths.slice(0, MAX_LISTED_CHANGES);
+  return {
+    changedFiles: {
+      modified: cap(scan.modified.map(file => file.relativePath)),
+      added: cap(scan.added.map(file => file.relativePath)),
+      deleted: cap(scan.deleted),
+    },
+    truncated: [scan.modified, scan.added, scan.deleted].some(
+      list => list.length > MAX_LISTED_CHANGES
+    ),
+  };
+}
+
 export class CodeIndexService {
   storageRoot: string;
   allowedRoots: string[];
@@ -375,6 +507,7 @@ export class CodeIndexService {
   _repoCache: Map<string, { data: RepoIndex; ts: number }>;
   _repoLocks: Map<string, Promise<any>>;
   _memoryVectorRebuilds: Map<string, Promise<void>>;
+  _freshnessCache: Map<string, { value: IndexFreshness; ts: number }>;
 
   constructor({
     storageRoot = process.env.CODE_SEARCH_INDEX_ROOT || DEFAULT_STORAGE_ROOT,
@@ -413,6 +546,7 @@ export class CodeIndexService {
     this._repoCache = new Map();
     this._repoLocks = new Map();
     this._memoryVectorRebuilds = new Map();
+    this._freshnessCache = new Map();
   }
 
   _withRepoLock<T>(repoId: string, task: () => Promise<T>): Promise<T> {
@@ -553,7 +687,7 @@ export class CodeIndexService {
         return [];
       });
 
-      const fileCandidates: Omit<DiscoveredFile, 'size'>[] = [];
+      const fileCandidates: Omit<DiscoveredFile, 'size' | 'mtimeMs'>[] = [];
       for (const entry of entries) {
         const absolutePath = path.join(current, entry.name);
 
@@ -600,6 +734,7 @@ export class CodeIndexService {
             absolutePath: batch[j].absolutePath,
             relativePath: batch[j].relativePath,
             size: stat.size,
+            mtimeMs: stat.mtimeMs,
           });
           if (results.length >= maxFiles) {
             truncated = true;
@@ -665,13 +800,14 @@ export class CodeIndexService {
     };
   }
 
-  _indexFileContent(relativePath: string, content: string, size: number) {
+  _indexFileContent(relativePath: string, content: string, size: number, mtimeMs?: number) {
     const { language, symbols: extracted } = extractSymbolsFromContent(relativePath, content);
     const fileRecord: FileRecord = {
       path: relativePath,
       language,
       size,
       contentHash: hashContent(content),
+      ...(mtimeMs !== undefined ? { mtimeMs } : {}),
       symbolIds: [],
     };
 
@@ -761,7 +897,7 @@ export class CodeIndexService {
           fileRecord,
           symbolRecords,
           vectorDocs: fileVectorDocs,
-        } = this._indexFileContent(file.relativePath, content, file.size);
+        } = this._indexFileContent(file.relativePath, content, file.size, file.mtimeMs);
 
         for (const symbolRecord of symbolRecords) symbols.push(symbolRecord);
         for (const vectorDoc of fileVectorDocs) vectorDocs.push(vectorDoc);
@@ -777,6 +913,7 @@ export class CodeIndexService {
     if (vectorDocs.length > 0) {
       await vectorStore.upsert(repoId, vectorDocs);
     }
+    const git = await this.getGitState(absoluteRoot);
 
     const repoIndex: RepoIndex = {
       repo: {
@@ -788,6 +925,8 @@ export class CodeIndexService {
         symbolsIndexed: symbols.length,
         filesWithoutSymbols: files.filter(file => file.symbolIds.length === 0).length,
         vectorBackend: vectorStore.backend,
+        git,
+        options: { maxFiles, maxFileSize },
       },
       stats: {
         skipped: discovery.skipped,
@@ -799,6 +938,7 @@ export class CodeIndexService {
 
     await this.saveIndex(repoIndex);
     this._setCachedRepo(repoId, repoIndex);
+    this._freshnessCache.delete(repoId);
     this._memoryVectorRebuilds.delete(repoId);
     return repoIndex.repo;
   }
@@ -1593,11 +1733,15 @@ export class CodeIndexService {
         await vectorStore.remove(repoId, oldSymbolIds).catch(() => {});
       }
 
-      // Get content: use provided content or read from disk
-      let content = entry.content ?? null;
-      if (content === null) {
-        content = await fs.readFile(path.resolve(rootPath, filePath), 'utf8').catch(() => null);
-      }
+      // Get content: use provided content or read from disk. The disk mtime is only
+      // recorded when the indexed content is what is on disk, so a later sync re-checks it.
+      const absolutePath = path.resolve(rootPath, filePath);
+      const [diskContent, diskStat] = await Promise.all([
+        fs.readFile(absolutePath, 'utf8').catch(() => null),
+        fs.stat(absolutePath).catch(() => null),
+      ]);
+      const content = entry.content ?? diskContent;
+      const mtimeMs = diskStat && content === diskContent ? diskStat.mtimeMs : undefined;
       const fileSize = content !== null ? Buffer.byteLength(content) : 0;
       const indexable =
         content && DEFAULT_ALLOWED_EXTENSIONS.has(extension) && fileSize <= this.maxFileSize;
@@ -1612,7 +1756,8 @@ export class CodeIndexService {
       const { fileRecord, symbolRecords, vectorDocs } = this._indexFileContent(
         filePath,
         content,
-        fileSize
+        fileSize,
+        mtimeMs
       );
       for (const symbolRecord of symbolRecords) repoIndex.symbols.push(symbolRecord);
 
@@ -1635,8 +1780,291 @@ export class CodeIndexService {
 
     await this.saveIndex(repoIndex);
     this._setCachedRepo(repoId, repoIndex);
+    this._freshnessCache.delete(repoId);
 
     return { updated, removed, added };
+  }
+
+  /** Git HEAD of `rootPath`, or null when it is not in a git work tree (or git is missing). */
+  async getGitState(rootPath: string): Promise<GitState | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', rootPath, 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'],
+        { timeout: GIT_TIMEOUT_MS }
+      );
+      const [commit, branch] = stdout.trim().split('\n');
+      if (!commit) return null;
+      return { commit, branch: branch && branch !== 'HEAD' ? branch : null };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Compare the files on disk with the index. A file whose size and mtime match its
+   * record is taken as unchanged without being read; any other one is read and
+   * hashed, so a touched-but-identical file is reported as `touched`, not modified.
+   * With `readAdded`, new files are read too (syncRepo needs their content).
+   */
+  async _scanChanges(repoIndex: RepoIndex, { readAdded = false } = {}): Promise<ChangeScan> {
+    const { rootPath, options } = repoIndex.repo;
+    const discovery = await this.discoverFiles(rootPath, {
+      maxFiles: options?.maxFiles ?? this.maxFiles,
+      maxFileSize: options?.maxFileSize ?? this.maxFileSize,
+    });
+    const recordByPath = new Map(repoIndex.files.map(file => [file.path, file]));
+    const scan: ChangeScan = {
+      added: [],
+      modified: [],
+      deleted: [],
+      touched: [],
+      contents: new Map(),
+      unchanged: 0,
+    };
+
+    // Paths still on disk and readable; every other indexed path counts as deleted
+    // (an unreadable file is left out of a full index too).
+    const present = new Set<string>();
+    const toRead: DiscoveredFile[] = [];
+    for (const file of discovery.files) {
+      const record = recordByPath.get(file.relativePath);
+      if (!record) {
+        if (readAdded) toRead.push(file);
+        else {
+          scan.added.push(file);
+          present.add(file.relativePath);
+        }
+      } else if (record.size === file.size && record.mtimeMs === file.mtimeMs) {
+        scan.unchanged += 1;
+        present.add(file.relativePath);
+      } else {
+        toRead.push(file);
+      }
+    }
+
+    for (let i = 0; i < toRead.length; i += FILE_IO_CONCURRENCY) {
+      const batch = toRead.slice(i, i + FILE_IO_CONCURRENCY);
+      const contents = await Promise.all(
+        batch.map(file => fs.readFile(file.absolutePath, 'utf8').catch(() => null))
+      );
+      batch.forEach((file, j) => {
+        const content = contents[j];
+        if (content === null) return;
+        present.add(file.relativePath);
+        const record = recordByPath.get(file.relativePath);
+        if (record && hashContent(content) === record.contentHash) {
+          scan.touched.push(file);
+          return;
+        }
+        (record ? scan.modified : scan.added).push(file);
+        scan.contents.set(file.relativePath, content);
+      });
+    }
+
+    for (const record of repoIndex.files) {
+      if (!present.has(record.path)) scan.deleted.push(record.path);
+    }
+    return scan;
+  }
+
+  /**
+   * Report how current an index is (see IndexFreshness). Results are cached for a
+   * few seconds so back-to-back searches scan the repo once; any write to the index
+   * drops the cache. Never throws for a scan failure (e.g. the root was deleted):
+   * `stale` is then null and `error` says why.
+   */
+  async getFreshness(repoId: string, { useCache = true } = {}): Promise<IndexFreshness> {
+    const cached = this._freshnessCache.get(repoId);
+    if (useCache && cached && Date.now() - cached.ts < FRESHNESS_CACHE_TTL_MS) return cached.value;
+
+    const repoIndex = await this.loadIndex(repoId);
+    const { repo } = repoIndex;
+    const refreshedAt = lastRefreshedAt(repo);
+    const now = Date.now();
+    const freshness: IndexFreshness = {
+      stale: false,
+      indexedAt: repo.indexedAt,
+      lastRefreshedAt: refreshedAt,
+      indexAgeMs: Math.max(0, now - Date.parse(refreshedAt)),
+      indexAge: formatIndexAge(now - Date.parse(refreshedAt)),
+      changedFileCount: 0,
+      changedFiles: { modified: [], added: [], deleted: [] },
+      changedFilesTruncated: false,
+      git: null,
+      checkedAt: new Date(now).toISOString(),
+    };
+
+    const [scan, git] = await Promise.all([
+      this._scanChanges(repoIndex).catch(error => {
+        freshness.stale = null;
+        freshness.error = `Could not scan "${repo.rootPath}": ${errorMessage(error)}`;
+        return null;
+      }),
+      this.getGitState(repo.rootPath),
+    ]);
+    if (scan) {
+      const { changedFiles, truncated } = listChanges(scan);
+      freshness.changedFileCount = scan.added.length + scan.modified.length + scan.deleted.length;
+      freshness.stale = freshness.changedFileCount > 0;
+      freshness.changedFiles = changedFiles;
+      freshness.changedFilesTruncated = truncated;
+    }
+    const indexedCommit = repo.git?.commit ?? null;
+    if (git || indexedCommit) {
+      freshness.git = {
+        indexedCommit,
+        currentCommit: git?.commit ?? null,
+        branch: git?.branch ?? null,
+        headMoved: Boolean(indexedCommit && git && git.commit !== indexedCommit),
+      };
+    }
+
+    this._freshnessCache.set(repoId, { value: freshness, ts: Date.now() });
+    return freshness;
+  }
+
+  /**
+   * Bring an index up to date with the disk without a full re-index: only added
+   * and modified files are parsed again (found by size+mtime, confirmed by content
+   * hash), deleted ones are dropped, and the git HEAD is recorded.
+   */
+  async syncRepo(repoId: string): Promise<SyncResult> {
+    return this._withRepoLock(repoId, async () => {
+      try {
+        return await this._syncRepoLocked(repoId);
+      } catch (error) {
+        this._invalidateCache(repoId);
+        throw error;
+      }
+    });
+  }
+
+  async _syncRepoLocked(repoId: string): Promise<SyncResult> {
+    const startedAt = Date.now();
+    const repoIndex = await this.loadIndex(repoId);
+    const { rootPath } = repoIndex.repo;
+    const rootStat = await fs.stat(rootPath).catch(() => null);
+    if (!rootStat?.isDirectory()) {
+      throw new Error(
+        `Root folder "${rootPath}" of repo "${repoId}" no longer exists; delete the repo or index the new location`
+      );
+    }
+
+    const scan = await this._scanChanges(repoIndex, { readAdded: true });
+    const vectorStore = await this.getVectorStore();
+
+    const replaced = new Set([...scan.modified.map(file => file.relativePath), ...scan.deleted]);
+    if (replaced.size > 0) {
+      const staleSymbolIds = repoIndex.files
+        .filter(file => replaced.has(file.path))
+        .flatMap(file => file.symbolIds);
+      repoIndex.files = repoIndex.files.filter(file => !replaced.has(file.path));
+      repoIndex.symbols = repoIndex.symbols.filter(symbol => !replaced.has(symbol.filePath));
+      if (staleSymbolIds.length > 0) {
+        await vectorStore.remove(repoId, staleSymbolIds).catch(() => {});
+      }
+    }
+
+    const vectorDocs: SymbolVectorDoc[] = [];
+    for (const file of [...scan.modified, ...scan.added]) {
+      const content = scan.contents.get(file.relativePath);
+      if (content === undefined) continue;
+      const {
+        fileRecord,
+        symbolRecords,
+        vectorDocs: fileVectorDocs,
+      } = this._indexFileContent(file.relativePath, content, file.size, file.mtimeMs);
+      repoIndex.files.push(fileRecord);
+      for (const symbolRecord of symbolRecords) repoIndex.symbols.push(symbolRecord);
+      for (const vectorDoc of fileVectorDocs) vectorDocs.push(vectorDoc);
+    }
+    if (vectorDocs.length > 0) await vectorStore.upsert(repoId, vectorDocs);
+
+    const recordByPath = new Map(repoIndex.files.map(file => [file.path, file]));
+    for (const file of scan.touched) {
+      const record = recordByPath.get(file.relativePath);
+      if (record) {
+        record.mtimeMs = file.mtimeMs;
+        record.size = file.size;
+      }
+    }
+    repoIndex.files.sort((left, right) => left.path.localeCompare(right.path));
+
+    const git = await this.getGitState(rootPath);
+    const { repo } = repoIndex;
+    repo.filesIndexed = repoIndex.files.length;
+    repo.symbolsIndexed = repoIndex.symbols.length;
+    repo.filesWithoutSymbols = repoIndex.files.filter(file => file.symbolIds.length === 0).length;
+    repo.lastSyncedAt = new Date().toISOString();
+    repo.git = git;
+
+    await this.saveIndex(repoIndex);
+    this._setCachedRepo(repoId, repoIndex);
+    this._freshnessCache.delete(repoId);
+
+    const { changedFiles, truncated } = listChanges(scan);
+    return {
+      repoId,
+      added: scan.added.length,
+      updated: scan.modified.length,
+      removed: scan.deleted.length,
+      touched: scan.touched.length,
+      unchanged: scan.unchanged,
+      changedFiles,
+      changedFilesTruncated: truncated,
+      git,
+      durationMs: Date.now() - startedAt,
+      repo,
+    };
+  }
+
+  /**
+   * One-shot "make sure this folder is searchable": index it when no index exists
+   * for that root, sync it when files changed (or git HEAD moved) since, and do
+   * nothing otherwise. An existing index of the same root folder is reused whatever
+   * its name; `repoName` only names a new index or picks among several of one root.
+   */
+  async ensureIndexed({
+    folderPath,
+    repoName = null,
+  }: {
+    folderPath: string;
+    repoName?: string | null;
+  }): Promise<EnsureIndexedResult> {
+    const absoluteRoot = await this.resolveInputFolder(folderPath);
+    if (!this.isPathAllowed(absoluteRoot)) {
+      throw new Error(`Path "${absoluteRoot}" is outside allowed roots`);
+    }
+
+    const sameRoot = (await this.listRepos()).filter(repo => repo.rootPath === absoluteRoot);
+    const normalizedName = repoName?.trim().toLowerCase();
+    const existing =
+      (normalizedName && sameRoot.find(repo => repo.name.toLowerCase() === normalizedName)) ||
+      sameRoot[0];
+
+    if (!existing) {
+      const repo = await this.indexFolder({ folderPath: absoluteRoot, repoName });
+      return {
+        repoId: repo.id,
+        action: 'indexed',
+        repo,
+        freshness: await this.getFreshness(repo.id, { useCache: false }),
+      };
+    }
+
+    const before = await this.getFreshness(existing.id, { useCache: false });
+    if (!before.stale && !before.git?.headMoved) {
+      return { repoId: existing.id, action: 'fresh', repo: existing, freshness: before };
+    }
+    const sync = await this.syncRepo(existing.id);
+    return {
+      repoId: existing.id,
+      action: 'synced',
+      repo: sync.repo,
+      sync,
+      freshness: await this.getFreshness(existing.id, { useCache: false }),
+    };
   }
 
   /**
@@ -1685,6 +2113,7 @@ export class CodeIndexService {
   async invalidate(repoId: string) {
     return this._withRepoLock(repoId, async () => {
       this._invalidateCache(repoId);
+      this._freshnessCache.delete(repoId);
       this._memoryVectorRebuilds.delete(repoId);
       const vectorStore = await this.getVectorStore();
       await vectorStore.resetCollection(repoId);

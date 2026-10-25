@@ -83,4 +83,4 @@ The symbols calling a function/method/class constructor.
 ## 5. MCP
 
 ### ALL `/api/code-index/mcp`
-JSON-RPC MCP endpoint that exposes the same operations as tools, for agents to invoke directly (including `find_references` and `find_callers`). Tool reference: `api/src/services/codeSearch/README.md`.
+JSON-RPC MCP endpoint that exposes the same operations as tools, for agents to invoke directly (including `find_references`, `find_callers`, and the freshness tools `ensure_indexed`, `sync` and `check_freshness`; search responses carry a `freshness` block). Tool reference: `api/src/services/codeSearch/README.md`.
