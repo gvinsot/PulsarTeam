@@ -22,6 +22,7 @@ Built-in MCP server (`ALL /api/code-index/mcp`, defined in `../codeIndexMcp.ts`)
 | `get_file_tree`    | `repoId`                                                            | Indexed file tree                                   |
 | `get_file_outline` | `repoId`, `filePath`                                                | Symbols of one file                                 |
 | `get_symbol`       | `repoId`, `symbolId`, `verify?`, `contextLines?`                    | Source + metadata of a symbol, optional drift check |
+| `read_file_range`  | `repoId`, `filePath`, `startLine`, `endLine?`                       | Lines of an indexed file, always drift-checked      |
 | `search_symbols`   | `repoId`, `query`, `kind?`, `topK?`                                 | Lexical search on names/signatures/summaries        |
 | `search_semantic`  | `repoId`, `query`, `topK?`                                          | Embedding search                                    |
 | `search_text`      | `repoId`, `query`, `topK?`                                          | Exact text search in symbol bodies                  |
@@ -32,6 +33,21 @@ Built-in MCP server (`ALL /api/code-index/mcp`, defined in `../codeIndexMcp.ts`)
 
 Symbol IDs look like `src/auth.js::AuthService.login#method`; get them from
 `get_file_outline` or the `search_*` tools.
+
+## Reading file ranges
+
+`read_file_range` reads lines `startLine`–`endLine` (1-based, inclusive) of a file **present in
+the index** — imports, config, module-level code that no symbol covers — without falling back to
+raw file tools. The content is read live from disk and its hash compared with the file's
+indexed `contentHash`, like `get_symbol` with `verify: true`: `driftDetected: true` means the
+file changed since indexing (run `update_files` on it). The result also lists the indexed
+`symbols` overlapping the range, with their `symbolId` for `get_symbol`.
+
+- `endLine` defaults to `startLine + 199`; a range may span at most 2000 lines.
+- An `endLine` past the end of the file is clamped (`endLineClamped: true`); a `startLine`
+  past it, `startLine < 1` or `endLine < startLine` is an error.
+- Files not in the index (unsupported extension, too large, outside the repo) and indexed
+  files deleted from disk are rejected with a message pointing to `get_file_tree` / `update_files`.
 
 ## References and callers
 

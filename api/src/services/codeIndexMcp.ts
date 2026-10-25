@@ -398,6 +398,44 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
   );
 
   server.tool(
+    'read_file_range',
+    'Read a line range of an indexed file (imports, config, code outside symbols). Always checks the live file against the index and reports drift.',
+    {
+      repoId: z.string().describe('Indexed repository ID'),
+      filePath: z.string().describe('Indexed file path, relative to repo root'),
+      startLine: z.number().int().min(1).describe('First line to read (1-based, inclusive)'),
+      endLine: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          'Last line to read (inclusive, clamped to the file length; default startLine+199, max 2000 lines)'
+        ),
+    },
+    async ({ repoId, filePath, startLine, endLine }) => {
+      const range = await codeIndexService.readFileRange(repoId, filePath, { startLine, endLine });
+      const width = String(range.endLine).length;
+      const numbered = range.content
+        .split('\n')
+        .map((line, index) => `${String(range.startLine + index).padStart(width)}  ${line}`)
+        .join('\n');
+      const drift = range.driftDetected
+        ? 'yes (file changed since indexing; run update_files to refresh the index)'
+        : 'no';
+      const { content: _content, ...meta } = range;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `File: ${range.filePath}\nLines: ${range.startLine}-${range.endLine} of ${range.totalLines}${range.endLineClamped ? ' (endLine clamped to end of file)' : ''}\nDrift detected: ${drift}\n\n${numbered}\n\nJSON:\n${formatJson(meta)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
     'search_symbols',
     'Perform lexical symbol search by name/signature/summary.',
     {

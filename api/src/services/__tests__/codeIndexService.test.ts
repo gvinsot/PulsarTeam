@@ -291,3 +291,105 @@ test('CodeIndexService rejects folders outside allowed roots and invalidates rep
     assert.equal(repos.length, 0);
   });
 });
+
+test('CodeIndexService.readFileRange reads indexed lines and lists overlapping symbols', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'demo-repo' });
+
+    const range = await service.readFileRange(repo.id, 'src/auth.js', { startLine: 1, endLine: 2 });
+    assert.equal(range.filePath, 'src/auth.js');
+    assert.equal(range.content, '// Auth service for access control\nexport class AuthService {');
+    assert.equal(range.startLine, 1);
+    assert.equal(range.endLine, 2);
+    assert.equal(range.endLineClamped, false);
+    assert.equal(range.totalLines, 15);
+    assert.equal(range.driftDetected, false);
+    assert.ok(range.symbols.some(symbol => symbol.qualifiedName === 'AuthService'));
+
+    // endLine past EOF is clamped; omitted endLine reads a default window.
+    const tail = await service.readFileRange(repo.id, './src/auth.js', {
+      startLine: 14,
+      endLine: 99,
+    });
+    assert.equal(tail.endLine, 15);
+    assert.equal(tail.endLineClamped, true);
+    assert.equal(tail.content, "  return 'tok_' + JSON.stringify(payload);\n};");
+    const whole = await service.readFileRange(repo.id, 'src/auth.js', { startLine: 1 });
+    assert.equal(whole.endLine, 15);
+  });
+});
+
+test('CodeIndexService.readFileRange detects drift since indexing', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'demo-repo' });
+
+    await fs.writeFile(
+      path.join(repoDir, 'src', 'parser.py'),
+      'import os\n\nclass Parser:\n    pass\n'
+    );
+    const range = await service.readFileRange(repo.id, 'src/parser.py', {
+      startLine: 1,
+      endLine: 1,
+    });
+    assert.equal(range.content, 'import os');
+    assert.equal(range.driftDetected, true);
+
+    await service.updateFiles(repo.id, [{ path: 'src/parser.py' }]);
+    const refreshed = await service.readFileRange(repo.id, 'src/parser.py', {
+      startLine: 1,
+      endLine: 1,
+    });
+    assert.equal(refreshed.driftDetected, false);
+  });
+});
+
+test('CodeIndexService.readFileRange rejects invalid bounds and unindexed or missing files', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'demo-repo' });
+
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 0, endLine: 3 }),
+      /Invalid startLine 0/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 5, endLine: 2 }),
+      /Invalid endLine 2/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 1, endLine: 5000 }),
+      /at most 2000 lines/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 50, endLine: 60 }),
+      /past the end of "src\/auth.js" \(15 lines\)/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, '../../etc/passwd', { startLine: 1, endLine: 1 }),
+      /is not indexed in repo/
+    );
+
+    await fs.rm(path.join(repoDir, 'src', 'auth.js'));
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 1, endLine: 1 }),
+      /can no longer be read from disk/
+    );
+  });
+});

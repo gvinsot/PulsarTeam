@@ -201,6 +201,9 @@ type ReferenceKind = 'call' | 'import' | 'reference';
 
 const CONFIDENCE_RANK: Record<ReferenceConfidence, number> = { high: 3, medium: 2, low: 1 };
 const DEFAULT_REFERENCE_LIMIT = 100;
+/** readFileRange: lines returned when endLine is omitted, and the hard cap per call. */
+const DEFAULT_RANGE_LINES = 200;
+const MAX_RANGE_LINES = 2000;
 const MAX_REEXPORT_HOPS = 4;
 const JS_RESOLVE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
 
@@ -950,6 +953,83 @@ export class CodeIndexService {
     response.driftDetected = verify ? hashContent(exactCurrentSource) !== symbol.sourceHash : false;
 
     return response;
+  }
+
+  /**
+   * Read a line range of an indexed file from disk. Only files present in the
+   * index can be read (so the path cannot escape the repo root), and the live
+   * content is always hashed against the indexed `contentHash`: `driftDetected`
+   * tells the caller the file changed since indexing and should be re-indexed.
+   * Lines are 1-based and inclusive; an `endLine` past the end of the file is
+   * clamped (`endLineClamped: true`), a `startLine` past it is an error.
+   */
+  async readFileRange(
+    repoId: string,
+    filePath: string,
+    { startLine, endLine }: { startLine: number; endLine?: number }
+  ) {
+    if (!Number.isInteger(startLine) || startLine < 1) {
+      throw new Error(`Invalid startLine ${startLine}: must be an integer >= 1`);
+    }
+    const requestedEnd = endLine ?? startLine + DEFAULT_RANGE_LINES - 1;
+    if (!Number.isInteger(requestedEnd) || requestedEnd < startLine) {
+      throw new Error(
+        `Invalid endLine ${requestedEnd}: must be an integer >= startLine (${startLine})`
+      );
+    }
+    if (requestedEnd - startLine + 1 > MAX_RANGE_LINES) {
+      throw new Error(
+        `Range ${startLine}-${requestedEnd} spans ${requestedEnd - startLine + 1} lines; at most ${MAX_RANGE_LINES} lines can be read at once`
+      );
+    }
+
+    const repoIndex = await this.loadIndex(repoId);
+    const normalizedPath = toPosixPath(filePath).replace(/^\.\//, '');
+    const file = repoIndex.files.find(entry => entry.path === normalizedPath);
+    if (!file) {
+      throw new Error(
+        `File "${normalizedPath}" is not indexed in repo "${repoId}" (use get_file_tree to list indexed files, or update_files to index it)`
+      );
+    }
+
+    const absolutePath = path.resolve(repoIndex.repo.rootPath, file.path);
+    const content = await fs.readFile(absolutePath, 'utf8').catch(() => null);
+    if (content === null) {
+      throw new Error(
+        `File "${file.path}" is indexed in repo "${repoId}" but can no longer be read from disk (deleted or moved?); re-index it with update_files`
+      );
+    }
+
+    const lines = content.replace(/\r\n/g, '\n').split('\n');
+    // A trailing newline does not open an extra (empty) line.
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    const totalLines = lines.length;
+    if (startLine > totalLines) {
+      throw new Error(
+        `startLine ${startLine} is past the end of "${file.path}" (${totalLines} lines)`
+      );
+    }
+    const effectiveEnd = Math.min(requestedEnd, totalLines);
+
+    return {
+      repo: repoIndex.repo,
+      filePath: file.path,
+      language: file.language,
+      startLine,
+      endLine: effectiveEnd,
+      endLineClamped: effectiveEnd < requestedEnd,
+      totalLines,
+      content: lines.slice(startLine - 1, effectiveEnd).join('\n'),
+      driftDetected: hashContent(content) !== file.contentHash,
+      symbols: repoIndex.symbols
+        .filter(
+          symbol =>
+            symbol.filePath === file.path &&
+            symbol.startLine <= effectiveEnd &&
+            symbol.endLine >= startLine
+        )
+        .map(toSymbolRef),
+    };
   }
 
   async searchSymbols(
