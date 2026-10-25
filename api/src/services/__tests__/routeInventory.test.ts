@@ -471,6 +471,7 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'POST /api/tasks/:id/restore': ['authenticateToken', 'requireRole(admin)'],
   'DELETE /api/tasks/:id/permanent': ['authenticateToken', 'requireRole(admin)'],
   'GET /api/tasks/:id/history': ['authenticateToken'],
+  'GET /api/tasks/:id/costs': ['authenticateToken'],
   'GET /api/tasks/:id/comments': ['authenticateToken'],
   'POST /api/tasks/:id/comments': ['authenticateToken'],
   'DELETE /api/tasks/:id/comments/:commentId': ['authenticateToken'],

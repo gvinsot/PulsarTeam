@@ -51,8 +51,10 @@ export {
   getDailyTokenUsage,
   getTotalTokensByAgentId,
   getTotalTokensForAgent,
+  getTaskTokenUsage,
   refreshTokenSummaryCache,
 } from './database/tokenUsage.js';
+export type { TaskUsageWindow, TaskUsageByAgentRow } from './database/tokenUsage.js';
 export {
   getAllUsers,
   getUserById,

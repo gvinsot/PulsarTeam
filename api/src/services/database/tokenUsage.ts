@@ -87,6 +87,28 @@ export interface UsageScope {
   projectId?: string | null;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * SQL expression resolving the task the agent (placeholder `p`, a uuid or
+ * NULL) is working on right now, used to stamp each token_usage_log row with
+ * its task. Mirrors the lookup order of chat.ts _assembleMessages: the task
+ * whose action this agent is running (covers delegated executions), else the
+ * agent's oldest started active task (getActiveTaskForExecutor). NULL when the
+ * agent is idle or chatting freely.
+ */
+const taskForAgentSql = (p: string) => `COALESCE(
+           (SELECT t.id FROM tasks t
+             WHERE t.action_running_agent_id = ${p}::uuid AND t.action_running IS TRUE
+               AND t.deleted_at IS NULL AND t.is_template IS NOT TRUE
+             ORDER BY t.started_at DESC NULLS LAST LIMIT 1),
+           (SELECT t.id FROM tasks t
+             WHERE (t.assignee = ${p}::uuid OR (t.assignee IS NULL AND t.agent_id = ${p}::uuid))
+               AND t.status NOT IN ('done','backlog','error')
+               AND t.started_at IS NOT NULL
+               AND t.deleted_at IS NULL AND t.is_template IS NOT TRUE
+             ORDER BY t.started_at ASC LIMIT 1))`;
+
 /**
  * Build the trailing `AND ...` clauses shared by the four budget queries.
  *
@@ -136,13 +158,16 @@ export async function recordTokenUsage(
 ) {
   const pool = getPool();
   if (!pool) return false;
+  // token_usage_log.agent_id is free TEXT; only a uuid can match a task column
+  // (casting anything else would fail the whole insert).
+  const agentUuid = UUID_RE.test(agentId) ? agentId : null;
   try {
     if (idempotencyKey) {
       // Idempotent insert: retried reports with the same key hit the partial
       // unique index and are skipped — already recorded counts as success.
       await pool.query(
-        `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens, idempotency_key)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens, idempotency_key, task_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ${taskForAgentSql('$11')})
          ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
         [
           agentId,
@@ -155,13 +180,14 @@ export async function recordTokenUsage(
           userId,
           contextTokens || 0,
           idempotencyKey,
+          agentUuid,
         ]
       );
       return true;
     }
     await pool.query(
-      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens, task_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ${taskForAgentSql('$10')})`,
       [
         agentId,
         agentName,
@@ -172,6 +198,7 @@ export async function recordTokenUsage(
         cost,
         userId,
         contextTokens || 0,
+        agentUuid,
       ]
     );
     return true;
@@ -395,5 +422,72 @@ export async function refreshTokenSummaryCache() {
     } catch (err) {
       console.error('Failed to refresh token summary cache:', errorMessage(err));
     }
+  }
+}
+
+/** An execution run of a task, used to attribute legacy (untagged) usage rows. */
+export interface TaskUsageWindow {
+  agentName: string;
+  start: string;
+  end: string;
+}
+
+/** Token spend of one agent on one task (GET /tasks/:id/costs). */
+export interface TaskUsageByAgentRow {
+  agent_id: string;
+  agent_name: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  context_tokens: number;
+  cost: number;
+  request_count: number;
+  /** True when (some of) the rows were matched by execution window rather than
+   *  by their task_id stamp — i.e. usage recorded before task attribution. */
+  estimated: boolean;
+}
+
+/**
+ * Token spend attributed to a task, grouped by agent.
+ *
+ * Rows stamped with `task_id` (see taskForAgentSql) are exact. Untagged rows —
+ * everything recorded before the column existed — are attributed when the
+ * same agent recorded them during one of the task's execution runs
+ * (`windows`). EXISTS rather than a join so overlapping runs never count a
+ * row twice.
+ */
+export async function getTaskTokenUsage(
+  taskId: string,
+  windows: TaskUsageWindow[] = []
+): Promise<TaskUsageByAgentRow[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      `SELECT agent_id,
+              MAX(agent_name)                      AS agent_name,
+              COALESCE(SUM(input_tokens), 0)       AS input_tokens,
+              COALESCE(SUM(output_tokens), 0)      AS output_tokens,
+              COALESCE(SUM(context_tokens), 0)     AS context_tokens,
+              COALESCE(SUM(cost), 0)               AS cost,
+              COUNT(*)                             AS request_count,
+              BOOL_OR(task_id IS NULL)             AS estimated
+       FROM token_usage_log u
+       WHERE u.task_id = $1::uuid
+          OR (u.task_id IS NULL AND EXISTS (
+                SELECT 1 FROM unnest($2::text[], $3::timestamptz[], $4::timestamptz[]) AS w(name, s, e)
+                 WHERE u.agent_name = w.name AND u.recorded_at BETWEEN w.s AND w.e))
+       GROUP BY agent_id
+       ORDER BY cost DESC`,
+      [taskId, windows.map(w => w.agentName), windows.map(w => w.start), windows.map(w => w.end)]
+    );
+    return result.rows.map(row => ({
+      ...parseNumericFields(row),
+      agent_name: row.agent_name ?? null,
+      cost: Number(row.cost) || 0,
+      estimated: !!row.estimated,
+    })) as TaskUsageByAgentRow[];
+  } catch (err) {
+    console.error('Failed to get task token usage:', errorMessage(err));
+    return [];
   }
 }

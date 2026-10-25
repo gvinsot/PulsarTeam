@@ -175,6 +175,35 @@ export interface TaskComment {
 }
 
 /**
+ * One agent's share of a task's cost — GET /tasks/:id/costs.
+ * Produced by api/src/services/taskCosts.ts buildTaskCostSummary.
+ */
+export interface TaskCostAgent {
+  /** Null when the agent only appears in execution history (no usage row). */
+  agentId: string | null;
+  agentName: string;
+  inputTokens: number;
+  outputTokens: number;
+  contextTokens: number;
+  /** In the configured currency (Settings.currency is a symbol, not a rate). */
+  cost: number;
+  requests: number;
+  /** Summed duration of the agent's completed runs, in milliseconds. */
+  timeMs: number;
+  runs: number;
+  /** Some usage was matched by execution window (recorded before per-task
+   *  attribution existed) rather than tagged with the task. */
+  estimated: boolean;
+}
+
+export interface TaskCostSummary {
+  totals: Omit<TaskCostAgent, 'agentId' | 'agentName'>;
+  byAgent: TaskCostAgent[];
+  /** An action is running: its time is not counted until the run ends. */
+  running: boolean;
+}
+
+/**
  * An extra repo cloned alongside the primary one at run time.
  * Produced by api/src/services/taskRepos.ts:66 (normalizeSecondaryRepos is the
  * single gate on every write path, so both fields are always well-formed).

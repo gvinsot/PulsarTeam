@@ -38,6 +38,7 @@ mock.module('../database.js', {
     markTaskCommitRunEnded: async () => {},
     appendTaskComment: async () => null,
     deleteTaskComment: async () => null,
+    getTaskTokenUsage: async () => [],
     getTasksByAssignee: async () => [],
     getTasksByAgent: async () => [],
     getTasksByBoard: async () => [],

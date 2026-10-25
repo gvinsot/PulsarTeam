@@ -22,6 +22,10 @@ import {
   Play,
   Paperclip,
   RotateCcw,
+  MessageSquare,
+  History,
+  ListTree,
+  Coins,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
@@ -34,6 +38,7 @@ import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
 import TaskComments from './TaskComments';
+import TaskCosts from './TaskCosts';
 import ExternalTaskPanel from './ExternalTaskPanel';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
@@ -68,6 +73,15 @@ interface TaskDetailModalProps {
   activeBoardId: string | null;
 }
 
+type TaskTab = 'comments' | 'history' | 'details' | 'costs';
+
+const TABS: { id: TaskTab; label: string; icon: typeof History }[] = [
+  { id: 'comments', label: 'Comments', icon: MessageSquare },
+  { id: 'history', label: 'History', icon: History },
+  { id: 'details', label: 'Details', icon: ListTree },
+  { id: 'costs', label: 'Costs', icon: Coins },
+];
+
 export default function TaskDetailModal({
   task,
   agents,
@@ -85,6 +99,7 @@ export default function TaskDetailModal({
   activeBoardId,
 }: TaskDetailModalProps) {
   const [editing, setEditing] = useState(false);
+  const [activeTab, setActiveTab] = useState<TaskTab>('comments');
   useEffect(() => {
     if (!task.boardId || !['mcp', 'api'].includes(task.source?.type || '')) return;
     const boardId = task.boardId;
@@ -418,6 +433,12 @@ export default function TaskDetailModal({
       text: 'text-dark-300',
     };
   const lastStatusId = (statusOptions || [])[(statusOptions || []).length - 1]?.value;
+  const tabCounts: Record<TaskTab, number> = {
+    comments: task.comments?.length ?? 0,
+    history: timelineHistory.length + (task.commits?.length ?? 0),
+    details: 0,
+    costs: 0,
+  };
 
   return (
     <>
@@ -780,466 +801,45 @@ export default function TaskDetailModal({
               </div>
             )}
 
-            {/* Comment thread — separate from the description above */}
-            {task.id && (
-              <div className="pt-4 border-t border-dark-700">
-                <TaskComments taskId={task.id} comments={task.comments} onChanged={onRefresh} />
+            {/* Tabs — comments, history, details, costs */}
+            <div className="border-t border-dark-700 pt-3">
+              <div role="tablist" className="flex items-center gap-1 border-b border-dark-700">
+                {TABS.map(({ id, label, icon: Icon }) => {
+                  const count = tabCounts[id];
+                  const selected = activeTab === id;
+                  return (
+                    <button
+                      key={id}
+                      role="tab"
+                      aria-selected={selected}
+                      onClick={() => setActiveTab(id)}
+                      className={`flex items-center gap-1.5 px-3 py-2 -mb-px text-xs font-medium border-b-2 transition-colors
+                      ${
+                        selected
+                          ? 'border-indigo-500 text-dark-100'
+                          : 'border-transparent text-dark-400 hover:text-dark-200'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                      {label}
+                      {count > 0 && (
+                        <span className="px-1.5 py-px rounded-full text-[10px] bg-dark-700 text-dark-300">
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
+            </div>
+
+            {/* Comment thread — separate from the description above */}
+            {activeTab === 'comments' && task.id && (
+              <TaskComments taskId={task.id} comments={task.comments} onChanged={onRefresh} />
             )}
 
-            {/* Metadata */}
-            <div className="space-y-2.5">
-              <span className="text-xs font-semibold text-dark-400 uppercase tracking-wide">
-                Details
-              </span>
-
-              {mutationError && (
-                <p className="flex items-center gap-2 text-xs text-red-400 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                  {mutationError}
-                </p>
-              )}
-
-              {/* Source */}
-              {sourceMeta && (
-                <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                  <div className="flex items-center gap-2 text-xs text-dark-400">
-                    <Tag className="w-3.5 h-3.5" />
-                    Source
-                  </div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${sourceMeta.cls}`}
-                  >
-                    {sourceMeta.label(displaySource ?? null)}
-                  </span>
-                </div>
-              )}
-
-              {/* Recurrence */}
-              <div className="py-2 border-b border-dark-800">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-xs text-dark-400">
-                    <Repeat className="w-3.5 h-3.5" />
-                    Recurring
-                  </div>
-                  {editingRecurrence ? (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={handleRecurrenceSave}
-                        disabled={savingRecurrence}
-                        className="px-2 py-0.5 text-[11px] font-medium text-white bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 rounded transition-colors flex items-center gap-1"
-                        title="Save recurrence"
-                      >
-                        <Save className="w-3 h-3" />
-                        {savingRecurrence ? 'Saving…' : 'Save'}
-                      </button>
-                      <button
-                        onClick={handleRecurrenceCancel}
-                        disabled={savingRecurrence}
-                        className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
-                        title="Cancel"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
-                      {task.templateId ? (
-                        <span
-                          className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20"
-                          title="One run of a recurring rule — the rule itself lives under Recurring tasks"
-                        >
-                          Run #{task.occurrenceSeq ?? '?'}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-dark-500 italic">None</span>
-                      )}
-                      <button
-                        onClick={() => {
-                          setRecEnabled(!!task.templateId);
-                          setRecPeriod(task.recurrence?.period || 'daily');
-                          setRecCustomInterval(task.recurrence?.intervalMinutes || 60);
-                          setRecRetentionDays(task.recurrence?.historyRetentionDays || 0);
-                          setRecKeepLast(task.recurrence?.keepLastOccurrences || 0);
-                          setRecOverlap(task.recurrence?.onOverlap === 'spawn' ? 'spawn' : 'skip');
-                          setEditingRecurrence(true);
-                        }}
-                        className="p-0.5 rounded text-dark-500 hover:text-teal-400 hover:bg-dark-700 transition-colors"
-                        title="Edit recurrence"
-                      >
-                        <Edit3 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {editingRecurrence && (
-                  <div className="mt-3 p-3 border border-dark-700 rounded-lg space-y-3 bg-dark-800/40">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={recEnabled}
-                        onChange={e => setRecEnabled(e.target.checked)}
-                        className="w-3.5 h-3.5 rounded border-dark-600 bg-dark-800 text-teal-500 focus:ring-teal-500 focus:ring-offset-0"
-                      />
-                      <span className="text-xs font-semibold text-dark-300 uppercase tracking-wide">
-                        Enable recurrence
-                      </span>
-                    </label>
-                    <p className="text-[11px] text-dark-500 leading-relaxed">
-                      {task.templateId
-                        ? 'Edits the rule this card belongs to. Unticking stops the rule; the cards it already produced are kept.'
-                        : 'Creates a rule from this card, which becomes its first run. Later runs are new cards.'}
-                    </p>
-                    {recEnabled && (
-                      <RecurrenceFields
-                        period={recPeriod}
-                        onPeriodChange={setRecPeriod}
-                        customInterval={recCustomInterval}
-                        onCustomIntervalChange={setRecCustomInterval}
-                        retentionDays={recRetentionDays}
-                        onRetentionDaysChange={setRecRetentionDays}
-                        keepLast={recKeepLast}
-                        onKeepLastChange={setRecKeepLast}
-                        onOverlap={recOverlap}
-                        onOverlapChange={setRecOverlap}
-                        focusClass="focus:border-teal-500"
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Manual toggle */}
-              <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                <div className="flex items-center gap-2 text-xs text-dark-400">
-                  <Hand className="w-3.5 h-3.5" />
-                  Manual
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <span className="text-[10px] text-dark-500">
-                    {task.isManual ? 'Not processed by agents' : 'Processed by agents'}
-                  </span>
-                  <button
-                    onClick={async () => {
-                      const newVal = !task.isManual;
-                      try {
-                        await updateTaskById(task.id, { isManual: newVal });
-                        onRefresh?.();
-                      } catch (err) {
-                        console.error('Failed to toggle manual:', err);
-                      }
-                    }}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
-                    ${task.isManual ? 'bg-orange-500' : 'bg-dark-600'}`}
-                  >
-                    <span
-                      className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform
-                    ${task.isManual ? 'translate-x-4' : 'translate-x-1'}`}
-                    />
-                  </button>
-                </label>
-              </div>
-
-              {/* Project (read-only — derived from the board) */}
-              <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                <div className="flex items-center gap-2 text-xs text-dark-400">
-                  <Tag className="w-3.5 h-3.5" />
-                  Project
-                </div>
-                {task.project ? (
-                  <span
-                    className="text-xs px-2 py-0.5 rounded-full font-medium
-                  bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20"
-                  >
-                    {task.project}
-                  </span>
-                ) : (
-                  <span className="text-xs text-dark-500 italic">None</span>
-                )}
-              </div>
-
-              {/* Repo (editable, scoped to the board's repos) */}
-              <EditableSelectRow
-                icon={GitBranch}
-                label="Repo"
-                value={task.repoFullName || ''}
-                options={availableRepos.map(r => ({
-                  value: r.fullName,
-                  label: `[${r.provider}] ${r.fullName}`,
-                }))}
-                onSave={saveRepo}
-                disableWhenEmpty
-                selectClassName="px-2 py-0.5 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                editTitle="Change repo"
-                pencilReplacement={
-                  repoLoadError ? (
-                    <span className="text-[10px] text-amber-400 italic" title={repoLoadError}>
-                      github plugin off
-                    </span>
-                  ) : null
-                }
-                view={
-                  task.repoFullName ? (
-                    <span
-                      className="text-xs px-2 py-0.5 rounded-full font-medium
-                  bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
-                    >
-                      {task.repoFullName}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-dark-500 italic">None</span>
-                  )
-                }
-              />
-
-              {/* Secondary repos (editable) — cloned alongside the primary at run time */}
-              {task.repoFullName && (
-                <div className="flex items-start gap-2">
-                  <GitBranch className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[10px] font-semibold text-dark-500 uppercase tracking-wide mb-1">
-                      Secondary repos
-                    </div>
-                    {(() => {
-                      const current = Array.isArray(task.secondaryRepos) ? task.secondaryRepos : [];
-                      const currentNames = current.map(r => r.fullName);
-                      const addable = availableRepos.filter(
-                        r => r.fullName !== task.repoFullName && !currentNames.includes(r.fullName)
-                      );
-                      return (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {current.map(r => (
-                            <span
-                              key={r.fullName}
-                              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
-                            >
-                              {r.fullName}
-                              <button
-                                type="button"
-                                title="Remove"
-                                onClick={() =>
-                                  saveSecondaryRepos(current.filter(x => x.fullName !== r.fullName))
-                                }
-                                className="hover:text-emerald-200"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            </span>
-                          ))}
-                          {current.length === 0 && (
-                            <span className="text-xs text-dark-500 italic">None</span>
-                          )}
-                          {addable.length > 0 && (
-                            <select
-                              value=""
-                              onChange={e => {
-                                const v = e.target.value;
-                                if (v)
-                                  saveSecondaryRepos([
-                                    ...current,
-                                    {
-                                      provider:
-                                        availableRepos.find(r => r.fullName === v)?.provider ||
-                                        'github',
-                                      fullName: v,
-                                    },
-                                  ]);
-                              }}
-                              className="px-2 py-0.5 bg-dark-800 border border-emerald-500/40 rounded text-xs text-dark-200 focus:outline-none focus:border-emerald-500 transition-colors"
-                              title="Add a secondary repo"
-                            >
-                              <option value="">+ Add…</option>
-                              {addable.map(r => (
-                                <option key={r.fullName} value={r.fullName}>
-                                  [{r.provider}] {r.fullName}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>
-              )}
-
-              {/* Attachments — copied onto the agent's machine before each run */}
-              <div className="flex items-start gap-2">
-                <Paperclip className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] font-semibold text-dark-500 uppercase tracking-wide mb-1">
-                    Attachments
-                  </div>
-                  <TaskAttachmentsEditor taskId={task.id} />
-                </div>
-              </div>
-
-              {/* Storage (editable, scoped to the board's OneDrive plugin) */}
-              <EditableSelectRow
-                icon={Cloud}
-                label="Storage"
-                value={task.storagePath || ''}
-                options={availableStorages.map(s => ({
-                  key: `${s.provider}:${s.path}`,
-                  value: s.path,
-                  label: `[${s.provider}] ${s.displayName || s.path}`,
-                }))}
-                onSave={saveStorage}
-                disableWhenEmpty
-                selectClassName="px-2 py-0.5 bg-dark-800 border border-amber-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-amber-500 transition-colors"
-                editTitle="Change storage"
-                pencilHoverClass="hover:text-amber-400"
-                pencilReplacement={
-                  !storageLoading && (storageLoadError || availableStorages.length === 0) ? (
-                    <span className="text-[10px] text-dark-500 italic">No drive connected</span>
-                  ) : null
-                }
-                view={
-                  task.storagePath ? (
-                    <span
-                      className="text-xs px-2 py-0.5 rounded-full font-medium
-                  bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20"
-                    >
-                      {task.storagePath}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-dark-500 italic">None</span>
-                  )
-                }
-              />
-
-              {/* Task Type */}
-              <EditableSelectRow
-                icon={Layers}
-                label="Type"
-                value={task.taskType || ''}
-                options={TASK_TYPES.map(t => ({ value: t.value, label: t.label }))}
-                onSave={saveType}
-                selectClassName="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                editTitle="Change type"
-                view={
-                  task.taskType && TASK_TYPE_MAP[task.taskType] ? (
-                    (() => {
-                      const tt = TASK_TYPE_MAP[task.taskType];
-                      const Icon = tt.icon;
-                      return (
-                        <span
-                          className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${tt.cls}`}
-                        >
-                          <Icon className="w-2.5 h-2.5" />
-                          {tt.label}
-                        </span>
-                      );
-                    })()
-                  ) : (
-                    <span className="text-xs text-dark-500 italic">None</span>
-                  )
-                }
-              />
-
-              {/* Assignee */}
-              <EditableSelectRow
-                icon={User}
-                label="Assignee"
-                value={task.assignee || ''}
-                options={(agents || []).map(a => ({ value: a.id, label: `${a.icon} ${a.name}` }))}
-                emptyOptionLabel="Unassigned"
-                onSave={saveAssignee}
-                selectClassName="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                editTitle="Reassign to another agent"
-                view={(() => {
-                  const assignee = task.assignee
-                    ? (agents || []).find(a => a.id === task.assignee)
-                    : null;
-                  if (assignee) {
-                    return (
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full font-medium bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20${onNavigateToAgent ? ' cursor-pointer hover:bg-blue-500/20 transition-colors' : ''}`}
-                        onClick={
-                          onNavigateToAgent
-                            ? () => {
-                                onNavigateToAgent(assignee.id);
-                                onClose();
-                              }
-                            : undefined
-                        }
-                        title={onNavigateToAgent ? `Open ${assignee.name}'s chat` : undefined}
-                      >
-                        {assignee.icon} {assignee.name}
-                      </span>
-                    );
-                  }
-                  return <span className="text-xs text-dark-500 italic">Unassigned</span>;
-                })()}
-              />
-
-              {/* Board */}
-              {boards && boards.length > 1 && (
-                <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                  <div className="flex items-center gap-2 text-xs text-dark-400">
-                    <FolderKanban className="w-3.5 h-3.5" />
-                    Board
-                  </div>
-                  {editingBoard ? (
-                    <div className="flex items-center gap-1.5">
-                      <select
-                        autoFocus
-                        defaultValue={task.boardId || activeBoardId || ''}
-                        onChange={e => {
-                          const targetId = e.target.value;
-                          if (targetId === (task.boardId || activeBoardId)) {
-                            setEditingBoard(false);
-                            return;
-                          }
-                          setBoardMoveTarget(targetId);
-                        }}
-                        disabled={!!task.actionRunning}
-                        className="px-2 py-0.5 w-40 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
-                        focus:outline-none focus:border-indigo-500 transition-colors"
-                      >
-                        {(boards || []).map(b => (
-                          <option key={b.id} value={b.id}>
-                            {b.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={() => {
-                          setEditingBoard(false);
-                          setBoardMoveTarget(null);
-                        }}
-                        className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
-                        title="Cancel"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className="text-xs px-2 py-0.5 rounded-full font-medium
-                      bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20"
-                      >
-                        {currentBoard?.name || 'Unknown'}
-                      </span>
-                      <button
-                        onClick={() => !task.actionRunning && setEditingBoard(true)}
-                        className={`p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors
-                        ${task.actionRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        title={
-                          task.actionRunning
-                            ? 'Stop the agent first to move the task'
-                            : 'Move to another board'
-                        }
-                      >
-                        <Edit3 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Transition history (with commits interleaved chronologically) */}
+            {/* Transition history (with commits interleaved chronologically) */}
+            {activeTab === 'history' && (
               <TaskTimeline
                 history={timelineHistory}
                 commits={task.commits}
@@ -1257,7 +857,473 @@ export default function TaskDetailModal({
                   onRefresh();
                 }}
               />
-            </div>
+            )}
+
+            {/* Tokens, spend and agent time attributed to the task */}
+            {activeTab === 'costs' && task.id && (
+              <TaskCosts
+                taskId={task.id}
+                refreshKey={`${task.updatedAt ?? ''}|${task.history?.length ?? 0}`}
+              />
+            )}
+
+            {/* Metadata */}
+            {activeTab === 'details' && (
+              <div className="space-y-2.5">
+                {mutationError && (
+                  <p className="flex items-center gap-2 text-xs text-red-400 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                    {mutationError}
+                  </p>
+                )}
+
+                {/* Source */}
+                {sourceMeta && (
+                  <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                    <div className="flex items-center gap-2 text-xs text-dark-400">
+                      <Tag className="w-3.5 h-3.5" />
+                      Source
+                    </div>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${sourceMeta.cls}`}
+                    >
+                      {sourceMeta.label(displaySource ?? null)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Recurrence */}
+                <div className="py-2 border-b border-dark-800">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs text-dark-400">
+                      <Repeat className="w-3.5 h-3.5" />
+                      Recurring
+                    </div>
+                    {editingRecurrence ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={handleRecurrenceSave}
+                          disabled={savingRecurrence}
+                          className="px-2 py-0.5 text-[11px] font-medium text-white bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 rounded transition-colors flex items-center gap-1"
+                          title="Save recurrence"
+                        >
+                          <Save className="w-3 h-3" />
+                          {savingRecurrence ? 'Saving…' : 'Save'}
+                        </button>
+                        <button
+                          onClick={handleRecurrenceCancel}
+                          disabled={savingRecurrence}
+                          className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
+                          title="Cancel"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        {task.templateId ? (
+                          <span
+                            className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20"
+                            title="One run of a recurring rule — the rule itself lives under Recurring tasks"
+                          >
+                            Run #{task.occurrenceSeq ?? '?'}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-dark-500 italic">None</span>
+                        )}
+                        <button
+                          onClick={() => {
+                            setRecEnabled(!!task.templateId);
+                            setRecPeriod(task.recurrence?.period || 'daily');
+                            setRecCustomInterval(task.recurrence?.intervalMinutes || 60);
+                            setRecRetentionDays(task.recurrence?.historyRetentionDays || 0);
+                            setRecKeepLast(task.recurrence?.keepLastOccurrences || 0);
+                            setRecOverlap(
+                              task.recurrence?.onOverlap === 'spawn' ? 'spawn' : 'skip'
+                            );
+                            setEditingRecurrence(true);
+                          }}
+                          className="p-0.5 rounded text-dark-500 hover:text-teal-400 hover:bg-dark-700 transition-colors"
+                          title="Edit recurrence"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {editingRecurrence && (
+                    <div className="mt-3 p-3 border border-dark-700 rounded-lg space-y-3 bg-dark-800/40">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={recEnabled}
+                          onChange={e => setRecEnabled(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded border-dark-600 bg-dark-800 text-teal-500 focus:ring-teal-500 focus:ring-offset-0"
+                        />
+                        <span className="text-xs font-semibold text-dark-300 uppercase tracking-wide">
+                          Enable recurrence
+                        </span>
+                      </label>
+                      <p className="text-[11px] text-dark-500 leading-relaxed">
+                        {task.templateId
+                          ? 'Edits the rule this card belongs to. Unticking stops the rule; the cards it already produced are kept.'
+                          : 'Creates a rule from this card, which becomes its first run. Later runs are new cards.'}
+                      </p>
+                      {recEnabled && (
+                        <RecurrenceFields
+                          period={recPeriod}
+                          onPeriodChange={setRecPeriod}
+                          customInterval={recCustomInterval}
+                          onCustomIntervalChange={setRecCustomInterval}
+                          retentionDays={recRetentionDays}
+                          onRetentionDaysChange={setRecRetentionDays}
+                          keepLast={recKeepLast}
+                          onKeepLastChange={setRecKeepLast}
+                          onOverlap={recOverlap}
+                          onOverlapChange={setRecOverlap}
+                          focusClass="focus:border-teal-500"
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual toggle */}
+                <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                  <div className="flex items-center gap-2 text-xs text-dark-400">
+                    <Hand className="w-3.5 h-3.5" />
+                    Manual
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <span className="text-[10px] text-dark-500">
+                      {task.isManual ? 'Not processed by agents' : 'Processed by agents'}
+                    </span>
+                    <button
+                      onClick={async () => {
+                        const newVal = !task.isManual;
+                        try {
+                          await updateTaskById(task.id, { isManual: newVal });
+                          onRefresh?.();
+                        } catch (err) {
+                          console.error('Failed to toggle manual:', err);
+                        }
+                      }}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
+                    ${task.isManual ? 'bg-orange-500' : 'bg-dark-600'}`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform
+                    ${task.isManual ? 'translate-x-4' : 'translate-x-1'}`}
+                      />
+                    </button>
+                  </label>
+                </div>
+
+                {/* Project (read-only — derived from the board) */}
+                <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                  <div className="flex items-center gap-2 text-xs text-dark-400">
+                    <Tag className="w-3.5 h-3.5" />
+                    Project
+                  </div>
+                  {task.project ? (
+                    <span
+                      className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20"
+                    >
+                      {task.project}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-dark-500 italic">None</span>
+                  )}
+                </div>
+
+                {/* Repo (editable, scoped to the board's repos) */}
+                <EditableSelectRow
+                  icon={GitBranch}
+                  label="Repo"
+                  value={task.repoFullName || ''}
+                  options={availableRepos.map(r => ({
+                    value: r.fullName,
+                    label: `[${r.provider}] ${r.fullName}`,
+                  }))}
+                  onSave={saveRepo}
+                  disableWhenEmpty
+                  selectClassName="px-2 py-0.5 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                  editTitle="Change repo"
+                  pencilReplacement={
+                    repoLoadError ? (
+                      <span className="text-[10px] text-amber-400 italic" title={repoLoadError}>
+                        github plugin off
+                      </span>
+                    ) : null
+                  }
+                  view={
+                    task.repoFullName ? (
+                      <span
+                        className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
+                      >
+                        {task.repoFullName}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-dark-500 italic">None</span>
+                    )
+                  }
+                />
+
+                {/* Secondary repos (editable) — cloned alongside the primary at run time */}
+                {task.repoFullName && (
+                  <div className="flex items-start gap-2">
+                    <GitBranch className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-semibold text-dark-500 uppercase tracking-wide mb-1">
+                        Secondary repos
+                      </div>
+                      {(() => {
+                        const current = Array.isArray(task.secondaryRepos)
+                          ? task.secondaryRepos
+                          : [];
+                        const currentNames = current.map(r => r.fullName);
+                        const addable = availableRepos.filter(
+                          r =>
+                            r.fullName !== task.repoFullName && !currentNames.includes(r.fullName)
+                        );
+                        return (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {current.map(r => (
+                              <span
+                                key={r.fullName}
+                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
+                              >
+                                {r.fullName}
+                                <button
+                                  type="button"
+                                  title="Remove"
+                                  onClick={() =>
+                                    saveSecondaryRepos(
+                                      current.filter(x => x.fullName !== r.fullName)
+                                    )
+                                  }
+                                  className="hover:text-emerald-200"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                            {current.length === 0 && (
+                              <span className="text-xs text-dark-500 italic">None</span>
+                            )}
+                            {addable.length > 0 && (
+                              <select
+                                value=""
+                                onChange={e => {
+                                  const v = e.target.value;
+                                  if (v)
+                                    saveSecondaryRepos([
+                                      ...current,
+                                      {
+                                        provider:
+                                          availableRepos.find(r => r.fullName === v)?.provider ||
+                                          'github',
+                                        fullName: v,
+                                      },
+                                    ]);
+                                }}
+                                className="px-2 py-0.5 bg-dark-800 border border-emerald-500/40 rounded text-xs text-dark-200 focus:outline-none focus:border-emerald-500 transition-colors"
+                                title="Add a secondary repo"
+                              >
+                                <option value="">+ Add…</option>
+                                {addable.map(r => (
+                                  <option key={r.fullName} value={r.fullName}>
+                                    [{r.provider}] {r.fullName}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                {/* Attachments — copied onto the agent's machine before each run */}
+                <div className="flex items-start gap-2">
+                  <Paperclip className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] font-semibold text-dark-500 uppercase tracking-wide mb-1">
+                      Attachments
+                    </div>
+                    <TaskAttachmentsEditor taskId={task.id} />
+                  </div>
+                </div>
+
+                {/* Storage (editable, scoped to the board's OneDrive plugin) */}
+                <EditableSelectRow
+                  icon={Cloud}
+                  label="Storage"
+                  value={task.storagePath || ''}
+                  options={availableStorages.map(s => ({
+                    key: `${s.provider}:${s.path}`,
+                    value: s.path,
+                    label: `[${s.provider}] ${s.displayName || s.path}`,
+                  }))}
+                  onSave={saveStorage}
+                  disableWhenEmpty
+                  selectClassName="px-2 py-0.5 bg-dark-800 border border-amber-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-amber-500 transition-colors"
+                  editTitle="Change storage"
+                  pencilHoverClass="hover:text-amber-400"
+                  pencilReplacement={
+                    !storageLoading && (storageLoadError || availableStorages.length === 0) ? (
+                      <span className="text-[10px] text-dark-500 italic">No drive connected</span>
+                    ) : null
+                  }
+                  view={
+                    task.storagePath ? (
+                      <span
+                        className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20"
+                      >
+                        {task.storagePath}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-dark-500 italic">None</span>
+                    )
+                  }
+                />
+
+                {/* Task Type */}
+                <EditableSelectRow
+                  icon={Layers}
+                  label="Type"
+                  value={task.taskType || ''}
+                  options={TASK_TYPES.map(t => ({ value: t.value, label: t.label }))}
+                  onSave={saveType}
+                  selectClassName="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                  editTitle="Change type"
+                  view={
+                    task.taskType && TASK_TYPE_MAP[task.taskType] ? (
+                      (() => {
+                        const tt = TASK_TYPE_MAP[task.taskType];
+                        const Icon = tt.icon;
+                        return (
+                          <span
+                            className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${tt.cls}`}
+                          >
+                            <Icon className="w-2.5 h-2.5" />
+                            {tt.label}
+                          </span>
+                        );
+                      })()
+                    ) : (
+                      <span className="text-xs text-dark-500 italic">None</span>
+                    )
+                  }
+                />
+
+                {/* Assignee */}
+                <EditableSelectRow
+                  icon={User}
+                  label="Assignee"
+                  value={task.assignee || ''}
+                  options={(agents || []).map(a => ({ value: a.id, label: `${a.icon} ${a.name}` }))}
+                  emptyOptionLabel="Unassigned"
+                  onSave={saveAssignee}
+                  selectClassName="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                  editTitle="Reassign to another agent"
+                  view={(() => {
+                    const assignee = task.assignee
+                      ? (agents || []).find(a => a.id === task.assignee)
+                      : null;
+                    if (assignee) {
+                      return (
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full font-medium bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20${onNavigateToAgent ? ' cursor-pointer hover:bg-blue-500/20 transition-colors' : ''}`}
+                          onClick={
+                            onNavigateToAgent
+                              ? () => {
+                                  onNavigateToAgent(assignee.id);
+                                  onClose();
+                                }
+                              : undefined
+                          }
+                          title={onNavigateToAgent ? `Open ${assignee.name}'s chat` : undefined}
+                        >
+                          {assignee.icon} {assignee.name}
+                        </span>
+                      );
+                    }
+                    return <span className="text-xs text-dark-500 italic">Unassigned</span>;
+                  })()}
+                />
+
+                {/* Board */}
+                {boards && boards.length > 1 && (
+                  <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                    <div className="flex items-center gap-2 text-xs text-dark-400">
+                      <FolderKanban className="w-3.5 h-3.5" />
+                      Board
+                    </div>
+                    {editingBoard ? (
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          autoFocus
+                          defaultValue={task.boardId || activeBoardId || ''}
+                          onChange={e => {
+                            const targetId = e.target.value;
+                            if (targetId === (task.boardId || activeBoardId)) {
+                              setEditingBoard(false);
+                              return;
+                            }
+                            setBoardMoveTarget(targetId);
+                          }}
+                          disabled={!!task.actionRunning}
+                          className="px-2 py-0.5 w-40 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
+                        focus:outline-none focus:border-indigo-500 transition-colors"
+                        >
+                          {(boards || []).map(b => (
+                            <option key={b.id} value={b.id}>
+                              {b.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => {
+                            setEditingBoard(false);
+                            setBoardMoveTarget(null);
+                          }}
+                          className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
+                          title="Cancel"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="text-xs px-2 py-0.5 rounded-full font-medium
+                      bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20"
+                        >
+                          {currentBoard?.name || 'Unknown'}
+                        </span>
+                        <button
+                          onClick={() => !task.actionRunning && setEditingBoard(true)}
+                          className={`p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors
+                        ${task.actionRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          title={
+                            task.actionRunning
+                              ? 'Stop the agent first to move the task'
+                              : 'Move to another board'
+                          }
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Footer */}

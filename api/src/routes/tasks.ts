@@ -15,7 +15,9 @@ import {
   getOccurrencesForTemplate,
   countUnfinishedOccurrences,
   deleteTaskComment,
+  getTaskTokenUsage,
 } from '../services/database.js';
+import { executionWindows, buildTaskCostSummary } from '../services/taskCosts.js';
 import { buildRecurrenceConfig, nextRunAt } from '../services/taskRecurrence.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
@@ -1130,6 +1132,22 @@ router.get(
       return res.status(403).json({ error: 'Access denied' });
     }
     res.json(task.history || []);
+  })
+);
+
+// ── GET /tasks/:id/costs — tokens, spend and agent time spent on the task ───
+router.get(
+  '/:id/costs',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const windows = executionWindows(task.history);
+    const usage = await getTaskTokenUsage(task.id, windows);
+    res.json(buildTaskCostSummary(windows, usage, !!task.actionRunning));
   })
 );
 

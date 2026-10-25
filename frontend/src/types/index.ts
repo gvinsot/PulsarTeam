@@ -79,6 +79,8 @@ export type {
   TaskAttachment,
   TaskComment,
   TaskCommentAuthorType,
+  TaskCostAgent,
+  TaskCostSummary,
   TaskSecondaryRepo,
   TaskSource,
   TaskTrustLevel,

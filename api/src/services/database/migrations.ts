@@ -368,6 +368,14 @@ const MIGRATIONS: Migration[] = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'approved'
      CHECK (approval_status IN ('approved', 'pending', 'rejected'))`,
   ]),
+  // Per-task cost attribution: recordTokenUsage stamps each row with the task
+  // the agent was executing at that moment (see TASK_FOR_AGENT_SQL). Rows
+  // written before this column existed stay NULL and are attributed by the
+  // task's execution windows instead (getTaskTokenUsage).
+  sqlMigration('202610250001_token_usage_task_id', 'token usage attributed to a task', [
+    'ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS task_id UUID',
+    'CREATE INDEX IF NOT EXISTS idx_token_usage_task ON token_usage_log(task_id) WHERE task_id IS NOT NULL',
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */
