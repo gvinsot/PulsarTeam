@@ -446,11 +446,12 @@ export default function TaskDetailModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-        <div className="w-[80vw] max-w-5xl h-[80vh] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm">
+        {/* Full-screen on mobile; centered 80vw/80vh panel from `sm` up */}
+        <div className="w-full h-[100dvh] sm:w-[80vw] sm:max-w-5xl sm:h-[80vh] bg-dark-900 sm:border border-dark-700 sm:rounded-2xl shadow-2xl shadow-black/50 flex flex-col overflow-hidden animate-fadeIn">
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 sm:px-5 sm:py-4 border-b border-dark-700">
+            <div className="flex items-center gap-2 min-w-0">
               {/* Status badge / selector */}
               <div className="relative" ref={statusRef}>
                 <button
@@ -476,7 +477,7 @@ export default function TaskDetailModal({
                   )}
                 </button>
                 {statusOpen && (
-                  <div className="absolute left-0 top-8 z-50 bg-dark-800 border border-dark-600 rounded-xl shadow-2xl py-1 min-w-[140px]">
+                  <div className="absolute left-0 top-8 z-50 bg-dark-800 border border-dark-600 rounded-xl shadow-2xl py-1 min-w-[140px] max-h-[60vh] overflow-y-auto">
                     {(statusOptions || []).map(opt => (
                       <button
                         key={opt.value}
@@ -497,7 +498,7 @@ export default function TaskDetailModal({
               </div>
               <span className="text-xs text-dark-500 font-mono">{task.id?.slice(0, 8)}</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 ml-auto">
               {task.actionRunning && onStop && (
                 <button
                   onClick={handleStop}
@@ -562,7 +563,7 @@ export default function TaskDetailModal({
           </div>
 
           {/* Scrollable body */}
-          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-5 sm:py-4 space-y-4 sm:space-y-5">
             {/* External provenance: the approval gate (lib/taskTrust.ts) */}
             <ExternalTaskPanel task={task} onApproved={onRefresh} />
 
@@ -681,7 +682,7 @@ export default function TaskDetailModal({
                     value={editText}
                     onChange={e => setEditText(e.target.value)}
                     rows={15}
-                    className="w-full h-full min-h-[300px] px-3 py-2.5 bg-dark-800 border border-indigo-500/50 rounded-lg text-sm
+                    className="w-full h-full min-h-[200px] sm:min-h-[300px] px-3 py-2.5 bg-dark-800 border border-indigo-500/50 rounded-lg text-sm
                     text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500
                     resize-y leading-relaxed font-mono"
                     placeholder="Task description (supports Markdown)..."
@@ -807,7 +808,7 @@ export default function TaskDetailModal({
 
             {/* Tabs — comments, history, modifications, details, costs */}
             <div className="border-t border-dark-700 pt-3">
-              <div role="tablist" className="flex items-center gap-1 border-b border-dark-700">
+              <div role="tablist" className="flex items-center gap-1 border-b border-dark-700 overflow-x-auto overflow-y-hidden [scrollbar-width:none] -mx-3 px-3 sm:mx-0 sm:px-0">
                 {TABS.map(({ id, label, icon: Icon }) => {
                   const count = tabCounts[id];
                   const selected = activeTab === id;
@@ -817,7 +818,7 @@ export default function TaskDetailModal({
                       role="tab"
                       aria-selected={selected}
                       onClick={() => setActiveTab(id)}
-                      className={`flex items-center gap-1.5 px-3 py-2 -mb-px text-xs font-medium border-b-2 transition-colors
+                      className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 -mb-px text-xs font-medium border-b-2 whitespace-nowrap shrink-0 transition-colors
                       ${
                         selected
                           ? 'border-indigo-500 text-dark-100'
@@ -893,8 +894,8 @@ export default function TaskDetailModal({
 
                 {/* Source */}
                 {sourceMeta && (
-                  <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                    <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 border-b border-dark-800">
+                    <div className="flex items-center gap-2 text-xs text-dark-400 shrink-0">
                       <Tag className="w-3.5 h-3.5" />
                       Source
                     </div>
@@ -1003,8 +1004,8 @@ export default function TaskDetailModal({
                 </div>
 
                 {/* Manual toggle */}
-                <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                  <div className="flex items-center gap-2 text-xs text-dark-400">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 border-b border-dark-800">
+                  <div className="flex items-center gap-2 text-xs text-dark-400 shrink-0">
                     <Hand className="w-3.5 h-3.5" />
                     Manual
                   </div>
@@ -1034,14 +1035,14 @@ export default function TaskDetailModal({
                 </div>
 
                 {/* Project (read-only — derived from the board) */}
-                <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                  <div className="flex items-center gap-2 text-xs text-dark-400">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 border-b border-dark-800">
+                  <div className="flex items-center gap-2 text-xs text-dark-400 shrink-0">
                     <Tag className="w-3.5 h-3.5" />
                     Project
                   </div>
                   {task.project ? (
                     <span
-                      className="text-xs px-2 py-0.5 rounded-full font-medium
+                      className="text-xs px-2 py-0.5 rounded-full font-medium break-all
                   bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20"
                     >
                       {task.project}
@@ -1074,7 +1075,7 @@ export default function TaskDetailModal({
                   view={
                     task.repoFullName ? (
                       <span
-                        className="text-xs px-2 py-0.5 rounded-full font-medium
+                        className="text-xs px-2 py-0.5 rounded-full font-medium break-all
                   bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
                       >
                         {task.repoFullName}
@@ -1107,7 +1108,7 @@ export default function TaskDetailModal({
                             {current.map(r => (
                               <span
                                 key={r.fullName}
-                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
+                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium break-all bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
                               >
                                 {r.fullName}
                                 <button
@@ -1273,8 +1274,8 @@ export default function TaskDetailModal({
 
                 {/* Board */}
                 {boards && boards.length > 1 && (
-                  <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                    <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 border-b border-dark-800">
+                    <div className="flex items-center gap-2 text-xs text-dark-400 shrink-0">
                       <FolderKanban className="w-3.5 h-3.5" />
                       Board
                     </div>
@@ -1292,7 +1293,7 @@ export default function TaskDetailModal({
                             setBoardMoveTarget(targetId);
                           }}
                           disabled={!!task.actionRunning}
-                          className="px-2 py-0.5 w-40 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
+                          className="px-2 py-0.5 w-40 max-w-full bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
                         focus:outline-none focus:border-indigo-500 transition-colors"
                         >
                           {(boards || []).map(b => (
@@ -1341,7 +1342,7 @@ export default function TaskDetailModal({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between px-5 py-3 border-t border-dark-700">
+          <div className="flex items-center justify-between px-3 py-2.5 sm:px-5 sm:py-3 border-t border-dark-700 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-3">
             <button
               onClick={handleDelete}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400
