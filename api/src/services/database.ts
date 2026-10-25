@@ -165,6 +165,7 @@ export {
   healStaleRunClaim,
   getActiveAssigneeIds,
   mutateTaskCommits,
+  appendTaskStorageChange,
   transferTaskOwner,
   markTaskCommitRunEnded,
   clearTaskCommitRun,

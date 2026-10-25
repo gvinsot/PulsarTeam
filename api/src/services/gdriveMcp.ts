@@ -3,6 +3,7 @@ import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getGdriveAccessTokenForAgent } from '../routes/gdrive.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { joinStoragePath, recordTaskStorageChange } from './taskStorageChanges.js';
 import { createProviderFetch, readBodyCapped } from './providerFetch.js';
 
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3';
@@ -455,6 +456,15 @@ export function createGdriveMcpServer(
         }
       );
 
+      await recordTaskStorageChange(agentId, {
+        provider: 'gdrive',
+        action: 'folder_created',
+        path: parentId ? result.name : joinStoragePath(parentPath, result.name),
+        name: result.name,
+        itemId: result.id,
+        webUrl: result.webViewLink || null,
+      });
+
       return {
         content: [
           {
@@ -532,6 +542,14 @@ export function createGdriveMcpServer(
         throw new Error(`Drive upload failed (${res.status}): ${text}`);
       }
       const result = await res.json();
+      await recordTaskStorageChange(agentId, {
+        provider: 'gdrive',
+        action: 'created',
+        path: parentId ? result.name : joinStoragePath(parentPath, result.name),
+        name: result.name,
+        itemId: result.id,
+        webUrl: result.webViewLink || null,
+      });
 
       return {
         content: [
@@ -569,10 +587,21 @@ export function createGdriveMcpServer(
         ? { id: fileId, name: '', mimeType: '' }
         : await resolveItemId(path!, agentId, boardId);
 
+      const recordDeletion = () =>
+        recordTaskStorageChange(agentId, {
+          provider: 'gdrive',
+          action: 'deleted',
+          path: path || resolved.name || resolved.id,
+          name: resolved.name || (path ? path.split('/').pop() || path : resolved.id),
+          itemId: resolved.id,
+          webUrl: null,
+        });
+
       if (permanent) {
         await driveFetch(`/files/${encodeURIComponent(resolved.id)}`, agentId, boardId, {
           method: 'DELETE',
         });
+        await recordDeletion();
         return text(`Permanently deleted: ${resolved.name || resolved.id}`);
       }
 
@@ -585,6 +614,7 @@ export function createGdriveMcpServer(
           body: JSON.stringify({ trashed: true }),
         }
       );
+      await recordDeletion();
       return text(`Moved to trash: ${resolved.name || resolved.id}`);
     }
   );

@@ -132,6 +132,26 @@ export interface TaskCommit {
   pushed?: boolean;
 }
 
+/**
+ * A Google Drive / OneDrive item written by an agent while it ran the task
+ * (api/src/services/taskStorageChanges.ts). One entry per item: repeated writes
+ * fold into it (latest action and time, `count`).
+ */
+export interface TaskStorageChange {
+  provider: 'gdrive' | 'onedrive';
+  action: 'created' | 'updated' | 'deleted' | 'folder_created';
+  /** Drive path when known ("/Documents/report.txt"), else the item name. */
+  path: string;
+  name: string;
+  itemId?: string | null;
+  /** Link to open the item in Drive/OneDrive — absent for deletions. */
+  webUrl?: string | null;
+  agentId?: string | null;
+  /** ISO 8601 time of the latest write. */
+  at: string;
+  count: number;
+}
+
 /** Who wrote a TaskComment. */
 export type TaskCommentAuthorType = 'agent' | 'user' | 'system';
 
@@ -462,6 +482,8 @@ export interface Task {
   occurrenceSeq: number | null;
   /** `row.commits || []` — always an array. */
   commits: TaskCommit[];
+  /** Drive/OneDrive items the task's runs wrote — always an array. */
+  storageChanges: TaskStorageChange[];
   /** `row.history || []` — always an array. */
   history: TaskHistoryEntry[];
   /** Comment thread, oldest first — always an array (normalizeComments). */

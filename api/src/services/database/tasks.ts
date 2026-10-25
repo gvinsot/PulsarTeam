@@ -108,6 +108,27 @@ export interface TaskCommit {
   repo?: string;
 }
 
+/**
+ * A cloud-storage item (Google Drive / OneDrive) written by an agent while it
+ * was running the task — recorded by services/taskStorageChanges.ts from the
+ * Drive MCP write tools. One entry per item: a later write to the same item
+ * updates it (latest action, `at`, `count`).
+ */
+export interface TaskStorageChange {
+  provider: 'gdrive' | 'onedrive';
+  action: 'created' | 'updated' | 'deleted' | 'folder_created';
+  /** Drive path when known ("/Documents/report.txt"), else the item name. */
+  path: string;
+  name: string;
+  itemId?: string | null;
+  webUrl?: string | null;
+  agentId?: string | null;
+  /** ISO time of the latest write. */
+  at: string;
+  /** Number of writes folded into this entry. */
+  count: number;
+}
+
 /** The commit context of one run, persisted on the task while the run lives
  *  (see agentManager/tools/gitReconcile.ts). */
 export interface TaskCommitRunRecord {
@@ -174,6 +195,8 @@ export interface TaskRow {
   source: TaskSource | null;
   recurrence: TaskRecurrence | null;
   commits: TaskCommit[] | null;
+  /** Drive/OneDrive items written during the task's runs (appendTaskStorageChange). */
+  storage_changes: TaskStorageChange[] | null;
   history: TaskHistoryEntry[] | null;
   /** Discussion thread, separate from the description (lib/taskComments.ts). */
   comments: TaskComment[] | null;
@@ -260,6 +283,7 @@ export function rowToTask(row: TaskRow) {
     humanViewedAt: toIso(row.human_viewed_at ?? null),
     recurrence: row.recurrence || null,
     commits: row.commits || [],
+    storageChanges: Array.isArray(row.storage_changes) ? row.storage_changes : [],
     history: row.history || [],
     comments: normalizeComments(row.comments),
     error: row.error || undefined,
@@ -1893,6 +1917,82 @@ export async function mutateTaskCommits(
   }
   const task = await getTaskById(taskId);
   return task ? { task, changed } : null;
+}
+
+/** Two writes hit the same item when both carry the same item id, or the same path. */
+function sameStorageItem(
+  a: Pick<TaskStorageChange, 'provider' | 'itemId' | 'path'>,
+  b: Pick<TaskStorageChange, 'provider' | 'itemId' | 'path'>
+) {
+  if (a.provider !== b.provider) return false;
+  if (a.itemId && b.itemId) return a.itemId === b.itemId;
+  return a.path === b.path;
+}
+
+/**
+ * Record a Drive/OneDrive write on a task, under a row lock (like
+ * mutateTaskCommits): a write to an item already listed updates its entry
+ * instead of appending a duplicate. `storage_changes` is never written by the
+ * full-row upsert, so a stale task snapshot cannot drop an entry.
+ * Returns the re-read task, or null when the task does not exist / no DB.
+ */
+export async function appendTaskStorageChange(
+  taskId: string,
+  change: Omit<TaskStorageChange, 'count'>
+): Promise<Task | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query<{ storage_changes: TaskStorageChange[] | null }>(
+      'SELECT storage_changes FROM tasks WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
+      [taskId]
+    );
+    if (cur.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const next = mergeStorageChange(cur.rows[0].storage_changes, change);
+    await client.query('UPDATE tasks SET storage_changes = $2, updated_at = NOW() WHERE id = $1', [
+      taskId,
+      JSON.stringify(next),
+    ]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  return getTaskById(taskId);
+}
+
+/**
+ * Fold one write into a task's change list. A file created then rewritten in
+ * the same task stays "created"; anything written then deleted ends "deleted";
+ * the latest metadata (name, link, time) wins. Exported for tests.
+ */
+export function mergeStorageChange(
+  existing: TaskStorageChange[] | null | undefined,
+  change: Omit<TaskStorageChange, 'count'>
+): TaskStorageChange[] {
+  const list = Array.isArray(existing) ? [...existing] : [];
+  const index = list.findIndex(entry => sameStorageItem(entry, change));
+  if (index < 0) return [...list, { ...change, count: 1 }];
+  const previous = list[index];
+  const keepCreated =
+    change.action === 'updated' &&
+    (previous.action === 'created' || previous.action === 'folder_created');
+  list[index] = {
+    ...previous,
+    ...change,
+    action: keepCreated ? previous.action : change.action,
+    webUrl: change.webUrl ?? previous.webUrl ?? null,
+    itemId: change.itemId ?? previous.itemId ?? null,
+    count: (previous.count || 1) + 1,
+  };
+  return list;
 }
 
 /**

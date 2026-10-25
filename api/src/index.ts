@@ -102,6 +102,8 @@ import { boardRoutes } from './routes/boards.js';
 import { contactRoutes } from './routes/contact.js';
 import taskRoutes from './routes/tasks.js';
 import { setAgentManager } from './services/userProvisioning.js';
+import { setStorageChangeNotifier } from './services/taskStorageChanges.js';
+import { emitTaskUpdated } from './services/taskMutations.js';
 import { installTerminalProxy } from './routes/terminal.js';
 import { installVoiceProxy } from './routes/voiceProxy.js';
 
@@ -163,6 +165,8 @@ runnerOfAgent = agentId => {
   return agentManager.resolveLlmConfig?.(agent)?.managesContext ? 'claudecode' : 'sandbox';
 };
 setAgentManager(agentManager);
+// Drive/OneDrive writes recorded on a task refresh its card and open modal live.
+setStorageChangeNotifier(task => emitTaskUpdated(agentManager, task, { emitAgent: false }));
 app.set('io', io);
 app.set('agentManager', agentManager);
 

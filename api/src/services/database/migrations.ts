@@ -376,6 +376,11 @@ const MIGRATIONS: Migration[] = [
     'ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS task_id UUID',
     'CREATE INDEX IF NOT EXISTS idx_token_usage_task ON token_usage_log(task_id) WHERE task_id IS NOT NULL',
   ]),
+  // Drive/OneDrive items written by an agent during a task's runs
+  // (services/taskStorageChanges.ts), listed in the task's Modifications tab.
+  sqlMigration('202610250002_task_storage_changes', 'cloud storage changes made by a task', [
+    "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS storage_changes JSONB DEFAULT '[]'",
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

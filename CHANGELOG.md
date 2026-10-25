@@ -100,6 +100,11 @@ added under `[Unreleased]` as work lands.
 
 ### Added
 
+- A **Modifications** tab in the task modal: browse the diffs of the task's
+  commits (same view as the All Commits modal) or the Google Drive / OneDrive
+  files its runs created, modified or deleted. Drive writes are recorded per task
+  in the new `tasks.storage_changes` column (also returned as `storageChanges` by
+  the task APIs).
 - A **Mark all seen** button in the board toolbar, shown while the active board
   has unseen MCP/API tasks. `POST /api/boards/:id/tasks/viewed-all` acknowledges
   them all in one atomic statement — filters do not narrow it — so the unseen

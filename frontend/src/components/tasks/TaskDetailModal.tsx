@@ -26,6 +26,7 @@ import {
   History,
   ListTree,
   Coins,
+  FileDiff,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
@@ -39,6 +40,7 @@ import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
 import TaskComments from './TaskComments';
 import TaskCosts from './TaskCosts';
+import TaskModifications from './TaskModifications';
 import ExternalTaskPanel from './ExternalTaskPanel';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 import { errorMessage } from '../../utils/errors';
@@ -73,11 +75,12 @@ interface TaskDetailModalProps {
   activeBoardId: string | null;
 }
 
-type TaskTab = 'comments' | 'history' | 'details' | 'costs';
+type TaskTab = 'comments' | 'history' | 'modifications' | 'details' | 'costs';
 
 const TABS: { id: TaskTab; label: string; icon: typeof History }[] = [
   { id: 'comments', label: 'Comments', icon: MessageSquare },
   { id: 'history', label: 'History', icon: History },
+  { id: 'modifications', label: 'Modifications', icon: FileDiff },
   { id: 'details', label: 'Details', icon: ListTree },
   { id: 'costs', label: 'Costs', icon: Coins },
 ];
@@ -436,6 +439,7 @@ export default function TaskDetailModal({
   const tabCounts: Record<TaskTab, number> = {
     comments: task.comments?.length ?? 0,
     history: timelineHistory.length + (task.commits?.length ?? 0),
+    modifications: (task.commits?.length ?? 0) + (task.storageChanges?.length ?? 0),
     details: 0,
     costs: 0,
   };
@@ -801,7 +805,7 @@ export default function TaskDetailModal({
               </div>
             )}
 
-            {/* Tabs — comments, history, details, costs */}
+            {/* Tabs — comments, history, modifications, details, costs */}
             <div className="border-t border-dark-700 pt-3">
               <div role="tablist" className="flex items-center gap-1 border-b border-dark-700">
                 {TABS.map(({ id, label, icon: Icon }) => {
@@ -856,6 +860,16 @@ export default function TaskDetailModal({
                   await api.removeTaskCommit(task.agentId ?? '', task.id, hash);
                   onRefresh();
                 }}
+              />
+            )}
+
+            {/* What the task changed: commit diffs and Drive/OneDrive files */}
+            {activeTab === 'modifications' && task.id && (
+              <TaskModifications
+                taskId={task.id}
+                agentId={task.agentId ?? null}
+                commits={task.commits ?? []}
+                storageChanges={task.storageChanges ?? []}
               />
             )}
 

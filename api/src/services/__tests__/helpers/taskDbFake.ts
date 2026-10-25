@@ -17,6 +17,8 @@
  * manager's async addTask/setTaskStatus, which round-trip through these fakes.
  */
 
+import { mergeStorageChange } from '../../database/tasks.js';
+
 const INACTIVE = new Set(['done', 'backlog', 'error']);
 
 export function makeTaskDbFake() {
@@ -39,6 +41,7 @@ export function makeTaskDbFake() {
   // _doSaveTask): they only change through their atomic accessors.
   const UPSERT_SKIPS = new Set([
     'commits',
+    'storageChanges',
     'comments',
     'trustLevel',
     'securityFlags',
@@ -242,6 +245,13 @@ export function makeTaskDbFake() {
         t.updatedAt = now();
       }
       return { task: clone(t), changed: !!next };
+    },
+    appendTaskStorageChange: async (id: string, change: any) => {
+      const t = rows.get(id);
+      if (!live(t)) return null;
+      t.storageChanges = mergeStorageChange(t.storageChanges, change);
+      t.updatedAt = now();
+      return clone(t);
     },
     transferTaskOwner: async (id: string, toAgentId: string, historyEntry: any) => {
       const t = rows.get(id);
