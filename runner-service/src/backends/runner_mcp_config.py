@@ -260,8 +260,63 @@ def strip_codex_managed_block(text: str) -> str:
     permissions one follows the agent's current toggle — so saving them would
     only archive stale state. Everything else in the file is the user's (their
     `/model` pick, project trust, …)."""
-    text = _strip_managed_block(text or "", _CODEX_MARK_START, _CODEX_MARK_END)
-    return _strip_managed_block(text, _CODEX_PERMS_MARK_START, _CODEX_PERMS_MARK_END)
+    return _strip_codex_perms_block(_strip_codex_mcp_block(text or ""))
+
+
+# codex edits config.toml with toml_edit, which does not know our marker
+# comments: a root key it adds (`model`, `model_reasoning_effort` — the `/model`
+# pick) lands right after our policy keys, INSIDE the permissions block, and a
+# table it adds (`[projects."…"]` trust) lands after our MCP tables, INSIDE the
+# MCP block. Dropping the whole region between the markers therefore erased the
+# user's choices at the next spawn, and codex came back on its default model.
+# Both strippers below only drop the lines we wrote and keep codex's own.
+_CODEX_MCP_TABLE_HEADER = re.compile(r"^\s*\[\[?\s*mcp_servers\s*[.\]]")
+
+
+def _strip_codex_perms_block(text: str) -> str:
+    """Remove the permissions block but keep any key codex wrote inside it."""
+    if _CODEX_PERMS_MARK_START not in text:
+        return text
+    out: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == _CODEX_PERMS_MARK_START:
+            inside = True
+            continue
+        if inside:
+            if stripped == _CODEX_PERMS_MARK_END:
+                inside = False
+                continue
+            if not stripped or _CODEX_POLICY_KEY.match(line):
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _strip_codex_mcp_block(text: str) -> str:
+    """Remove the MCP block's `[mcp_servers.*]` tables but keep any other table
+    codex appended inside it."""
+    if _CODEX_MARK_START not in text:
+        return text
+    out: list[str] = []
+    inside = False
+    managed = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == _CODEX_MARK_START:
+            inside, managed = True, True
+            continue
+        if inside:
+            if stripped == _CODEX_MARK_END:
+                inside = False
+                continue
+            if _TOML_TABLE_HEADER.match(line):
+                managed = bool(_CODEX_MCP_TABLE_HEADER.match(line))
+            if managed:
+                continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def _fetch_servers_or_none(agent_id: Optional[str]) -> Optional[dict]:
@@ -731,7 +786,7 @@ def configure_codex_mcp(agent_user: Optional[dict], agent_id: Optional[str]) -> 
     except OSError:
         existing = ""
 
-    stripped = _strip_managed_block(existing, _CODEX_MARK_START, _CODEX_MARK_END)
+    stripped = _strip_codex_mcp_block(existing)
     block = to_codex_mcp_toml(servers)
     if block:
         managed = f"{_CODEX_MARK_START}\n{block}\n{_CODEX_MARK_END}\n"
@@ -779,7 +834,7 @@ def apply_codex_permissions(text: str, full_access: bool) -> str:
     own top-level policy keys are dropped: a duplicate key is a TOML parse error
     that would stop codex from starting. Without it, the block is removed and
     the user's keys are left alone."""
-    lines = _strip_managed_block(text or "", _CODEX_PERMS_MARK_START, _CODEX_PERMS_MARK_END).splitlines()
+    lines = _strip_codex_perms_block(text or "").splitlines()
     if full_access:
         kept: list[str] = []
         in_root = True

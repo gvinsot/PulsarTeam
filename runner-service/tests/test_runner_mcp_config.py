@@ -344,6 +344,54 @@ def test_codex_permissions_and_mcp_blocks_coexist(tmp_path, monkeypatch):
     assert strip_codex_managed_block(text).strip() == 'model = "gpt-6"'
 
 
+def _codex_edits_config(text):
+    """What codex's toml_edit does to our file on a `/model` pick and a project
+    trust (checked against toml_edit itself): the new root keys go right after
+    our policy keys, the new table right after our MCP tables — both INSIDE
+    our marker blocks."""
+    text = text.replace(
+        'approval_policy = "never"\n',
+        'approval_policy = "never"\nmodel = "gpt-5.5"\nmodel_reasoning_effort = "high"\n',
+    )
+    return text.replace(
+        _CODEX_MARK_END,
+        '\n[projects."/w"]\ntrust_level = "trusted"\n' + _CODEX_MARK_END,
+    )
+
+
+def test_codex_model_pick_inside_managed_blocks_survives_respawn(tmp_path, monkeypatch):
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    agent = _agent(tmp_path)
+    _patch_fetch(monkeypatch, {"mcpServers": CANONICAL})
+    configure_codex_mcp(agent, "a")
+    configure_codex_permissions(agent, "a", full_access=True)
+    edited = _codex_edits_config(cfg.read_text())
+    assert edited != cfg.read_text()  # the fixture really edited the blocks
+    cfg.write_text(edited)
+
+    # Next spawn: both writers run again.
+    configure_codex_mcp(agent, "a")
+    configure_codex_permissions(agent, "a", full_access=True)
+    text = cfg.read_text()
+    data = _toml(text)
+    assert data["model"] == "gpt-5.5"
+    assert data["model_reasoning_effort"] == "high"
+    assert data["projects"]["/w"] == {"trust_level": "trusted"}
+    assert data["default_permissions"] == ":danger-full-access"
+    assert "swarm-manager" in data["mcp_servers"]
+    assert text.count(_CODEX_PERMS_MARK_START) == 1
+    assert text.count(_CODEX_MARK_START) == 1
+
+    # The persisted copy keeps the user's choices, not our blocks.
+    saved = _toml(strip_codex_managed_block(edited))
+    assert saved == {
+        "model": "gpt-5.5",
+        "model_reasoning_effort": "high",
+        "projects": {"/w": {"trust_level": "trusted"}},
+    }
+
+
 # ── hermes writer + flag ─────────────────────────────────────────────────────
 
 def test_configure_hermes_writes_yaml_and_counts(tmp_path, monkeypatch):
