@@ -69,15 +69,17 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - **Built-in MCP servers**:
   - **Swarm Manager** — Docker Swarm build/deploy pipelines, container management, log search
   - **OneDrive** — browse, search, read, upload files via Microsoft Graph
-  - **Code Index** — index source folders, symbol extraction, semantic search (ZVEC-backed)
+  - **Code Index** — index source folders, symbol extraction, semantic search (ZVEC-backed), find references / callers
 - **Custom MCP servers**: register any HTTP MCP endpoint with optional authentication
 
 ### Code Indexing (ZVEC)
 
 - Index local source folders and extract symbols (classes, functions, methods)
 - **Semantic search** via vector embeddings (ZVEC engine with in-memory fallback)
-- Supports JavaScript/TypeScript and Python
-- REST API: index, search symbols, semantic search, file tree, file outline
+- **Reference graph** built at indexing (imports, re-exports, calls): `find_references` / `find_callers` answer "who calls this?" and "what breaks if I change it?"
+- Supports JavaScript/TypeScript and Python (imports resolved), plus name-based references for Go, Rust, Java, C/C++, Ruby
+- REST API: index, search symbols, semantic search, file tree, file outline, references, callers
+- MCP tool reference: [`api/src/services/codeSearch/README.md`](api/src/services/codeSearch/README.md)
 
 ### RAG (Retrieval-Augmented Generation)
 

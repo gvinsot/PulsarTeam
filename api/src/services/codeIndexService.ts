@@ -8,6 +8,17 @@ import {
 } from './codeSearch/embedding.js';
 import { extractSymbolsFromContent, type ExtractedSymbol } from './codeSearch/symbolExtractor.js';
 import { createVectorStore } from './codeSearch/vectorStore.js';
+import {
+  decodeReference,
+  extractReferencesFromContent,
+  languageFamily,
+  REF_CALL,
+  REF_IMPORT,
+  REF_MEMBER,
+  SELF_RECEIVERS,
+  type FileReferences,
+  type ImportRecord,
+} from './codeSearch/referenceExtractor.js';
 import { errorMessage } from '../lib/errors.js';
 
 function parsePositiveInt(rawValue: string | undefined, fallback: number): number {
@@ -91,6 +102,12 @@ interface FileRecord {
   size: number;
   contentHash: string;
   symbolIds: string[];
+  /**
+   * The file's side of the reference graph. Absent on indexes written before the
+   * graph existed; findReferences reports `graphAvailable: false` for those.
+   */
+  imports?: ImportRecord[];
+  references?: FileReferences;
 }
 
 /** One entry of `symbols` in an index (built by buildSymbolRecord). */
@@ -177,6 +194,60 @@ interface SearchScores {
 
 /** Whatever `createVectorStore` hands back — the in-memory or the zvec backend. */
 type VectorStore = Awaited<ReturnType<typeof createVectorStore>>;
+
+/** How sure findReferences is that an occurrence points at the requested symbol. */
+type ReferenceConfidence = 'high' | 'medium' | 'low';
+type ReferenceKind = 'call' | 'import' | 'reference';
+
+const CONFIDENCE_RANK: Record<ReferenceConfidence, number> = { high: 3, medium: 2, low: 1 };
+const DEFAULT_REFERENCE_LIMIT = 100;
+const MAX_REEXPORT_HOPS = 4;
+const JS_RESOLVE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
+
+/** A symbol as embedded in reference results — just enough to fetch it with get_symbol. */
+interface SymbolRef {
+  id: string;
+  qualifiedName: string;
+  kind: string;
+  filePath: string;
+  startLine: number;
+}
+
+/** One occurrence returned by findReferences. */
+interface ReferenceHit {
+  filePath: string;
+  line: number;
+  kind: ReferenceKind;
+  confidence: ReferenceConfidence;
+  receiver?: string;
+  /** Innermost indexed symbol containing the occurrence; null at module level. */
+  enclosingSymbol: SymbolRef | null;
+  preview?: string;
+}
+
+/** One caller returned by findCallers: a symbol (or a file's module scope) and its call lines. */
+interface CallerHit {
+  caller: SymbolRef | null;
+  filePath: string;
+  lines: number[];
+  confidence: ReferenceConfidence;
+}
+
+interface ReferenceQueryOptions {
+  limit?: number;
+  minConfidence?: ReferenceConfidence;
+  includeImports?: boolean;
+}
+
+function toSymbolRef(symbol: SymbolRecord): SymbolRef {
+  return {
+    id: symbol.id,
+    qualifiedName: symbol.qualifiedName,
+    kind: symbol.kind,
+    filePath: symbol.filePath,
+    startLine: symbol.startLine,
+  };
+}
 
 /** One file to re-index incrementally; `content` short-circuits the disk read. */
 interface FileUpdateEntry {
@@ -601,6 +672,10 @@ export class CodeIndexService {
       symbolIds: [],
     };
 
+    const { imports, references } = extractReferencesFromContent(content, language, extracted);
+    fileRecord.imports = imports;
+    fileRecord.references = references;
+
     const symbolRecords: SymbolRecord[] = [];
     const vectorDocs: SymbolVectorDoc[] = [];
     for (const symbol of extracted) {
@@ -982,6 +1057,411 @@ export class CodeIndexService {
 
     results.sort((left, right) => right.score - left.score);
     return results.slice(0, topK);
+  }
+
+  /**
+   * Map an import specifier to an indexed file. JS/TS resolves relative specifiers
+   * only (with extension / index / `.js`→`.ts` fallbacks — packages and path
+   * aliases stay unresolved); Python resolves relative and absolute dotted modules,
+   * falling back to a path-suffix match for `src/`-style layouts.
+   */
+  _resolveModulePath(
+    fromPath: string,
+    specifier: string,
+    family: string,
+    filePaths: Set<string>,
+    suffixCache: Map<string, string | null>
+  ): string | null {
+    const firstExisting = (candidates: string[]) =>
+      candidates.find(candidate => filePaths.has(candidate)) ?? null;
+
+    if (family === 'js') {
+      if (!specifier.startsWith('.')) return null;
+      const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromPath), specifier));
+      const candidates = [
+        base,
+        ...JS_RESOLVE_EXTENSIONS.map(extension => base + extension),
+        ...JS_RESOLVE_EXTENSIONS.map(extension => `${base}/index${extension}`),
+      ];
+      // TypeScript ESM imports name the emitted file: './x.js' means './x.ts'.
+      const emitted = base.match(/\.[mc]?jsx?$/);
+      if (emitted) {
+        const stem = base.slice(0, -emitted[0].length);
+        candidates.push(...JS_RESOLVE_EXTENSIONS.map(extension => stem + extension));
+      }
+      return firstExisting(candidates);
+    }
+
+    if (family === 'python') {
+      const dots = specifier.match(/^\.*/)?.[0].length ?? 0;
+      const parts = specifier.slice(dots).split('.').filter(Boolean);
+      if (dots > 0) {
+        let directory = path.posix.dirname(fromPath);
+        for (let level = 1; level < dots; level += 1) directory = path.posix.dirname(directory);
+        if (parts.length === 0) return firstExisting([path.posix.join(directory, '__init__.py')]);
+        const base = path.posix.join(directory, ...parts);
+        return firstExisting([`${base}.py`, `${base}/__init__.py`]);
+      }
+      if (parts.length === 0) return null;
+      const relative = parts.join('/');
+      const direct = firstExisting([`${relative}.py`, `${relative}/__init__.py`]);
+      if (direct) return direct;
+      if (!suffixCache.has(relative)) {
+        let best: string | null = null;
+        for (const candidate of filePaths) {
+          if (
+            (candidate.endsWith(`/${relative}.py`) ||
+              candidate.endsWith(`/${relative}/__init__.py`)) &&
+            (!best || candidate.length < best.length)
+          ) {
+            best = candidate;
+          }
+        }
+        suffixCache.set(relative, best);
+      }
+      return suffixCache.get(relative) ?? null;
+    }
+
+    return null;
+  }
+
+  /**
+   * Walk every file's stored references and keep the ones that resolve to
+   * `target`, each with a confidence level:
+   *  - high: same-file use, a use of a name imported from the target's file
+   *    (following `export … from` re-exports and Python package imports),
+   *    `ns.name` through a namespace import of that file, or for a method a call
+   *    through `this`/`self` inside its class or through the class name;
+   *  - medium: a name imported from a module that could not be resolved but looks
+   *    like the target's file, a method called on another receiver when no other
+   *    symbol shares its name, or a same-name use in a language whose imports are
+   *    not tracked (Go, Rust, C/C++, Java, Ruby);
+   *  - low: anything that merely shares the name (a global, a subclass, …).
+   */
+  _collectReferences(repoIndex: RepoIndex, target: SymbolRecord): ReferenceHit[] {
+    const targetFamily = languageFamily(target.language);
+    const isMethod = Boolean(target.parentName);
+    const targetIsDefault = /\bexport\s+default\b/.test(target.signature);
+    const targetDirName = path.posix.basename(path.posix.dirname(target.filePath));
+    const filePaths = new Set(repoIndex.files.map(file => file.path));
+    const fileByPath = new Map(repoIndex.files.map(file => [file.path, file]));
+    const suffixCache = new Map<string, string | null>();
+
+    const symbolsByFile = new Map<string, SymbolRecord[]>();
+    let sameNameCount = 0;
+    for (const symbol of repoIndex.symbols) {
+      const list = symbolsByFile.get(symbol.filePath);
+      if (list) list.push(symbol);
+      else symbolsByFile.set(symbol.filePath, [symbol]);
+      if (symbol.name === target.name) sameNameCount += 1;
+    }
+    const parentClass = isMethod
+      ? (symbolsByFile.get(target.filePath) || []).find(
+          symbol => symbol.kind === 'class' && symbol.qualifiedName === target.parentName
+        )
+      : undefined;
+
+    const sameLanguage = (language: string) => {
+      if (targetFamily !== 'generic') return languageFamily(language) === targetFamily;
+      const cFamily = new Set(['c', 'cpp']);
+      return (
+        language === target.language || (cFamily.has(language) && cFamily.has(target.language))
+      );
+    };
+
+    const resolve = (fromPath: string, specifier: string, family: string) =>
+      this._resolveModulePath(fromPath, specifier, family, filePaths, suffixCache);
+
+    // Where does `name`, as exported by `filePath`, come from? Follows re-exports
+    // (and, for Python, plain imports — a package `__init__` re-exports by importing).
+    const followExport = (
+      filePath: string,
+      name: string,
+      family: string,
+      hops = 0
+    ): { path: string; name: string } => {
+      const definesIt = (symbolsByFile.get(filePath) || []).some(
+        symbol => !symbol.parentName && symbol.name === name
+      );
+      if (definesIt || hops >= MAX_REEXPORT_HOPS) return { path: filePath, name };
+      for (const record of fileByPath.get(filePath)?.imports || []) {
+        if (!record.reexport && family !== 'python') continue;
+        for (const binding of record.bindings) {
+          const forwardsAll = binding.local === '*';
+          if (!forwardsAll && binding.local !== name) continue;
+          const next = resolve(filePath, record.module, family);
+          if (!next || next === filePath) continue;
+          const origin = followExport(
+            next,
+            forwardsAll ? name : binding.imported,
+            family,
+            hops + 1
+          );
+          if (!forwardsAll || origin.path !== next || origin.name !== name) return origin;
+          if ((symbolsByFile.get(next) || []).some(symbol => symbol.name === name)) return origin;
+        }
+      }
+      return { path: filePath, name };
+    };
+
+    const hits = new Map<string, ReferenceHit>();
+    const fileSymbolsCache = new Map<string, SymbolRecord[]>();
+    const enclosingSymbol = (filePath: string, line: number) => {
+      let best: SymbolRecord | null = null;
+      for (const symbol of fileSymbolsCache.get(filePath) || []) {
+        if (symbol.startLine > line || symbol.endLine < line) continue;
+        if (
+          !best ||
+          symbol.endLine - symbol.startLine < best.endLine - best.startLine ||
+          (symbol.endLine - symbol.startLine === best.endLine - best.startLine &&
+            symbol.startLine > best.startLine)
+        ) {
+          best = symbol;
+        }
+      }
+      return best ? toSymbolRef(best) : null;
+    };
+
+    for (const file of repoIndex.files) {
+      const references = file.references;
+      if (!references || !sameLanguage(file.language)) continue;
+      const family = languageFamily(file.language);
+      const sameFile = file.path === target.filePath;
+      const fileSymbols = symbolsByFile.get(file.path) || [];
+      fileSymbolsCache.set(file.path, fileSymbols);
+
+      // Local names bound to the target (aliases included) and namespaces of its file.
+      const locals = new Map<string, ReferenceConfidence>();
+      const namespaces = new Set<string>();
+      let importedElsewhere = false;
+      if (sameFile && !isMethod) locals.set(target.name, 'high');
+
+      if (!isMethod) {
+        for (const record of file.imports || []) {
+          const resolved = resolve(file.path, record.module, family);
+          for (const binding of record.bindings) {
+            if (!resolved) {
+              if (binding.imported !== target.name && binding.local !== target.name) continue;
+              if (binding.imported === '*' || locals.has(binding.local)) continue;
+              const moduleTail = record.module.split(/[/.]/).filter(Boolean).pop();
+              const targetStem = path.posix.basename(target.filePath).replace(/\.[^.]+$/, '');
+              locals.set(binding.local, moduleTail === targetStem ? 'medium' : 'low');
+              continue;
+            }
+            if (binding.imported === '*') {
+              if (binding.local === '*') {
+                const origin = followExport(resolved, target.name, family);
+                if (origin.path === target.filePath) locals.set(target.name, 'high');
+              } else if (resolved === target.filePath) {
+                namespaces.add(binding.local);
+              }
+              continue;
+            }
+            if (family === 'python') {
+              // `from pkg import mod` binds a submodule, used as `mod.name`.
+              const submodule = record.module.endsWith('.')
+                ? record.module + binding.imported
+                : `${record.module}.${binding.imported}`;
+              if (resolve(file.path, submodule, family) === target.filePath) {
+                namespaces.add(binding.local);
+                continue;
+              }
+            }
+            const origin = followExport(resolved, binding.imported, family);
+            const isTarget =
+              origin.path === target.filePath &&
+              (origin.name === target.name || (origin.name === 'default' && targetIsDefault));
+            if (isTarget) locals.set(binding.local, 'high');
+            else if (binding.local === target.name) importedElsewhere = true;
+          }
+        }
+      }
+
+      // Another top-level definition of the same name in this file shadows the target.
+      const shadowed =
+        !sameFile && fileSymbols.some(symbol => !symbol.parentName && symbol.name === target.name);
+
+      const names = new Set([target.name, ...locals.keys()]);
+      for (const name of names) {
+        if (!Object.hasOwn(references, name)) continue;
+        for (const entry of references[name]) {
+          const { line, flags, receiver } = decodeReference(entry);
+          const isImport = (flags & REF_IMPORT) !== 0;
+          const isMember = (flags & REF_MEMBER) !== 0;
+          if (sameFile && line === target.startLine && !isImport) continue;
+
+          let confidence: ReferenceConfidence | null = null;
+          if (isMethod) {
+            if (!isMember || name !== target.name) continue;
+            if (receiver && SELF_RECEIVERS.has(receiver)) {
+              const insideClass =
+                sameFile &&
+                (!parentClass || (line >= parentClass.startLine && line <= parentClass.endLine));
+              confidence = insideClass ? 'high' : 'low';
+            } else if (receiver === target.parentName) {
+              confidence = 'high';
+            } else {
+              confidence = sameNameCount === 1 ? 'medium' : 'low';
+            }
+          } else if (isMember) {
+            if (name !== target.name) continue;
+            if (receiver && namespaces.has(receiver)) confidence = 'high';
+            else if (family === 'generic' && receiver === targetDirName) confidence = 'medium';
+            else continue;
+          } else if (locals.has(name)) {
+            confidence = locals.get(name) ?? null;
+          } else if (name === target.name && !importedElsewhere && !shadowed) {
+            confidence = family === 'generic' ? 'medium' : 'low';
+          }
+          if (!confidence) continue;
+
+          const kind: ReferenceKind = isImport ? 'import' : flags & REF_CALL ? 'call' : 'reference';
+          const key = `${file.path}\u0000${line}\u0000${kind}`;
+          const existing = hits.get(key);
+          if (existing && CONFIDENCE_RANK[existing.confidence] >= CONFIDENCE_RANK[confidence]) {
+            continue;
+          }
+          hits.set(key, {
+            filePath: file.path,
+            line,
+            kind,
+            confidence,
+            ...(receiver ? { receiver } : {}),
+            enclosingSymbol: enclosingSymbol(file.path, line),
+          });
+        }
+      }
+    }
+
+    return [...hits.values()].sort(
+      (left, right) =>
+        CONFIDENCE_RANK[right.confidence] - CONFIDENCE_RANK[left.confidence] ||
+        left.filePath.localeCompare(right.filePath) ||
+        left.line - right.line
+    );
+  }
+
+  /** Fill `preview` with the trimmed source line of each hit, read live from disk. */
+  async _attachPreviews(rootPath: string, hits: ReferenceHit[]) {
+    const byFile = new Map<string, ReferenceHit[]>();
+    for (const hit of hits) {
+      const list = byFile.get(hit.filePath);
+      if (list) list.push(hit);
+      else byFile.set(hit.filePath, [hit]);
+    }
+    const entries = [...byFile.entries()];
+    for (let i = 0; i < entries.length; i += FILE_IO_CONCURRENCY) {
+      await Promise.all(
+        entries.slice(i, i + FILE_IO_CONCURRENCY).map(async ([filePath, fileHits]) => {
+          const content = await fs
+            .readFile(path.resolve(rootPath, filePath), 'utf8')
+            .catch(() => null);
+          if (content === null) return;
+          const lines = content.replace(/\r\n/g, '\n').split('\n');
+          for (const hit of fileHits) {
+            const text = lines[hit.line - 1];
+            if (text !== undefined) hit.preview = text.trim().slice(0, 240);
+          }
+        })
+      );
+    }
+  }
+
+  async _loadTargetSymbol(repoId: string, symbolId: string) {
+    const repoIndex = await this.loadIndex(repoId);
+    const target = repoIndex.symbols.find(entry => entry.id === symbolId);
+    if (!target) {
+      throw new Error(`Symbol "${symbolId}" not found in repo "${repoId}"`);
+    }
+    // Indexes written before the reference graph existed carry no `references`.
+    const graphAvailable = repoIndex.files.some(file => file.references !== undefined);
+    return { repoIndex, target, graphAvailable };
+  }
+
+  /**
+   * Every place in the repo that references a symbol — call sites, imports and
+   * other uses — resolved through the import graph built at indexing time.
+   * Results are ranked by confidence (see _collectReferences), then by file/line.
+   */
+  async findReferences(
+    repoId: string,
+    symbolId: string,
+    {
+      limit = DEFAULT_REFERENCE_LIMIT,
+      minConfidence = 'low',
+      includeImports = true,
+    }: ReferenceQueryOptions = {}
+  ) {
+    const { repoIndex, target, graphAvailable } = await this._loadTargetSymbol(repoId, symbolId);
+    const all = this._collectReferences(repoIndex, target).filter(
+      hit =>
+        CONFIDENCE_RANK[hit.confidence] >= CONFIDENCE_RANK[minConfidence] &&
+        (includeImports || hit.kind !== 'import')
+    );
+    const references = all.slice(0, limit);
+    await this._attachPreviews(repoIndex.repo.rootPath, references);
+
+    return {
+      symbol: toSymbolRef(target),
+      graphAvailable,
+      total: all.length,
+      truncated: all.length > references.length,
+      references,
+    };
+  }
+
+  /**
+   * The symbols that call a function, method or class constructor, one entry per
+   * caller with the lines of its calls. Calls made outside any indexed symbol
+   * (module top level) are grouped per file with `caller: null`.
+   */
+  async findCallers(
+    repoId: string,
+    symbolId: string,
+    { limit = DEFAULT_REFERENCE_LIMIT, minConfidence = 'low' }: ReferenceQueryOptions = {}
+  ) {
+    const { repoIndex, target, graphAvailable } = await this._loadTargetSymbol(repoId, symbolId);
+    const calls = this._collectReferences(repoIndex, target).filter(
+      hit =>
+        hit.kind === 'call' && CONFIDENCE_RANK[hit.confidence] >= CONFIDENCE_RANK[minConfidence]
+    );
+
+    const byCaller = new Map<string, CallerHit>();
+    for (const call of calls) {
+      const key = call.enclosingSymbol?.id ?? `${call.filePath}::<module>`;
+      const existing = byCaller.get(key);
+      if (!existing) {
+        byCaller.set(key, {
+          caller: call.enclosingSymbol,
+          filePath: call.filePath,
+          lines: [call.line],
+          confidence: call.confidence,
+        });
+        continue;
+      }
+      existing.lines.push(call.line);
+      if (CONFIDENCE_RANK[call.confidence] > CONFIDENCE_RANK[existing.confidence]) {
+        existing.confidence = call.confidence;
+      }
+    }
+
+    const callers = [...byCaller.values()]
+      .map(caller => ({ ...caller, lines: caller.lines.sort((a, b) => a - b) }))
+      .sort(
+        (left, right) =>
+          CONFIDENCE_RANK[right.confidence] - CONFIDENCE_RANK[left.confidence] ||
+          right.lines.length - left.lines.length ||
+          left.filePath.localeCompare(right.filePath)
+      );
+
+    return {
+      symbol: toSymbolRef(target),
+      graphAvailable,
+      totalCalls: calls.length,
+      total: callers.length,
+      truncated: callers.length > limit,
+      callers: callers.slice(0, limit),
+    };
   }
 
   /**

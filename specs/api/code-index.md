@@ -64,7 +64,23 @@ Plain text/regex search.
 
 ---
 
-## 4. MCP
+## 4. References (call/import graph)
+
+Built at indexing time: every file stores its imports and identifier occurrences (calls, imports, member accesses). Queries resolve them against the target symbol and rank each hit by confidence (`high` = resolved through an import or the same file/class, `medium` = probable, `low` = shares the name only). `graphAvailable: false` means the index predates the graph — re-index.
+
+### GET `/api/code-index/repos/:repoId/references`
+Every reference to a symbol.
+- **Query**: `symbolId`, `limit?` (1-1000, default 100), `minConfidence?: 'high'|'medium'|'low'`, `includeImports?` (boolean, default true).
+- **Response 200**: `{ symbol, graphAvailable, total, truncated, references: [{ filePath, line, kind: 'call'|'import'|'reference', confidence, receiver?, enclosingSymbol, preview }] }`.
+
+### GET `/api/code-index/repos/:repoId/callers`
+The symbols calling a function/method/class constructor.
+- **Query**: `symbolId`, `limit?`, `minConfidence?`.
+- **Response 200**: `{ symbol, graphAvailable, totalCalls, total, truncated, callers: [{ caller: { id, qualifiedName, kind, filePath, startLine } | null, filePath, lines, confidence }] }` — `caller: null` groups module-level calls of a file.
+
+---
+
+## 5. MCP
 
 ### ALL `/api/code-index/mcp`
-JSON-RPC MCP endpoint that exposes the same operations as tools, for agents to invoke directly.
+JSON-RPC MCP endpoint that exposes the same operations as tools, for agents to invoke directly (including `find_references` and `find_callers`). Tool reference: `api/src/services/codeSearch/README.md`.

@@ -54,6 +54,46 @@ interface RenderedSearchHit {
   vectorScore?: number;
 }
 
+/** A symbol as embedded in reference results (see CodeIndexService.findReferences). */
+interface RenderedSymbolRef {
+  qualifiedName: string;
+  kind: string;
+  filePath: string;
+  startLine: number;
+}
+
+interface RenderedReferences {
+  symbol: RenderedSymbolRef;
+  graphAvailable: boolean;
+  total: number;
+  truncated: boolean;
+  references: {
+    filePath: string;
+    line: number;
+    kind: string;
+    confidence: string;
+    enclosingSymbol: { qualifiedName: string } | null;
+    preview?: string;
+  }[];
+}
+
+interface RenderedCallers {
+  symbol: RenderedSymbolRef;
+  graphAvailable: boolean;
+  totalCalls: number;
+  total: number;
+  truncated: boolean;
+  callers: {
+    caller: { id: string; qualifiedName: string; kind: string } | null;
+    filePath: string;
+    lines: number[];
+    confidence: string;
+  }[];
+}
+
+const GRAPH_MISSING_NOTE =
+  'Note: this index predates the reference graph — re-run index_folder to get references.';
+
 async function pathExists(targetPath: string) {
   try {
     await fs.access(targetPath);
@@ -124,6 +164,35 @@ function summarizeSearchResults(results: RenderedSearchHit[]) {
       return `${index + 1}. ${result.qualifiedName} [${result.kind}] — ${result.filePath} (score: ${score})`;
     })
     .join('\\n');
+}
+
+function describeTarget(symbol: RenderedSymbolRef) {
+  return `${symbol.qualifiedName} [${symbol.kind}] — ${symbol.filePath}:${symbol.startLine}`;
+}
+
+function summarizeReferences(result: RenderedReferences) {
+  const header = `References to ${describeTarget(result.symbol)}: ${result.total}${result.truncated ? ` (showing ${result.references.length})` : ''}`;
+  if (!result.graphAvailable) return `${header}\n${GRAPH_MISSING_NOTE}`;
+  if (!result.references.length) return `${header}\nNo references found.`;
+  const lines = result.references.map(ref => {
+    const scope = ref.enclosingSymbol ? ` in ${ref.enclosingSymbol.qualifiedName}` : '';
+    const preview = ref.preview ? ` — ${ref.preview}` : '';
+    return `- ${ref.filePath}:${ref.line} [${ref.kind}, ${ref.confidence}]${scope}${preview}`;
+  });
+  return `${header}\n${lines.join('\n')}`;
+}
+
+function summarizeCallers(result: RenderedCallers) {
+  const header = `Callers of ${describeTarget(result.symbol)}: ${result.total} (${result.totalCalls} call sites)${result.truncated ? `, showing ${result.callers.length}` : ''}`;
+  if (!result.graphAvailable) return `${header}\n${GRAPH_MISSING_NOTE}`;
+  if (!result.callers.length) return `${header}\nNo callers found.`;
+  const lines = result.callers.map(entry => {
+    const who = entry.caller
+      ? `${entry.caller.qualifiedName} [${entry.caller.kind}] (${entry.caller.id})`
+      : '<module top level>';
+    return `- ${who} — ${entry.filePath} lines ${entry.lines.join(', ')} [${entry.confidence}]`;
+  });
+  return `${header}\n${lines.join('\n')}`;
 }
 
 export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
@@ -389,6 +458,72 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
           {
             type: 'text',
             text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  const confidenceSchema = z
+    .enum(['high', 'medium', 'low'])
+    .optional()
+    .describe(
+      'Drop matches below this confidence (default "low" = everything). "high" keeps only matches resolved through imports or the same file/class'
+    );
+  const limitSchema = z
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .optional()
+    .describe('Maximum number of results (default 100)');
+
+  server.tool(
+    'find_references',
+    'Find every place that references a symbol (call sites, imports, other uses), resolved through the import/call graph built at indexing. Use it before renaming or changing a signature to see what would break. Each hit has file, line, kind (call/import/reference), confidence (high/medium/low) and the enclosing symbol.',
+    {
+      repoId: z.string().describe('Indexed repository ID'),
+      symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
+      limit: limitSchema,
+      minConfidence: confidenceSchema,
+      includeImports: z
+        .boolean()
+        .optional()
+        .describe('Include import/re-export statements (default true)'),
+    },
+    async ({ repoId, symbolId, limit, minConfidence, includeImports }) => {
+      const result = await codeIndexService.findReferences(repoId, symbolId, {
+        limit,
+        minConfidence,
+        includeImports,
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeReferences(result)}\n\nJSON:\n${formatJson(result)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'find_callers',
+    'Find the functions/methods that call a symbol (function, method or class constructor), one entry per caller with its call lines. Callers carry a symbolId, so the call graph can be walked upwards by calling find_callers again.',
+    {
+      repoId: z.string().describe('Indexed repository ID'),
+      symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
+      limit: limitSchema,
+      minConfidence: confidenceSchema,
+    },
+    async ({ repoId, symbolId, limit, minConfidence }) => {
+      const result = await codeIndexService.findCallers(repoId, symbolId, { limit, minConfidence });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeCallers(result)}\n\nJSON:\n${formatJson(result)}`,
           },
         ],
       };
