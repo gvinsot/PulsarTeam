@@ -114,9 +114,22 @@ def _as_int(value) -> int:
         return 0
 
 
+def _model_of(entry: dict) -> str:
+    """The model that produced an assistant line (`message.model`), or "".
+
+    Per message, not per session: `/model` switches it mid-session. The CLI
+    stamps lines it generated itself (errors, interruptions) `<synthetic>`;
+    those carry no usage and are not a model anyone bills for.
+    """
+    model = (entry.get("message") or {}).get("model")
+    if not isinstance(model, str) or model.startswith("<"):
+        return ""
+    return model.strip()
+
+
 def _assistant_record(entry: dict) -> Optional[tuple[Optional[str], dict]]:
-    """`(message id, {input_tokens, output_tokens, cost_usd})` for an assistant
-    transcript line, or None for any other line.
+    """`(message id, {input_tokens, output_tokens, cost_usd, model})` for an
+    assistant transcript line, or None for any other line.
 
     Input tokens include the cache-creation and cache-read counts: they are
     real context tokens the turn consumed, and leaving them out is what makes
@@ -136,6 +149,7 @@ def _assistant_record(entry: dict) -> Optional[tuple[Optional[str], dict]]:
         ),
         "output_tokens": _as_int(usage.get("output_tokens")),
         "cost_usd": float(entry.get("costUSD") or 0.0),
+        "model": _model_of(entry),
     }
     msg_id = (entry.get("message") or {}).get("id")
     return (msg_id if isinstance(msg_id, str) and msg_id else None), record
@@ -208,8 +222,14 @@ def bill_records(entries: list, ledger: dict) -> dict:
     duplicate line bills nothing and an amended line bills only what it added.
     Anonymous records carry no identity and are billed as they come — the
     cursor guarantees each is read exactly once.
+
+    `delta["by_model"]` splits the same increment by the model each message
+    ran on ("" when the line names none), so a session mixing models is
+    priced per model.
     """
     delta = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+    by_model: dict = {}
+    delta["by_model"] = by_model
     for entry in entries:
         parsed = _assistant_record(entry)
         if parsed is None:
@@ -240,6 +260,12 @@ def bill_records(entries: list, ledger: dict) -> dict:
         delta["input_tokens"] += increment["input_tokens"]
         delta["output_tokens"] += increment["output_tokens"]
         delta["cost_usd"] += increment["cost_usd"]
+        if increment["input_tokens"] or increment["output_tokens"]:
+            share = by_model.setdefault(
+                record["model"], {"input_tokens": 0, "output_tokens": 0}
+            )
+            share["input_tokens"] += increment["input_tokens"]
+            share["output_tokens"] += increment["output_tokens"]
     delta["total_tokens"] = delta["input_tokens"] + delta["output_tokens"]
     return delta
 

@@ -537,6 +537,25 @@ export interface ResolvedLlmConfig {
   configName: string | null;
 }
 
+/**
+ * Whether two model ids name the same model. CLIs report what the provider
+ * echoed back — `claude-sonnet-4-5-20250929`, `anthropic/gpt-5-codex`,
+ * `claude-opus-4-1[1m]` — while an LLM config usually holds the bare id, so
+ * case, a provider prefix, a context-window tag and a date snapshot suffix
+ * are not meaningful differences.
+ */
+export function sameModelId(a: string | null | undefined, b: string | null | undefined): boolean {
+  const normalize = (id: string | null | undefined) =>
+    (id || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^.*\//, '')
+      .replace(/\[[^\]]*\]$/, '')
+      .replace(/-\d{8}$/, '');
+  const left = normalize(a);
+  return !!left && left === normalize(b);
+}
+
 export class AgentManager {
   agents: Map<string, Agent>;
   abortControllers: Map<string, AbortController>;
@@ -726,15 +745,35 @@ export class AgentManager {
    * out of _recordUsage so the internal token-usage route (CLI runners report
    * raw token counts, never a price) can bill terminal-driven turns the same
    * way instead of writing $0 rows that make the budget screen read free.
+   *
+   * `reportedModel` is the model a CLI runner read from its own transcripts —
+   * the one the turn actually ran on, which drifts from the configured model
+   * after a `/model` in the TUI or for a sub-agent. When it differs, any
+   * config declaring a cost for it wins; otherwise the chain above applies.
    */
-  _resolveUsageCost(agent: any, inputTokens: number, outputTokens: number): number {
+  _resolveUsageCost(
+    agent: any,
+    inputTokens: number,
+    outputTokens: number,
+    reportedModel?: string
+  ): number {
     const price = (perInput: number, perOutput: number) =>
       (inputTokens / 1e6) * perInput + (outputTokens / 1e6) * perOutput;
     const resolved = this.resolveLlmConfig(agent);
+    const configs = this._getLlmConfigsCached();
+    if (reportedModel && !sameModelId(reportedModel, resolved.model)) {
+      const reported = configs.find(
+        (c: any) =>
+          sameModelId(c.model, reportedModel) &&
+          (c.costPerInputToken != null || c.costPerOutputToken != null)
+      );
+      if (reported) {
+        return price(reported.costPerInputToken || 0, reported.costPerOutputToken || 0);
+      }
+    }
     if (resolved.costPerInputToken != null && resolved.costPerOutputToken != null) {
       return price(resolved.costPerInputToken, resolved.costPerOutputToken);
     }
-    const configs = this._getLlmConfigsCached();
     const byId = agent.llmConfigId
       ? configs.find((c: any) => c.id === agent.llmConfigId)
       : undefined;
