@@ -74,9 +74,7 @@ export async function readAnswerFile(
 
 /** Delete the answer file of request `id` — the suggested path only. */
 export function removeAnswerFile(bridge: RunnerExecBridge, agentId: string, id: string): void {
-  bridge
-    .exec(agentId, `rm -f ${shPath(llmAnswerFile(id))}`, { timeout: 10_000 })
-    .catch(() => {});
+  bridge.exec(agentId, `rm -f ${shPath(llmAnswerFile(id))}`, { timeout: 10_000 }).catch(() => {});
 }
 
 interface PendingAnswer {

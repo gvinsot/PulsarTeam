@@ -178,9 +178,8 @@ test('update_task auto-resolves the active task and moves its column', async () 
 });
 
 test('submit_answer reads the answer file through the runner and delivers it', async () => {
-  const { openLlmAnswer, takeLlmAnswer, closeLlmAnswer, llmAnswerFile } = await import(
-    '../llmAnswers.js'
-  );
+  const { openLlmAnswer, takeLlmAnswer, closeLlmAnswer, llmAnswerFile } =
+    await import('../llmAnswers.js');
   const requestId = openLlmAnswer('agent-1');
   const answerFile = llmAnswerFile(requestId);
   // The agent's runner: one file in its HOME, `~/` expanded by the shell.

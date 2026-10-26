@@ -46,8 +46,9 @@ function positiveInt(raw: string | undefined, fallback: number): number {
 
 // ANSI escape sequences: CSI (cursor moves, SGR, ?25h/l…), OSC (titles),
 // DCS/APC/PM strings, and two-byte ESC sequences (save/restore cursor…).
-// eslint-disable-next-line no-control-regex
-const ANSI_SEQUENCE_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g;
+const ANSI_SEQUENCE_RE =
+  // eslint-disable-next-line no-control-regex
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g;
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/g;
 /** Glyphs TUIs draw as a software cursor (mirrors runner pty_session.CURSOR_GLYPHS). */
@@ -87,9 +88,7 @@ export function isCursorOnlyOutput(
             ? chunk
             : Buffer.from(chunk)
         ).toString('utf8');
-  let text = raw
-    .replace(ANSI_SEQUENCE_RE, '')
-    .replace(CONTROL_CHARS_RE, '');
+  let text = raw.replace(ANSI_SEQUENCE_RE, '').replace(CONTROL_CHARS_RE, '');
   const animation = runner ? IDLE_ANIMATION_RE[runner.toLowerCase()] : undefined;
   if (animation) text = text.replace(animation, '');
   const glyphs = [...text];

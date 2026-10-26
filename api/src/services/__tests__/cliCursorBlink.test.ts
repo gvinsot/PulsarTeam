@@ -38,5 +38,8 @@ test("Vibe's idle cat animation is not activity for the vibe runner", () => {
   // Other runners keep Braille as activity (spinners).
   assert.equal(isCursorOnlyOutput(Buffer.from(frame), 'codex'), false);
   // A running Vibe turn still prints text.
-  assert.equal(isCursorOnlyOutput(Buffer.from('⠋ Thinking (2s Esc/Ctrl+C to interrupt)'), 'vibe'), false);
+  assert.equal(
+    isCursorOnlyOutput(Buffer.from('⠋ Thinking (2s Esc/Ctrl+C to interrupt)'), 'vibe'),
+    false
+  );
 });

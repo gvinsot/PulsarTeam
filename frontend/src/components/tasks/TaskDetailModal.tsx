@@ -808,7 +808,10 @@ export default function TaskDetailModal({
 
             {/* Tabs — comments, history, modifications, details, costs */}
             <div className="border-t border-dark-700 pt-3">
-              <div role="tablist" className="flex items-center gap-1 border-b border-dark-700 overflow-x-auto overflow-y-hidden [scrollbar-width:none] -mx-3 px-3 sm:mx-0 sm:px-0">
+              <div
+                role="tablist"
+                className="flex items-center gap-1 border-b border-dark-700 overflow-x-auto overflow-y-hidden [scrollbar-width:none] -mx-3 px-3 sm:mx-0 sm:px-0"
+              >
                 {TABS.map(({ id, label, icon: Icon }) => {
                   const count = tabCounts[id];
                   const selected = activeTab === id;

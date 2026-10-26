@@ -274,12 +274,17 @@ export function createPulsarGatewayMcpServer(
         );
       }
       if (!content.trim()) {
-        return jsonError(`${file_path} is empty. Write your answer to it and call submit_answer again.`);
+        return jsonError(
+          `${file_path} is empty. Write your answer to it and call submit_answer again.`
+        );
       }
       const outcome = submitLlmAnswer(id, callerAgentId, content);
       if (outcome === 'accepted') {
         removeAnswerFile(agentManager.executionManager, callerAgentId, id);
-        return jsonOk({ success: true, hint: 'Answer delivered. Reply briefly that you are done.' });
+        return jsonOk({
+          success: true,
+          hint: 'Answer delivered. Reply briefly that you are done.',
+        });
       }
       return jsonError(
         outcome === 'not_yours'

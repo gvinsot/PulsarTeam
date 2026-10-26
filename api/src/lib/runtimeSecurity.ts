@@ -48,7 +48,7 @@ export function isBrotliPatchedNodeVersion(version: string): boolean {
  */
 export function assertPatchedRuntime(
   version: string = process.version,
-  isProduction: boolean = process.env.NODE_ENV === 'production',
+  isProduction: boolean = process.env.NODE_ENV === 'production'
 ): void {
   if (isBrotliPatchedNodeVersion(version)) return;
   const message =

@@ -48,7 +48,15 @@ export type AgentStatusValue = 'idle' | 'busy' | 'error';
  * Note RUNNER_LABELS in AgentCard.tsx is missing an entry for 'aider'.
  */
 export type AgentRunner =
-  'sandbox' | 'claudecode' | 'coder' | 'openclaw' | 'hermes' | 'opencode' | 'aider' | 'codex' | 'vibe';
+  | 'sandbox'
+  | 'claudecode'
+  | 'coder'
+  | 'openclaw'
+  | 'hermes'
+  | 'opencode'
+  | 'aider'
+  | 'codex'
+  | 'vibe';
 
 /** z.enum(['realtime','external']) at api/src/schemas/agents.ts:36. */
 export type AgentVoiceMode = 'realtime' | 'external';
