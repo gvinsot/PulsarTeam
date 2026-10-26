@@ -125,7 +125,7 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 
 ```
 ┌──────────────────────────────────────────────────┐
-│          Frontend (React 19 + Vite 6)            │
+│          Frontend (React 18 + Vite 6)            │
 │  Dashboard · Agent Detail · Scrum Board          │
 │  Broadcast · Voice Chat · Projects               │
 └──────────────────┬───────────────────────────────┘

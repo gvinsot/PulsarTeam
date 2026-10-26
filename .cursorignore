@@ -1,2 +1,17 @@
+# Files an AI agent should not read: secrets, generated output, vendored trees,
+# and large binaries that cost tokens without informing a change.
+# Mirrored in .cursorignore and .copilotignore; Claude Code enforces the same
+# list through permissions.deny in .claude/settings.json.
 **/.env
-**/node_modules
+**/node_modules/
+**/dist/
+**/build/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/package-lock.json
+*.log
+docs/*.png
+docs/archive/
+frontend/public/extensions/
+frontend/browser-session-extension/vendor/
