@@ -69,6 +69,7 @@ import type {
   Task,
   TaskAttachment,
   TaskComment,
+  TaskCostSummary,
   TaskCreatedEvent,
   TaskExecutionStatus,
   TaskHistoryEntry,
@@ -1463,6 +1464,9 @@ export const addTaskComment = (taskId: string, text: string) =>
   post<TaskComment>(`/tasks/${taskId}/comments`, { text });
 export const deleteTaskComment = (taskId: string, commentId: string) =>
   del<OkAck>(`/tasks/${taskId}/comments/${commentId}`);
+
+/* ── Task costs (tokens, spend and agent time attributed to the task) ────── */
+export const getTaskCosts = (taskId: string) => get<TaskCostSummary>(`/tasks/${taskId}/costs`);
 
 /* ── Task attachments (real files, copied onto the runner before each run) ── */
 export const getTaskAttachments = (taskId: string) =>

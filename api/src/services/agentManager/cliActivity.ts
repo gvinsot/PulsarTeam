@@ -4,7 +4,9 @@
 // goes through sendMessage, so nothing on the chat path marks it busy. Its
 // busy/idle status is derived from ACTIVITY signals instead:
 //
-//   • console output relayed to a browser terminal (routes/terminal.ts);
+//   • console output relayed to a browser terminal (routes/terminal.ts), except
+//     chunks that only blink the cursor or redraw an idle animation such as
+//     Vibe's cat (isCursorOnlyOutput);
 //   • the runner's own `idle_seconds` — seconds since the PTY last printed,
 //     tracked runner-side whether or not a viewer is attached — polled by a
 //     heartbeat for as long as a terminal-driven task is being watched;
@@ -40,6 +42,57 @@ export const CLI_STALL_MS = positiveInt(process.env.CLI_STALL_MS, 15 * 60_000);
 function positiveInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// ANSI escape sequences: CSI (cursor moves, SGR, ?25h/l…), OSC (titles),
+// DCS/APC/PM strings, and two-byte ESC sequences (save/restore cursor…).
+const ANSI_SEQUENCE_RE =
+  // eslint-disable-next-line no-control-regex
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/g;
+/** Glyphs TUIs draw as a software cursor (mirrors runner pty_session.CURSOR_GLYPHS). */
+const CURSOR_GLYPHS = new Set(' _|█▉▊▋▌▍▎▏▐▁▂▃▄▅▆▇│┃▮▯\u00a0');
+/** A software cursor is at most this many cells wide. */
+const MAX_CURSOR_CELLS = 2;
+
+/**
+ * Per-runner idle animations: glyphs a CLI keeps redrawing while it sits idle,
+ * stripped (with whitespace) before judging a chunk. Mirrors the runner's
+ * pty_session._SCREEN_ANIMATION_MASKS. Vibe's idle banner (`petit_chat`) is an
+ * animated cat drawn in Braille cells (U+2800–U+28FF) whose empty cells render
+ * as spaces; a running Vibe turn still prints text (elapsed counter, output),
+ * so real work is still seen.
+ */
+const IDLE_ANIMATION_RE: Record<string, RegExp> = {
+  vibe: /[⠀-⣿\s]/g,
+};
+
+/**
+ * True when a chunk of PTY output prints nothing but terminal control and, at
+ * most, a cursor glyph — what a blinking cursor (hardware show/hide toggles or
+ * a software block redrawn every half second) emits while the CLI sits idle at
+ * its prompt — or, for `runner`, only frames of its idle animation
+ * (IDLE_ANIMATION_RE). Such output is not agent activity.
+ */
+export function isCursorOnlyOutput(
+  chunk: Buffer | ArrayBuffer | Buffer[] | string,
+  runner?: string
+): boolean {
+  const raw =
+    typeof chunk === 'string'
+      ? chunk
+      : (Array.isArray(chunk)
+          ? Buffer.concat(chunk)
+          : Buffer.isBuffer(chunk)
+            ? chunk
+            : Buffer.from(chunk)
+        ).toString('utf8');
+  let text = raw.replace(ANSI_SEQUENCE_RE, '').replace(CONTROL_CHARS_RE, '');
+  const animation = runner ? IDLE_ANIMATION_RE[runner.toLowerCase()] : undefined;
+  if (animation) text = text.replace(animation, '');
+  const glyphs = [...text];
+  return glyphs.length <= MAX_CURSOR_CELLS && glyphs.every(g => CURSOR_GLYPHS.has(g));
 }
 
 interface ActivityState {

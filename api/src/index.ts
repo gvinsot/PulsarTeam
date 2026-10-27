@@ -38,6 +38,7 @@ import { externalVoiceRoutes } from './routes/externalVoice.js';
 import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
 import { readSecret, validateProductionSecrets } from './secrets.js';
+import { assertPatchedRuntime, rejectBrotliRequestBodies } from './lib/runtimeSecurity.js';
 import {
   buildCorsOptions,
   getCorsOrigins,
@@ -101,6 +102,8 @@ import { boardRoutes } from './routes/boards.js';
 import { contactRoutes } from './routes/contact.js';
 import taskRoutes from './routes/tasks.js';
 import { setAgentManager } from './services/userProvisioning.js';
+import { setStorageChangeNotifier } from './services/taskStorageChanges.js';
+import { emitTaskUpdated } from './services/taskMutations.js';
 import { installTerminalProxy } from './routes/terminal.js';
 import { installVoiceProxy } from './routes/voiceProxy.js';
 
@@ -162,6 +165,8 @@ runnerOfAgent = agentId => {
   return agentManager.resolveLlmConfig?.(agent)?.managesContext ? 'claudecode' : 'sandbox';
 };
 setAgentManager(agentManager);
+// Drive/OneDrive writes recorded on a task refresh its card and open modal live.
+setStorageChangeNotifier(task => emitTaskUpdated(agentManager, task, { emitAgent: false }));
 app.set('io', io);
 app.set('agentManager', agentManager);
 
@@ -213,6 +218,7 @@ app.use(function lockEnvironmentFromHost(req, _res, next) {
   next();
 });
 
+app.use(rejectBrotliRequestBodies);
 app.use(express.json({ limit: '1mb' }));
 
 // Global API rate limiter — 300 requests per minute per IP
@@ -612,6 +618,7 @@ setupSocketHandlers(io, agentManager);
 const PORT = process.env.PORT || 3001;
 
 async function start() {
+  assertPatchedRuntime();
   validateProductionSecrets();
   validateCorsConfig();
   await initDatabase();

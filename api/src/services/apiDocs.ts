@@ -127,6 +127,10 @@ export const TASK_VIEW_PROPERTIES: Record<(typeof TASK_VIEW_KEYS)[number], JsonO
   occurrenceSeq: nullable('integer', 'Run number within its rule.'),
   recurrence: { type: ['object', 'null'], description: 'Recurrence configuration (rules only).' },
   commits: { type: ['array', 'null'], description: 'Linked commits.' },
+  storageChanges: {
+    type: ['array', 'null'],
+    description: 'Google Drive / OneDrive items written by agents while running the task.',
+  },
   comments: {
     type: ['array', 'null'],
     description:

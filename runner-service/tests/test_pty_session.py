@@ -742,3 +742,98 @@ async def test_failed_screen_capture_counts_output_as_activity(monkeypatch):
     session._last_output_at = time.monotonic()
     await session._sample_screen()
     assert session.status()["idle_seconds"] < 1
+
+
+def test_vibe_idle_cat_animation_is_masked_from_screen_digest():
+    """Vibe's idle cat mascot animates in Braille cells forever; two frames
+    that differ only there must hash the same, or the agent never goes idle."""
+    mask = pty_session_module.mask_idle_animation
+    frame_a = "⠈⠢⡀    ⢀⠔⠁\n│ > ▌\n".encode()
+    frame_b = "⠐⠤⣀    ⣀⠤⠂\n│ > ▌\n".encode()
+    assert mask(["/usr/local/bin/vibe"], frame_a) == mask(["vibe"], frame_b)
+    # The busy elapsed counter still changes the masked screen.
+    busy_a = "⠋ Thinking (1s Esc/Ctrl+C to interrupt)".encode()
+    busy_b = "⠙ Thinking (2s Esc/Ctrl+C to interrupt)".encode()
+    assert mask(["vibe"], busy_a) != mask(["vibe"], busy_b)
+    # Other CLIs keep Braille spinners as activity.
+    assert mask(["codex"], frame_a) == frame_a
+
+
+def test_vibe_cat_frames_with_moving_cells_mask_identically():
+    # Real petit_chat frames (Vibe 3.0.2): Vibe renders an EMPTY Braille cell
+    # as a plain space, so as the tail/head move, cells flip glyph <-> space.
+    # Deleting the glyphs left a different number of spaces per frame.
+    mask = pty_session_module.mask_idle_animation
+    frames = [
+        "  ⡠⣒⠄  ⡔⢄⠔⡄  │ Sign in\n ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣  │\n  ⠉⠒⠣⠤⠵⠤⠬⠮⠆  │ > ▌\n",
+        " ⢠⢢    ⡔⢄⠔⡄  │ Sign in\n ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣  │\n ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆  │ > ▌\n",
+        "  ⡠⣒⠄  ⡠⡀⡠⡀  │ Sign in\n ⢸⠸⣀⡔⢉⢑⠇⠨⡠⢇  │\n  ⠉⠒⠣⠤⠵⠭⠭⠯⠇  │ > ▌\n",
+    ]
+    masked = {mask(["vibe"], f.encode()) for f in frames}
+    assert len(masked) == 1
+
+
+@pytest.mark.asyncio
+async def test_blinking_software_cursor_is_not_activity(monkeypatch):
+    # Some CLIs draw their own cursor and blink it (glyph ↔ blank): the screen
+    # text changes every half second while the agent sits idle at its prompt.
+    screens = ["> Ask anything\n│ █\n"]
+    session = _screen_session(monkeypatch, screens)
+    now = time.monotonic()
+    session._last_output_at = now - 100
+    session._last_screen_change_at = now - 100
+    await session._sample_screen()  # baseline frame
+
+    for frame in ["> Ask anything\n│\n", "> Ask anything\n│ █\n", "> Ask anything\n│ ▌\n"]:
+        screens[0] = frame
+        session._last_output_at = time.monotonic()
+        await session._sample_screen()
+        assert session.status()["idle_seconds"] >= 99, frame
+
+    # Real text appearing next to the cursor is still activity.
+    screens[0] = "> Ask anything\n│ fix the bug█\n"
+    session._last_output_at = time.monotonic()
+    await session._sample_screen()
+    assert session.status()["idle_seconds"] < 1
+
+
+@pytest.mark.asyncio
+async def test_continuous_idle_animation_lets_idle_seconds_grow(monkeypatch):
+    # Regression: Vibe redraws its cat several times per second, so output was
+    # always pending classification when the API polled — and pending output
+    # counted as a change, pinning idle_seconds near 0 although every sampled
+    # frame masked to the same screen.
+    screens = ["  ⡠⣒⠄  ⡔⢄⠔⡄  │ Mistral Vibe\n│ > ▌\n"]
+    session = _screen_session(monkeypatch, screens)
+    session.cmd = ["vibe"]
+    now = time.monotonic()
+    session._last_output_at = now - 100
+    session._last_screen_change_at = now - 100
+    await session._sample_screen()  # baseline frame
+
+    for frame in ["  ⡠⣒⠄  ⡠⡀⡠⡀  │ Mistral Vibe\n│ > ▌\n", " ⢠⢢    ⡔⢄⠔⡄  │ Mistral Vibe\n│ > ▌\n"]:
+        screens[0] = frame
+        session._last_output_at = time.monotonic()
+        await session._sample_screen()
+        session._last_output_at = time.monotonic()  # next frame already printed
+        assert session.status()["idle_seconds"] >= 99, frame
+
+    # Real work after the animation is seen at the next sample.
+    screens[0] = "⠋ Thinking (1s Esc/Ctrl+C to interrupt)\n│ > ▌\n"
+    session._last_output_at = time.monotonic()
+    await session._sample_screen()
+    assert session.status()["idle_seconds"] < 1
+
+
+def test_is_cursor_blink():
+    from pty_session import is_cursor_blink
+
+    assert is_cursor_blink("a\nb█", "a\nb")
+    assert is_cursor_blink("a\n█", "a")  # cursor alone on the last line
+    assert is_cursor_blink("x ██ y", "x    y")  # double-width cursor
+    assert not is_cursor_blink("a", "a")
+    assert not is_cursor_blink(None, "a")
+    assert not is_cursor_blink("a\nb█", "a\nbc")  # a real character
+    assert not is_cursor_blink("█\n█", "\n")  # two lines changed
+    assert not is_cursor_blink("█ █", "   ")  # non-adjacent cells
+    assert not is_cursor_blink("⠋ Working", "⠙ Working")  # spinner tick

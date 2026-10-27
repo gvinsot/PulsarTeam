@@ -1,5 +1,5 @@
 import fs from 'fs';
-const r = JSON.parse(fs.readFileSync('.claude/refactor-survey.json', 'utf8'));
+const r = JSON.parse(fs.readFileSync(new URL('./refactor-survey.json', import.meta.url), 'utf8'));
 for (const p of r.confirmed) {
   console.log('[' + p.scope + '] (' + p.kind + '|' + p.risk + '|' + p.effort + ') ' + p.title);
 }

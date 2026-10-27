@@ -3,7 +3,12 @@ import path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
-import type { CodeIndexService } from './codeIndexService.js';
+import type {
+  CodeIndexService,
+  EnsureIndexedResult,
+  IndexFreshness,
+  SyncResult,
+} from './codeIndexService.js';
 
 /**
  * The repo-header fields rendered below. Two different results reach them:
@@ -54,6 +59,63 @@ interface RenderedSearchHit {
   vectorScore?: number;
 }
 
+/** A symbol as embedded in reference results (see CodeIndexService.findReferences). */
+interface RenderedSymbolRef {
+  qualifiedName: string;
+  kind: string;
+  filePath: string;
+  startLine: number;
+}
+
+interface RenderedReferences {
+  symbol: RenderedSymbolRef;
+  graphAvailable: boolean;
+  total: number;
+  truncated: boolean;
+  references: {
+    filePath: string;
+    line: number;
+    kind: string;
+    confidence: string;
+    enclosingSymbol: { qualifiedName: string } | null;
+    preview?: string;
+  }[];
+}
+
+interface RenderedCallers {
+  symbol: RenderedSymbolRef;
+  graphAvailable: boolean;
+  totalCalls: number;
+  total: number;
+  truncated: boolean;
+  callers: {
+    caller: { id: string; qualifiedName: string; kind: string } | null;
+    filePath: string;
+    lines: number[];
+    confidence: string;
+  }[];
+}
+
+const GRAPH_MISSING_NOTE =
+  'Note: this index predates the reference graph — re-run index_folder to get references.';
+
+/**
+ * Every tool working on one repo takes either its `repoId` or its `repoName`
+ * (resolved by CodeIndexService.resolveRepoId); `repoId` wins when both are set.
+ */
+const REPO_SELECTOR = {
+  repoId: z
+    .string()
+    .optional()
+    .describe('Indexed repository ID (from list_repos). Either repoId or repoName is required'),
+  repoName: z
+    .string()
+    .optional()
+    .describe(
+      'Repository/project name, e.g. "PulsarTeam" (case-insensitive), resolved to its repoId. Alternative to repoId'
+    ),
+};
+
 async function pathExists(targetPath: string) {
   try {
     await fs.access(targetPath);
@@ -92,7 +154,7 @@ function formatRepoSummary(repo: RenderedRepo) {
     `Files without symbols: ${repo.filesWithoutSymbols}`,
     `Vector backend: ${repo.vectorBackend}`,
     `Indexed at: ${repo.indexedAt}`,
-  ].join('\\n');
+  ].join('\n');
 }
 
 function renderTree(node: RenderedTreeNode, depth = 0): string {
@@ -101,19 +163,19 @@ function renderTree(node: RenderedTreeNode, depth = 0): string {
   const current = `${prefix}${icon} ${node.name || '.'}`;
 
   if (!node.children?.length) return current;
-  return [current, ...node.children.flatMap(child => renderTree(child, depth + 1))].join('\\n');
+  return [current, ...node.children.flatMap(child => renderTree(child, depth + 1))].join('\n');
 }
 
 function summarizeOutline(outline: RenderedOutline) {
   if (!outline.symbols?.length) {
-    return `File: ${outline.file.path}\\nNo symbols detected.`;
+    return `File: ${outline.file.path}\nNo symbols detected.`;
   }
 
   const lines = outline.symbols.map(
     symbol => `- ${symbol.kind} ${symbol.qualifiedName} (${symbol.startLine}-${symbol.endLine})`
   );
 
-  return `File: ${outline.file.path}\\nLanguage: ${outline.file.language}\\n\\n${lines.join('\\n')}`;
+  return `File: ${outline.file.path}\nLanguage: ${outline.file.language}\n\n${lines.join('\n')}`;
 }
 
 function summarizeSearchResults(results: RenderedSearchHit[]) {
@@ -123,7 +185,96 @@ function summarizeSearchResults(results: RenderedSearchHit[]) {
       const score = result.score ?? result.vectorScore ?? 0;
       return `${index + 1}. ${result.qualifiedName} [${result.kind}] — ${result.filePath} (score: ${score})`;
     })
-    .join('\\n');
+    .join('\n');
+}
+
+function listChangedPaths(changed: IndexFreshness['changedFiles'], truncated: boolean) {
+  const parts = (['modified', 'added', 'deleted'] as const)
+    .filter(key => changed[key].length > 0)
+    .map(key => `${key}: ${changed[key].join(', ')}`);
+  return parts.length ? `${parts.join('; ')}${truncated ? ' (list truncated)' : ''}` : '';
+}
+
+function describeGit(git: IndexFreshness['git']) {
+  if (!git) return '';
+  const short = (commit: string | null) => (commit ? commit.slice(0, 12) : 'unknown');
+  const branch = git.branch ? ` on ${git.branch}` : '';
+  return git.headMoved
+    ? `, git HEAD moved ${short(git.indexedCommit)} → ${short(git.currentCommit)}${branch}`
+    : `, commit ${short(git.indexedCommit ?? git.currentCommit)}${branch}`;
+}
+
+/** One-line freshness header put on top of search results, or a multi-line warning when stale. */
+function summarizeFreshness(freshness: IndexFreshness) {
+  const age = `index age ${freshness.indexAge}${describeGit(freshness.git)}`;
+  if (freshness.stale === null) {
+    return `Index freshness unknown (${age}): ${freshness.error}`;
+  }
+  if (!freshness.stale) return `Index is fresh (${age}).`;
+  return [
+    `⚠️ Index is STALE (${age}): ${freshness.changedFileCount} file(s) changed since indexing — results may be outdated.`,
+    `Changed: ${listChangedPaths(freshness.changedFiles, freshness.changedFilesTruncated)}`,
+    'Run sync (same repoId/repoName) or ensure_indexed to refresh.',
+  ].join('\n');
+}
+
+function summarizeSync(result: SyncResult) {
+  const changed = listChangedPaths(result.changedFiles, result.changedFilesTruncated);
+  return [
+    `Synced ${result.repo.name} (${result.repoId}) in ${result.durationMs}ms: +${result.added} added, ~${result.updated} updated, -${result.removed} removed, ${result.touched} touched (mtime only), ${result.unchanged} unchanged`,
+    ...(changed ? [`Changed: ${changed}`] : []),
+    ...(result.git
+      ? [
+          `Git: ${result.git.commit.slice(0, 12)}${result.git.branch ? ` on ${result.git.branch}` : ''}`,
+        ]
+      : []),
+  ].join('\n');
+}
+
+function summarizeEnsureIndexed(result: EnsureIndexedResult) {
+  const action = {
+    indexed: 'No index existed — indexed it',
+    synced: 'Index was out of date — synced it',
+    fresh: 'Index already up to date',
+  }[result.action];
+  return [
+    `${action}.`,
+    `Repo: ${result.repo.name}`,
+    `Repo ID: ${result.repoId}`,
+    `Root path: ${result.repo.rootPath}`,
+    `Files indexed: ${result.repo.filesIndexed}, symbols: ${result.repo.symbolsIndexed}`,
+    ...(result.sync ? [summarizeSync(result.sync)] : []),
+    summarizeFreshness(result.freshness),
+  ].join('\n');
+}
+
+function describeTarget(symbol: RenderedSymbolRef) {
+  return `${symbol.qualifiedName} [${symbol.kind}] — ${symbol.filePath}:${symbol.startLine}`;
+}
+
+function summarizeReferences(result: RenderedReferences) {
+  const header = `References to ${describeTarget(result.symbol)}: ${result.total}${result.truncated ? ` (showing ${result.references.length})` : ''}`;
+  if (!result.graphAvailable) return `${header}\n${GRAPH_MISSING_NOTE}`;
+  if (!result.references.length) return `${header}\nNo references found.`;
+  const lines = result.references.map(ref => {
+    const scope = ref.enclosingSymbol ? ` in ${ref.enclosingSymbol.qualifiedName}` : '';
+    const preview = ref.preview ? ` — ${ref.preview}` : '';
+    return `- ${ref.filePath}:${ref.line} [${ref.kind}, ${ref.confidence}]${scope}${preview}`;
+  });
+  return `${header}\n${lines.join('\n')}`;
+}
+
+function summarizeCallers(result: RenderedCallers) {
+  const header = `Callers of ${describeTarget(result.symbol)}: ${result.total} (${result.totalCalls} call sites)${result.truncated ? `, showing ${result.callers.length}` : ''}`;
+  if (!result.graphAvailable) return `${header}\n${GRAPH_MISSING_NOTE}`;
+  if (!result.callers.length) return `${header}\nNo callers found.`;
+  const lines = result.callers.map(entry => {
+    const who = entry.caller
+      ? `${entry.caller.qualifiedName} [${entry.caller.kind}] (${entry.caller.id})`
+      : '<module top level>';
+    return `- ${who} — ${entry.filePath} lines ${entry.lines.join(', ')} [${entry.confidence}]`;
+  });
+  return `${header}\n${lines.join('\n')}`;
 }
 
 export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
@@ -167,7 +318,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         content: [
           {
             type: 'text',
-            text: `${formatRepoSummary(repo)}\\n\\nJSON:\\n${formatJson(repo)}`,
+            text: `${formatRepoSummary(repo)}\n\nJSON:\n${formatJson(repo)}`,
           },
         ],
       };
@@ -206,7 +357,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         content: [
           {
             type: 'text',
-            text: `Workspace root: ${workspaceRoot}\\nTarget path: ${targetPath}\\n\\n${formatRepoSummary(repo)}\\n\\nJSON:\\n${formatJson(repo)}`,
+            text: `Workspace root: ${workspaceRoot}\nTarget path: ${targetPath}\n\n${formatRepoSummary(repo)}\n\nJSON:\n${formatJson(repo)}`,
           },
         ],
       };
@@ -225,14 +376,42 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
               repo =>
                 `- ${repo.name} (${repo.id}) — ${repo.filesIndexed} files, ${repo.symbolsIndexed} symbols`
             )
-            .join('\\n')
+            .join('\n')
         : 'No indexed repositories.';
 
       return {
         content: [
           {
             type: 'text',
-            text: `${summary}\\n\\nJSON:\\n${formatJson(repos)}`,
+            text: `${summary}\n\nJSON:\n${formatJson(repos)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'find_repos_by_project',
+    'List the indexed repositories of a project, matched by name (case-insensitive). Use it to check whether the current project is indexed and get its repoId.',
+    {
+      project: z.string().min(1).describe('Project/repository name, e.g. "PulsarTeam"'),
+    },
+    async ({ project }) => {
+      const repos = await codeIndexService.findReposByProject(project);
+      const summary = repos.length
+        ? repos
+            .map(
+              repo =>
+                `- ${repo.name} (${repo.id}) — ${repo.rootPath}, ${repo.filesIndexed} files, ${repo.symbolsIndexed} symbols`
+            )
+            .join('\n')
+        : `No indexed repository for project "${project}" — index it with index_folder.`;
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summary}\n\nJSON:\n${formatJson(repos)}`,
           },
         ],
       };
@@ -243,15 +422,19 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'get_repo_summary',
     'Get metadata and counts for an indexed repository.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
     },
-    async ({ repoId }) => {
-      const summary = await codeIndexService.getRepoSummary(repoId);
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const [summary, freshness] = await Promise.all([
+        codeIndexService.getRepoSummary(repoId),
+        codeIndexService.getFreshness(repoId),
+      ]);
       return {
         content: [
           {
             type: 'text',
-            text: `${formatRepoSummary(summary)}\\n\\nJSON:\\n${formatJson(summary)}`,
+            text: `${formatRepoSummary(summary)}\n${summarizeFreshness(freshness)}\n\nJSON:\n${formatJson({ ...summary, freshness })}`,
           },
         ],
       };
@@ -262,15 +445,16 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'get_file_tree',
     'Get the indexed file tree for a repository.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
     },
-    async ({ repoId }) => {
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const tree = await codeIndexService.getFileTree(repoId);
       return {
         content: [
           {
             type: 'text',
-            text: `${renderTree(tree)}\\n\\nJSON:\\n${formatJson(tree)}`,
+            text: `${renderTree(tree)}\n\nJSON:\n${formatJson(tree)}`,
           },
         ],
       };
@@ -281,16 +465,17 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'get_file_outline',
     'Get the symbol outline for a specific indexed file.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       filePath: z.string().describe('Indexed file path, relative to repo root'),
     },
-    async ({ repoId, filePath }) => {
+    async ({ repoId: repoIdArg, repoName, filePath }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const outline = await codeIndexService.getFileOutline(repoId, filePath);
       return {
         content: [
           {
             type: 'text',
-            text: `${summarizeOutline(outline)}\\n\\nJSON:\\n${formatJson(outline)}`,
+            text: `${summarizeOutline(outline)}\n\nJSON:\n${formatJson(outline)}`,
           },
         ],
       };
@@ -301,7 +486,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'get_symbol',
     'Get the stored source and metadata for a symbol.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
       verify: z
         .boolean()
@@ -315,13 +500,53 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .optional()
         .describe('Extra context lines around the symbol'),
     },
-    async ({ repoId, symbolId, verify = false, contextLines = 0 }) => {
+    async ({ repoId: repoIdArg, repoName, symbolId, verify = false, contextLines = 0 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const symbol = await codeIndexService.getSymbol(repoId, symbolId, { verify, contextLines });
       return {
         content: [
           {
             type: 'text',
-            text: `Symbol: ${symbol.qualifiedName}\\nKind: ${symbol.kind}\\nFile: ${symbol.filePath}\\nLines: ${symbol.startLine}-${symbol.endLine}\\nDrift detected: ${symbol.driftDetected ? 'yes' : 'no'}\\n\\nSource:\\n${symbol.source}\\n\\nJSON:\\n${formatJson(symbol)}`,
+            text: `Symbol: ${symbol.qualifiedName}\nKind: ${symbol.kind}\nFile: ${symbol.filePath}\nLines: ${symbol.startLine}-${symbol.endLine}\nDrift detected: ${symbol.driftDetected ? 'yes' : 'no'}\n\nSource:\n${symbol.source}\n\nJSON:\n${formatJson(symbol)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'read_file_range',
+    'Read a line range of an indexed file (imports, config, code outside symbols). Always checks the live file against the index and reports drift.',
+    {
+      ...REPO_SELECTOR,
+      filePath: z.string().describe('Indexed file path, relative to repo root'),
+      startLine: z.number().int().min(1).describe('First line to read (1-based, inclusive)'),
+      endLine: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          'Last line to read (inclusive, clamped to the file length; default startLine+199, max 2000 lines)'
+        ),
+    },
+    async ({ repoId: repoIdArg, repoName, filePath, startLine, endLine }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const range = await codeIndexService.readFileRange(repoId, filePath, { startLine, endLine });
+      const width = String(range.endLine).length;
+      const numbered = range.content
+        .split('\n')
+        .map((line, index) => `${String(range.startLine + index).padStart(width)}  ${line}`)
+        .join('\n');
+      const drift = range.driftDetected
+        ? 'yes (file changed since indexing; run update_files to refresh the index)'
+        : 'no';
+      const { content: _content, ...meta } = range;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `File: ${range.filePath}\nLines: ${range.startLine}-${range.endLine} of ${range.totalLines}${range.endLineClamped ? ' (endLine clamped to end of file)' : ''}\nDrift detected: ${drift}\n\n${numbered}\n\nJSON:\n${formatJson(meta)}`,
           },
         ],
       };
@@ -330,9 +555,9 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
 
   server.tool(
     'search_symbols',
-    'Perform lexical symbol search by name/signature/summary.',
+    'Perform lexical symbol search by name/signature/summary. The response starts with the index freshness (age, git commit, files changed since indexing); when it says STALE, run sync first.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       query: z.string().describe('Search query'),
       kind: z
         .enum(['function', 'class', 'method'])
@@ -340,13 +565,17 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .describe('Optional symbol kind filter'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
     },
-    async ({ repoId, query, kind, topK = 10 }) => {
-      const results = await codeIndexService.searchSymbols(repoId, { query, kind, topK });
+    async ({ repoId: repoIdArg, repoName, query, kind, topK = 10 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const [results, freshness] = await Promise.all([
+        codeIndexService.searchSymbols(repoId, { query, kind, topK }),
+        codeIndexService.getFreshness(repoId),
+      ]);
       return {
         content: [
           {
             type: 'text',
-            text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
+            text: `${summarizeFreshness(freshness)}\n\n${summarizeSearchResults(results)}\n\nJSON:\n${formatJson({ freshness, results })}`,
           },
         ],
       };
@@ -355,19 +584,23 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
 
   server.tool(
     'search_semantic',
-    'Perform semantic code search over indexed symbols.',
+    'Perform semantic code search over indexed symbols. The response starts with the index freshness (age, git commit, files changed since indexing); when it says STALE, run sync first.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       query: z.string().describe('Semantic search query'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
     },
-    async ({ repoId, query, topK = 10 }) => {
-      const results = await codeIndexService.searchSemantic(repoId, { query, topK });
+    async ({ repoId: repoIdArg, repoName, query, topK = 10 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const [results, freshness] = await Promise.all([
+        codeIndexService.searchSemantic(repoId, { query, topK }),
+        codeIndexService.getFreshness(repoId),
+      ]);
       return {
         content: [
           {
             type: 'text',
-            text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
+            text: `${summarizeFreshness(freshness)}\n\n${summarizeSearchResults(results)}\n\nJSON:\n${formatJson({ freshness, results })}`,
           },
         ],
       };
@@ -376,19 +609,158 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
 
   server.tool(
     'search_text',
-    'Perform exact text-style search over indexed symbol bodies and summaries.',
+    'Perform exact text-style search over indexed symbol bodies and summaries. The response starts with the index freshness (age, git commit, files changed since indexing); when it says STALE, run sync first.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       query: z.string().describe('Text search query'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
     },
-    async ({ repoId, query, topK = 10 }) => {
-      const results = await codeIndexService.searchText(repoId, { query, topK });
+    async ({ repoId: repoIdArg, repoName, query, topK = 10 }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const [results, freshness] = await Promise.all([
+        codeIndexService.searchText(repoId, { query, topK }),
+        codeIndexService.getFreshness(repoId),
+      ]);
       return {
         content: [
           {
             type: 'text',
-            text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
+            text: `${summarizeFreshness(freshness)}\n\n${summarizeSearchResults(results)}\n\nJSON:\n${formatJson({ freshness, results })}`,
+          },
+        ],
+      };
+    }
+  );
+
+  const confidenceSchema = z
+    .enum(['high', 'medium', 'low'])
+    .optional()
+    .describe(
+      'Drop matches below this confidence (default "low" = everything). "high" keeps only matches resolved through imports or the same file/class'
+    );
+  const limitSchema = z
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .optional()
+    .describe('Maximum number of results (default 100)');
+
+  server.tool(
+    'find_references',
+    'Find every place that references a symbol (call sites, imports, other uses), resolved through the import/call graph built at indexing. Use it before renaming or changing a signature to see what would break. Each hit has file, line, kind (call/import/reference), confidence (high/medium/low) and the enclosing symbol.',
+    {
+      ...REPO_SELECTOR,
+      symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
+      limit: limitSchema,
+      minConfidence: confidenceSchema,
+      includeImports: z
+        .boolean()
+        .optional()
+        .describe('Include import/re-export statements (default true)'),
+    },
+    async ({ repoId: repoIdArg, repoName, symbolId, limit, minConfidence, includeImports }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const result = await codeIndexService.findReferences(repoId, symbolId, {
+        limit,
+        minConfidence,
+        includeImports,
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeReferences(result)}\n\nJSON:\n${formatJson(result)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'find_callers',
+    'Find the functions/methods that call a symbol (function, method or class constructor), one entry per caller with its call lines. Callers carry a symbolId, so the call graph can be walked upwards by calling find_callers again.',
+    {
+      ...REPO_SELECTOR,
+      symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
+      limit: limitSchema,
+      minConfidence: confidenceSchema,
+    },
+    async ({ repoId: repoIdArg, repoName, symbolId, limit, minConfidence }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const result = await codeIndexService.findCallers(repoId, symbolId, { limit, minConfidence });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeCallers(result)}\n\nJSON:\n${formatJson(result)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'ensure_indexed',
+    'One call to make a folder searchable and get its repoId: indexes it if no index exists for that folder, syncs it incrementally if files changed (or git HEAD moved) since, otherwise does nothing. Idempotent — call it at the start of a task instead of list_repos + index_folder.',
+    {
+      path: z
+        .string()
+        .describe('Absolute path or path relative to the backend process working directory'),
+      repoName: z
+        .string()
+        .optional()
+        .describe(
+          'Display name when a new index is created (default: folder name); also picks among several indexes of the same folder'
+        ),
+    },
+    async ({ path: folderPath, repoName }) => {
+      const result = await codeIndexService.ensureIndexed({ folderPath, repoName });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeEnsureIndexed(result)}\n\nJSON:\n${formatJson(result)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'sync',
+    'Incrementally re-index a repository from disk: only files whose size/mtime and content hash changed are re-parsed, new files are added, deleted ones dropped, and the git HEAD is recorded. Use it when a search reports a STALE index.',
+    {
+      ...REPO_SELECTOR,
+    },
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const result = await codeIndexService.syncRepo(repoId);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeSync(result)}\n\nJSON:\n${formatJson(result)}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'check_freshness',
+    'Report how current an index is without changing it: index age, indexed vs current git commit, and the files modified/added/deleted on disk since indexing.',
+    {
+      ...REPO_SELECTOR,
+    },
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const freshness = await codeIndexService.getFreshness(repoId, { useCache: false });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeFreshness(freshness)}\n\nJSON:\n${formatJson(freshness)}`,
           },
         ],
       };
@@ -399,7 +771,7 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'update_files',
     'Incrementally update specific files in an indexed repository without full re-indexing.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
       files: z
         .array(
           z.object({
@@ -414,13 +786,14 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .max(100)
         .describe('Files to update'),
     },
-    async ({ repoId, files }) => {
+    async ({ repoId: repoIdArg, repoName, files }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const result = await codeIndexService.updateFiles(repoId, files);
       return {
         content: [
           {
             type: 'text',
-            text: `Updated index ${repoId}: +${result.added} added, ~${result.updated} updated, -${result.removed} removed\\n\\nJSON:\\n${formatJson(result)}`,
+            text: `Updated index ${repoId}: +${result.added} added, ~${result.updated} updated, -${result.removed} removed\n\nJSON:\n${formatJson(result)}`,
           },
         ],
       };
@@ -431,15 +804,16 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     'delete_repo',
     'Delete an indexed repository from the code index.',
     {
-      repoId: z.string().describe('Indexed repository ID'),
+      ...REPO_SELECTOR,
     },
-    async ({ repoId }) => {
+    async ({ repoId: repoIdArg, repoName }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const result = await codeIndexService.invalidate(repoId);
       return {
         content: [
           {
             type: 'text',
-            text: `Deleted indexed repo ${repoId}.\\n\\nJSON:\\n${formatJson(result)}`,
+            text: `Deleted indexed repo ${repoId}.\n\nJSON:\n${formatJson(result)}`,
           },
         ],
       };

@@ -199,7 +199,12 @@ const isClientClosed = (e: any) =>
 test('a client hanging up ends the agent turn and removes the answer file', async () => {
   const { runner, removed, aborts } = hangingRunner();
   const client = new AbortController();
-  const pending = runAgentCompletion(runner, AGENT, [{ role: 'user', content: 'x' }], client.signal);
+  const pending = runAgentCompletion(
+    runner,
+    AGENT,
+    [{ role: 'user', content: 'x' }],
+    client.signal
+  );
   client.abort();
   await assert.rejects(pending, isClientClosed);
   assert.deepEqual(aborts, ['agent-1: LLM API client disconnected']);
@@ -209,7 +214,12 @@ test('a client hanging up ends the agent turn and removes the answer file', asyn
 test('a hang-up before the turn has registered is retried until it can abort', async () => {
   const { runner, aborts, attempts } = hangingRunner(2);
   const client = new AbortController();
-  const pending = runAgentCompletion(runner, AGENT, [{ role: 'user', content: 'x' }], client.signal);
+  const pending = runAgentCompletion(
+    runner,
+    AGENT,
+    [{ role: 'user', content: 'x' }],
+    client.signal
+  );
   client.abort();
   await assert.rejects(pending, isClientClosed);
   assert.equal(attempts(), 3);

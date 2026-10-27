@@ -60,18 +60,20 @@ export function internalTokenUsageRoutes(agentManager: AgentManager) {
         } catch {
           // No resolvable config — keep the placeholder.
         }
-        const model = (body.model || configuredModel || 'unknown').toString();
+        const reportedModel = (body.model || '').toString().trim();
+        const model = reportedModel || configuredModel || 'unknown';
         const userId = agent.ownerId || null;
         const idempotencyKey = (body.idempotency_key || '').toString().trim() || null;
 
         // CLI runners report raw token counts: the CLI bills against a
         // subscription and never tells us a price. Falling back to the stored
         // 0 would make every terminal-driven turn free on the budget screen,
-        // so price it from the agent's LLM config like the chat path does.
+        // so price it from the LLM configs like the chat path does — by the
+        // model the runner saw the turn run on, when it could tell.
         const price =
           Number.isFinite(costUsd) && costUsd > 0
             ? costUsd
-            : agentManager._resolveUsageCost(agent, inputTokens, outputTokens);
+            : agentManager._resolveUsageCost(agent, inputTokens, outputTokens, reportedModel);
 
         const recorded = await recordTokenUsage(
           agent.id,

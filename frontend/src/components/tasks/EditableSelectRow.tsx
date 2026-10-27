@@ -50,13 +50,13 @@ export default function EditableSelectRow({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   return (
-    <div className="flex items-center justify-between py-2 border-b border-dark-800">
-      <div className="flex items-center gap-2 text-xs text-dark-400">
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 border-b border-dark-800">
+      <div className="flex items-center gap-2 text-xs text-dark-400 shrink-0">
         <Icon className="w-3.5 h-3.5" />
         {label}
       </div>
       {editing ? (
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 min-w-0 max-w-full">
           <select
             autoFocus
             defaultValue={value}
@@ -72,7 +72,7 @@ export default function EditableSelectRow({
               }
             }}
             disabled={saving || (disableWhenEmpty && options.length === 0)}
-            className={selectClassName}
+            className={`${selectClassName} min-w-0 max-w-full`}
           >
             <option value="">{emptyOptionLabel}</option>
             {options.map(o => (
@@ -90,7 +90,7 @@ export default function EditableSelectRow({
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 min-w-0 max-w-full">
           {view}
           {pencilReplacement || (
             <button

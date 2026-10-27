@@ -3,7 +3,10 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CodeIndexService } from '../codeIndexService.js';
+import { createCodeIndexMcpServer } from '../codeIndexMcp.js';
 import { InMemoryVectorStore } from '../codeSearch/vectorStore.js';
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
@@ -289,5 +292,214 @@ test('CodeIndexService rejects folders outside allowed roots and invalidates rep
     await service.invalidate(indexed.id);
     const repos = await service.listRepos();
     assert.equal(repos.length, 0);
+  });
+});
+
+test('CodeIndexService.readFileRange reads indexed lines and lists overlapping symbols', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'demo-repo' });
+
+    const range = await service.readFileRange(repo.id, 'src/auth.js', { startLine: 1, endLine: 2 });
+    assert.equal(range.filePath, 'src/auth.js');
+    assert.equal(range.content, '// Auth service for access control\nexport class AuthService {');
+    assert.equal(range.startLine, 1);
+    assert.equal(range.endLine, 2);
+    assert.equal(range.endLineClamped, false);
+    assert.equal(range.totalLines, 15);
+    assert.equal(range.driftDetected, false);
+    assert.ok(range.symbols.some(symbol => symbol.qualifiedName === 'AuthService'));
+
+    // endLine past EOF is clamped; omitted endLine reads a default window.
+    const tail = await service.readFileRange(repo.id, './src/auth.js', {
+      startLine: 14,
+      endLine: 99,
+    });
+    assert.equal(tail.endLine, 15);
+    assert.equal(tail.endLineClamped, true);
+    assert.equal(tail.content, "  return 'tok_' + JSON.stringify(payload);\n};");
+    const whole = await service.readFileRange(repo.id, 'src/auth.js', { startLine: 1 });
+    assert.equal(whole.endLine, 15);
+  });
+});
+
+test('CodeIndexService.readFileRange detects drift since indexing', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'demo-repo' });
+
+    await fs.writeFile(
+      path.join(repoDir, 'src', 'parser.py'),
+      'import os\n\nclass Parser:\n    pass\n'
+    );
+    const range = await service.readFileRange(repo.id, 'src/parser.py', {
+      startLine: 1,
+      endLine: 1,
+    });
+    assert.equal(range.content, 'import os');
+    assert.equal(range.driftDetected, true);
+
+    await service.updateFiles(repo.id, [{ path: 'src/parser.py' }]);
+    const refreshed = await service.readFileRange(repo.id, 'src/parser.py', {
+      startLine: 1,
+      endLine: 1,
+    });
+    assert.equal(refreshed.driftDetected, false);
+  });
+});
+
+test('CodeIndexService.readFileRange rejects invalid bounds and unindexed or missing files', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'demo-repo' });
+
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 0, endLine: 3 }),
+      /Invalid startLine 0/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 5, endLine: 2 }),
+      /Invalid endLine 2/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 1, endLine: 5000 }),
+      /at most 2000 lines/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 50, endLine: 60 }),
+      /past the end of "src\/auth.js" \(15 lines\)/
+    );
+    await assert.rejects(
+      service.readFileRange(repo.id, '../../etc/passwd', { startLine: 1, endLine: 1 }),
+      /is not indexed in repo/
+    );
+
+    await fs.rm(path.join(repoDir, 'src', 'auth.js'));
+    await assert.rejects(
+      service.readFileRange(repo.id, 'src/auth.js', { startLine: 1, endLine: 1 }),
+      /can no longer be read from disk/
+    );
+  });
+});
+
+test('CodeIndexService.resolveRepoId resolves repo names and keeps repoId working', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+
+    await assert.rejects(
+      service.resolveRepoId({ repoName: 'PulsarTeam' }),
+      /No indexed repo named "PulsarTeam" \(no repos indexed yet\)/
+    );
+
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'PulsarTeam' });
+
+    assert.equal(await service.resolveRepoId({ repoId: repo.id }), repo.id);
+    assert.equal(await service.resolveRepoId({ repoName: 'pulsarteam' }), repo.id);
+    // Falls back on the root folder name when no repo carries that name.
+    assert.equal(await service.resolveRepoId({ repoName: 'SAMPLE-REPO' }), repo.id);
+    // repoId wins over repoName.
+    assert.equal(await service.resolveRepoId({ repoId: repo.id, repoName: 'other' }), repo.id);
+
+    await assert.rejects(service.resolveRepoId({}), /Either repoId or repoName is required/);
+    await assert.rejects(
+      service.resolveRepoId({ repoName: 'unknown' }),
+      /No indexed repo named "unknown" \(indexed repos: "PulsarTeam"\)/
+    );
+
+    const otherDir = path.join(tempDir, 'copy');
+    await fs.cp(repoDir, otherDir, { recursive: true });
+    const other = await service.indexFolder({ folderPath: otherDir, repoName: 'PulsarTeam' });
+    await assert.rejects(
+      service.resolveRepoId({ repoName: 'PulsarTeam' }),
+      error =>
+        /ambiguous/.test((error as Error).message) &&
+        (error as Error).message.includes(repo.id) &&
+        (error as Error).message.includes(other.id)
+    );
+  });
+});
+
+test('Code Index MCP tools accept repoName and expose find_repos_by_project', async () => {
+  await withTempDir(async tempDir => {
+    const repoDir = await writeFixtureRepo(tempDir);
+    const service = new CodeIndexService({
+      storageRoot: path.join(tempDir, '.index-data'),
+      allowedRoots: [tempDir],
+      vectorStoreFactory: async () => new InMemoryVectorStore(),
+    });
+    const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'PulsarTeam' });
+
+    const server = createCodeIndexMcpServer(service);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '1.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const textOf = (result: Awaited<ReturnType<typeof client.callTool>>) =>
+      (result.content as { text: string }[])[0].text;
+    try {
+      const { tools } = await client.listTools();
+      const repoTools = tools.filter(tool => 'repoId' in (tool.inputSchema.properties ?? {}));
+      assert.ok(repoTools.length >= 12);
+      for (const tool of repoTools) {
+        assert.ok('repoName' in (tool.inputSchema.properties ?? {}), tool.name);
+        assert.ok(!(tool.inputSchema.required ?? []).includes('repoId'), tool.name);
+      }
+
+      const found = await client.callTool({
+        name: 'find_repos_by_project',
+        arguments: { project: 'pulsarteam' },
+      });
+      assert.match(textOf(found), new RegExp(`PulsarTeam \\(${repo.id}\\)`));
+      const missing = await client.callTool({
+        name: 'find_repos_by_project',
+        arguments: { project: 'nope' },
+      });
+      assert.match(textOf(missing), /No indexed repository for project "nope"/);
+
+      const byName = await client.callTool({
+        name: 'get_file_outline',
+        arguments: { repoName: 'PulsarTeam', filePath: 'src/auth.js' },
+      });
+      assert.match(textOf(byName), /class AuthService/);
+
+      const byId = await client.callTool({
+        name: 'get_repo_summary',
+        arguments: { repoId: repo.id },
+      });
+      assert.match(textOf(byId), new RegExp(`Repo ID: ${repo.id}`));
+
+      const unknown = await client.callTool({
+        name: 'search_symbols',
+        arguments: { repoName: 'unknown', query: 'auth' },
+      });
+      assert.equal(unknown.isError, true);
+      assert.match(textOf(unknown), /No indexed repo named "unknown"/);
+
+      const neither = await client.callTool({ name: 'get_file_tree', arguments: {} });
+      assert.equal(neither.isError, true);
+      assert.match(textOf(neither), /Either repoId or repoName is required/);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });

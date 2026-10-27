@@ -55,6 +55,13 @@ const searchSymbolsQuerySchema = searchQuerySchema.extend({
   kind: z.enum(['function', 'class', 'method']).optional(),
 });
 
+const referencesQuerySchema = z.object({
+  symbolId: z.string().min(1).max(5000),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  minConfidence: z.enum(['high', 'medium', 'low']).optional(),
+  includeImports: booleanQuerySchema.optional(),
+});
+
 function handleValidationError(res: express.Response, error: unknown) {
   if (error instanceof z.ZodError) {
     return res.status(400).json({ error: 'Validation failed', details: error.issues });
@@ -158,6 +165,36 @@ export function codeIndexRoutes(codeIndexService: CodeIndexService) {
           contextLines: query.contextLines,
         });
         res.json(symbol);
+      } catch (error) {
+        if (handleValidationError(res, error)) return;
+        res.status(404).json({ error: errorMessage(error) });
+      }
+    })
+  );
+
+  router.get(
+    '/repos/:repoId/references',
+    asyncHandler(async (req, res) => {
+      try {
+        const params = repoParamsSchema.parse(req.params);
+        const { symbolId, ...options } = referencesQuerySchema.parse(req.query);
+        res.json(await codeIndexService.findReferences(params.repoId, symbolId, options));
+      } catch (error) {
+        if (handleValidationError(res, error)) return;
+        res.status(404).json({ error: errorMessage(error) });
+      }
+    })
+  );
+
+  router.get(
+    '/repos/:repoId/callers',
+    asyncHandler(async (req, res) => {
+      try {
+        const params = repoParamsSchema.parse(req.params);
+        const { symbolId, limit, minConfidence } = referencesQuerySchema.parse(req.query);
+        res.json(
+          await codeIndexService.findCallers(params.repoId, symbolId, { limit, minConfidence })
+        );
       } catch (error) {
         if (handleValidationError(res, error)) return;
         res.status(404).json({ error: errorMessage(error) });

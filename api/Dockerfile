@@ -16,7 +16,12 @@
 # mode 0444, otherwise readSecret() silently falls back to env vars.
 
 # ── Build stage: full toolchain, dev dependencies, TypeScript compile ────────
-FROM node:24-alpine AS build
+#
+# The Node.js tag is pinned to a patch release: a floating `node:24-alpine` can
+# resolve to a cached vulnerable image. 24.22.1 is the minimum for
+# CVE-2026-111497 (Node2Shell, Brotli RCE); the API also refuses to start in
+# production on an older runtime (src/lib/runtimeSecurity.ts).
+FROM node:24.22.1-alpine AS build
 
 WORKDIR /app
 
@@ -87,7 +92,7 @@ FROM build AS prod-deps
 RUN npm prune --omit=dev
 
 # ── Production stage ────────────────────────────────────────────────────────
-FROM node:24-alpine AS production
+FROM node:24.22.1-alpine AS production
 
 # git + openssh-client: the entrypoint records a git identity and the code-index
 # service reads git-provided remotes. ca-certificates/curl/wget: outbound TLS to

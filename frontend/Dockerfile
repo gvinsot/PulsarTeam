@@ -11,7 +11,7 @@
 # unprivileged when someone runs it outside this repo's compose file.
 
 # ── Build stage ─────────────────────────────────────────────────────────────
-FROM node:24-alpine AS build
+FROM node:24.22.1-alpine AS build
 
 WORKDIR /app
 
@@ -22,7 +22,12 @@ COPY frontend/ ./
 RUN npm run build
 
 # ── Production stage ────────────────────────────────────────────────────────
-FROM nginx:alpine AS production
+# Pinned to a release that fixes CVE-2026-15176 (alias + rewrite), CVE-2026-93479
+# (map / string expressions) and CVE-2026-97205 (AIO + SSI), all fixed in
+# 1.30.6 stable / 1.31.7 mainline. Our config uses none of those directives, but
+# the floating `nginx:alpine` tag could resolve to a stale cached image. Bump
+# deliberately; never go below 1.30.6.
+FROM nginx:1.30.6-alpine AS production
 
 COPY frontend/nginx-main.conf /etc/nginx/nginx.conf
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf

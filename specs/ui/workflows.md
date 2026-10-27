@@ -112,6 +112,9 @@ Modal with two main areas:
 - **Manual flag** — when set, the workflow will not auto-route this task.
 - **Transfer to another agent** — POST `/api/agents/:id/tasks/:taskId/transfer`.
 - **Commits panel** — list of linked commit hashes. Each commit row opens `AllCommitsDiffModal` to display the diff fetched via `GET /api/tasks/:id/commits/:hash/diff`.
+- **Modifications tab** — what the task changed. A segmented control switches between:
+  - **Commits** — the linked commits' diffs, same view as `AllCommitsDiffModal` (shared `CommitsDiffPanel`: per-file patches, +/- totals, revert flow);
+  - **Drive files** — Google Drive / OneDrive items written by the task's runs (`task.storageChanges`), grouped by provider: action (created / modified / deleted / folder created), path, number of writes, time of the last write, and a link to open the item. They are recorded by the Drive MCP write tools (`upload_file`, `create_folder`, `delete_item`) on the task the agent is running at that moment (`api/src/services/taskStorageChanges.ts`); writes made outside a live run are not attributed.
 - **History panel** — modification history (`GET /api/tasks/:id/history` and `ExecutionLogEntry` items rendered inline).
 - **GitHub activity** — opens `GitHubActivityModal` to show repo commits and tags in the 30-day window.
 

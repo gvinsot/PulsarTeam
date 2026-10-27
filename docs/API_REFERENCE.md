@@ -966,6 +966,29 @@ GET /api/code-index/repos/:repoId/search-semantic?query=JWT+auth+middleware&topK
 GET /api/code-index/repos/:repoId/search-text?query=TODO&topK=10
 ```
 
+### Find References
+
+```
+GET /api/code-index/repos/:repoId/references?symbolId=src/auth.js::createToken%23function&minConfidence=medium
+```
+
+Every place referencing a symbol (calls, imports, other uses), resolved through the import/call graph built at indexing.
+
+| Parameter        | Type    | Required | Description                                              |
+|------------------|---------|----------|----------------------------------------------------------|
+| `symbolId`       | string  | yes      | Symbol identifier                                        |
+| `limit`          | number  | no       | Max results (1-1000, default 100)                        |
+| `minConfidence`  | string  | no       | `high`, `medium` or `low` (default `low` = all)          |
+| `includeImports` | boolean | no       | Include import/re-export lines (default `true`)          |
+
+### Find Callers
+
+```
+GET /api/code-index/repos/:repoId/callers?symbolId=xxx
+```
+
+The functions/methods calling a symbol, one entry per caller with its call lines. Same `symbolId`, `limit`, `minConfidence` parameters.
+
 ### Delete Repository Index
 
 ```
@@ -1496,7 +1519,7 @@ POST /api/code-index/mcp
 Authorization: Bearer <jwt-token>
 ```
 
-Internal MCP for code index tool calls.
+Internal MCP for code index tool calls (index, search, outline, `find_references`, `find_callers`). See [`api/src/services/codeSearch/README.md`](../api/src/services/codeSearch/README.md).
 
 ### OneDrive MCP
 

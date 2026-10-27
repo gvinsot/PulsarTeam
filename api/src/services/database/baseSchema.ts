@@ -148,6 +148,7 @@ const TABLES = [
       source JSONB,
       recurrence JSONB,
       commits JSONB DEFAULT '[]',
+      storage_changes JSONB DEFAULT '[]',
       history JSONB DEFAULT '[]',
       comments JSONB DEFAULT '[]',
       error TEXT,

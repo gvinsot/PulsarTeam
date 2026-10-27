@@ -33,20 +33,26 @@ cd frontend && npm ci && npm run dev     # vite, port 5173, proxies /api
 
 ## The gates
 
-Run these before pushing. They are the whole gate — there is no CI yet, so the
-discipline is manual.
+CI (`.github/workflows/ci.yml`) runs them on every push to `main` and every
+pull request. Run them yourself before pushing; `scripts/check.sh` runs the same
+steps locally:
 
 ```bash
+scripts/check.sh                  # api, frontend, desktop
+scripts/check.sh api              # one project
+scripts/check.sh --fix frontend   # prettier --write + eslint --fix first
+
+# or by hand, per project:
 cd api
 npm run typecheck     # tsc --noEmit
 npm run lint          # eslint, with a pinned warning ceiling (see below)
-npm test              # node:test, 361 tests
-
-cd ../frontend
-npm run typecheck
-npm run lint
-npm test
+npm test              # node:test
+npm run build
+npm run format:check
 ```
+
+AI agents: start with [`AGENTS.md`](AGENTS.md), which covers the same rules
+plus the invariants that are easy to break.
 
 `vite build` does **not** type-check. `npm run typecheck` is the only thing that
 does — a green `npm run build` proves nothing about types.
@@ -67,7 +73,8 @@ flag with its measured cost in a comment block. That block is the contract:
 
 The same contract covers `any`. `@typescript-eslint/no-explicit-any` is a
 _warning_, and `npm run lint` runs `--max-warnings <N>` with `N` pinned in
-`package.json` to the count at the time it was set (api: 1485, frontend: 137).
+`package.json` to the count at the time it was set (look there for the current
+value; CI's `any-ratchet` job refuses any increase).
 So:
 
 - adding an `any` pushes the count over the ceiling and fails the lint run;

@@ -24,6 +24,12 @@ Two transcript dialects, one adapter each:
            events carry a *cumulative* ``info.total_token_usage``, so the
            delta is (latest cumulative − last cumulative reported).
 
+Usage is reported per model, read from the transcripts too: claude names it
+on every assistant line (``message.model``), codex in the ``turn_context``
+line opening each turn. That is what the turn really ran on — a ``/model``
+in the TUI or a sub-agent drifts from the configured model, which is only
+the fallback for a turn whose model the transcript never named.
+
 Only bytes appended after the watcher started are ever billed: the first pass
 baselines each file (cursor + codex's cumulative counter + claude's message
 ledger) without reporting, so restarting the terminal never re-bills the
@@ -111,16 +117,22 @@ def _claude_baseline(path: str, size: int, memo: dict) -> None:
     seed_ledger(path, _claude_ledger(memo, path), _MAX_BASELINE_BYTES)
 
 
-def _claude_delta(path: str, offset: int, memo: dict) -> tuple[dict, int]:
-    """Unbilled tokens recorded in `path` after byte `offset`, and the cursor.
+def _claude_delta(
+    path: str, offset: int, memo: dict, models: Optional[dict] = None
+) -> tuple[dict, int]:
+    """Unbilled tokens recorded in `path` after byte `offset`, by model, and
+    the cursor.
 
     Not simply "the new lines": the CLI rewrites an assistant line when a turn
     is amended, so the same message can arrive in several polls carrying its
-    cumulative usage. The ledger turns that stream into increments.
+    cumulative usage. The ledger turns that stream into increments. Every
+    assistant line names its own model, so `models` (codex's per-file state)
+    is not needed here.
     """
     from backends.claude_usage import usage_delta_since
 
-    return usage_delta_since(path, offset, _claude_ledger(memo, path))
+    delta, cursor = usage_delta_since(path, offset, _claude_ledger(memo, path))
+    return delta.get("by_model") or {}, cursor
 
 
 # ── codex rollout transcripts ───────────────────────────────────────────────
@@ -154,6 +166,28 @@ def _codex_find_token_count(entry) -> Optional[dict]:
     return None
 
 
+def _codex_find_model(entry) -> Optional[str]:
+    """The model a rollout line names, if it names one.
+
+    `token_count` events do not say which model spent the tokens; the
+    `turn_context` line that opens every turn does (so a `/model` switch shows
+    up at the next turn), as does `session_configured` in older layouts. The
+    model of a turn is the last one named before its counters.
+    """
+    if not isinstance(entry, dict):
+        return None
+    for candidate in (entry, entry.get("payload"), entry.get("msg"), entry.get("item")):
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("type") not in ("turn_context", "session_configured"):
+            continue
+        body = candidate.get("payload")
+        model = (body if isinstance(body, dict) else candidate).get("model")
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+    return None
+
+
 def _codex_cumulative(msg: dict) -> Optional[dict]:
     """Cumulative session totals carried by one `token_count` message."""
     from backends.codex import _usage_totals
@@ -164,22 +198,27 @@ def _codex_cumulative(msg: dict) -> Optional[dict]:
     return _usage_totals(msg)
 
 
-def _codex_scan(path: str, start: int, *, tail: bool = True) -> tuple[Optional[dict], int]:
-    """Last cumulative total recorded at or after byte `start`, and the cursor.
+def _codex_scan(path: str, start: int, *, tail: bool = True) -> tuple[list, int]:
+    """The rollout lines that matter recorded at or after byte `start` — in
+    order, ``("model", name)`` or ``("tokens", cumulative)`` — and the cursor.
 
     Shares the complete-line cursor with the claude adapter: a `token_count`
     event caught half-written must be re-read next poll, not stepped over.
     """
-    latest: Optional[dict] = None
+    events: list = []
     entries, cursor = read_records(path, start, tail=tail)
     for entry in entries:
+        model = _codex_find_model(entry)
+        if model:
+            events.append(("model", model))
+            continue
         msg = _codex_find_token_count(entry)
         if msg is None:
             continue
         cumulative = _codex_cumulative(msg)
         if cumulative:
-            latest = cumulative
-    return latest, cursor
+            events.append(("tokens", cumulative))
+    return events, cursor
 
 
 def _codex_baseline(path: str, size: int, memo: dict) -> None:
@@ -223,22 +262,40 @@ def _codex_baseline(path: str, size: int, memo: dict) -> None:
         logger.debug(f"[Usage] unreadable codex baseline {path}: {e}")
 
 
-def _codex_delta(path: str, offset: int, memo: dict) -> tuple[dict, int]:
-    cumulative, cursor = _codex_scan(path, offset)
-    if not cumulative:
-        return {}, cursor
+def _codex_delta(
+    path: str, offset: int, memo: dict, models: Optional[dict] = None
+) -> tuple[dict, int]:
+    """Tokens spent in `path` after byte `offset`, by model, and the cursor.
+
+    Each counter step is billed to the model named last before it; `models`
+    carries that name across polls (per file). A turn whose `turn_context`
+    predates the watcher has no known model and is reported under "".
+    """
+    if models is None:
+        models = {}
+    events, cursor = _codex_scan(path, offset)
     previous = memo.get(path)
-    memo[path] = cumulative
-    if previous is None:
-        # Unknown is not zero: establish a reference without billing history.
-        return {}, cursor
-    delta = {
-        "input_tokens": max(0, cumulative["input_tokens"] - _as_int(previous.get("input_tokens"))),
-        "output_tokens": max(
-            0, cumulative["output_tokens"] - _as_int(previous.get("output_tokens"))
-        ),
-    }
-    return delta, cursor
+    unknown_baseline = previous is None
+    model = models.get(path, "")
+    by_model: dict = {}
+    for kind, value in events:
+        if kind == "model":
+            model = value
+            continue
+        if not unknown_baseline:
+            step_in = max(0, value["input_tokens"] - _as_int(previous.get("input_tokens")))
+            step_out = max(0, value["output_tokens"] - _as_int(previous.get("output_tokens")))
+            if step_in or step_out:
+                share = by_model.setdefault(model, {"input_tokens": 0, "output_tokens": 0})
+                share["input_tokens"] += step_in
+                share["output_tokens"] += step_out
+        # Unknown is not zero: the latest counter of this pass only
+        # establishes a reference, without billing history.
+        previous = value
+    if previous is not None:
+        memo[path] = previous
+    models[path] = model
+    return by_model, cursor
 
 
 _ADAPTERS = {
@@ -270,6 +327,8 @@ class UsageWatcher:
         self.model = model or ""
         self._offsets: dict[str, int] = {}
         self._memo: dict[str, Optional[dict]] = {}
+        # Last model each transcript named (codex names it once per turn).
+        self._models: dict[str, str] = {}
         adapter = _ADAPTERS.get(kind)
         self._globs, self._delta, self._baseline = adapter if adapter else (None, None, None)
 
@@ -303,12 +362,13 @@ class UsageWatcher:
             if self._baseline:
                 self._baseline(path, size, self._memo)
 
-    def collect(self) -> dict:
-        """Sum the token deltas across every transcript and advance the
-        cursors. Returns ``{"input_tokens", "output_tokens"}``."""
-        totals = {"input_tokens": 0, "output_tokens": 0}
+    def collect_by_model(self) -> dict:
+        """Sum the token deltas across every transcript, split by the model
+        each turn ran on, and advance the cursors. Returns
+        ``{model: {"input_tokens", "output_tokens"}}``."""
+        by_model: dict[str, dict] = {}
         if not self.supported:
-            return totals
+            return by_model
         for path in self._files():
             size = self._size(path)
             offset = self._offsets.get(path)
@@ -326,10 +386,11 @@ class UsageWatcher:
                 # of the new session.
                 offset = 0
                 self._memo[path] = {}
+                self._models.pop(path, None)
             elif size == offset:
                 continue
             try:
-                delta, cursor = self._delta(path, offset, self._memo)
+                delta, cursor = self._delta(path, offset, self._memo, self._models)
             except Exception as e:  # never let accounting break the session
                 logger.debug(f"[Usage] transcript scan failed for {path}: {e}")
                 delta, cursor = {}, offset
@@ -339,25 +400,46 @@ class UsageWatcher:
             # run past `size` when the CLI appended while we were reading
             # (those bytes are consumed now, not re-read next poll).
             self._offsets[path] = max(offset, _as_int(cursor))
-            totals["input_tokens"] += _as_int((delta or {}).get("input_tokens"))
-            totals["output_tokens"] += _as_int((delta or {}).get("output_tokens"))
+            for model, share in (delta or {}).items():
+                # A turn that names no model ran on the configured one.
+                total = by_model.setdefault(
+                    model or self.model, {"input_tokens": 0, "output_tokens": 0}
+                )
+                total["input_tokens"] += _as_int(share.get("input_tokens"))
+                total["output_tokens"] += _as_int(share.get("output_tokens"))
+        return by_model
+
+    def collect(self) -> dict:
+        """`collect_by_model()` summed over models: ``{"input_tokens",
+        "output_tokens"}``."""
+        totals = {"input_tokens": 0, "output_tokens": 0}
+        for share in self.collect_by_model().values():
+            totals["input_tokens"] += share["input_tokens"]
+            totals["output_tokens"] += share["output_tokens"]
         return totals
 
     async def poll_once(self) -> bool:
-        """One scan + report. Returns True when usage was reported."""
+        """One scan + one report per model. Returns True when usage was
+        reported."""
         if not self.supported:
             return False
         loop = asyncio.get_running_loop()
-        totals = await loop.run_in_executor(None, self.collect)
-        if not totals["input_tokens"] and not totals["output_tokens"]:
-            return False
-        return await report_usage(
-            self.agent_id,
-            input_tokens=totals["input_tokens"],
-            output_tokens=totals["output_tokens"],
-            provider=self.provider,
-            model=self.model,
-        )
+        by_model = await loop.run_in_executor(None, self.collect_by_model)
+        reported = False
+        for model, share in by_model.items():
+            if not share["input_tokens"] and not share["output_tokens"]:
+                continue
+            reported = (
+                await report_usage(
+                    self.agent_id,
+                    input_tokens=share["input_tokens"],
+                    output_tokens=share["output_tokens"],
+                    provider=self.provider,
+                    model=model,
+                )
+                or reported
+            )
+        return reported
 
     async def run(self, closed) -> None:
         """Poll until the session closes, then do a final pass so the tokens

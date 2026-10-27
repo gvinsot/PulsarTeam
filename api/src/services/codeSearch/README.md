@@ -1,0 +1,152 @@
+# Code Index MCP
+
+Built-in MCP server (`ALL /api/code-index/mcp`, defined in `../codeIndexMcp.ts`) backed by
+`CodeIndexService` (`../codeIndexService.ts`). It indexes a source folder into
+`.data/code-index/<repoId>/index.json` and answers symbol, search and reference queries on it.
+
+| Module                  | Role                                                              |
+| ----------------------- | ----------------------------------------------------------------- |
+| `symbolExtractor.ts`    | Classes, functions and methods per file (regex/indent based)      |
+| `referenceExtractor.ts` | Imports and identifier occurrences per file — the reference graph |
+| `embedding.ts`          | Hashed embeddings for semantic search                             |
+| `vectorStore.ts`        | ZVEC vector store with an in-memory fallback                      |
+
+## Tools
+
+| Tool                    | Arguments                                                                      | Purpose                                             |
+| ----------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------- |
+| `index_folder`          | `path`, `repoName?`, `maxFiles?`, `maxFileSize?`                               | Index a folder (symbols, vectors, reference graph)  |
+| `ensure_indexed`        | `path`, `repoName?`                                                            | Index if absent, sync if stale; returns `repoId`    |
+| `sync`                  | `repoId`/`repoName`                                                            | Incremental re-index of what changed on disk        |
+| `check_freshness`       | `repoId`/`repoName`                                                            | Index age, git commit, files changed since indexing |
+| `index_workspace`       | `subpath?`, `repoName?`, `maxFiles?`, `maxFileSize?`                           | Index the backend workspace or a subpath            |
+| `list_repos`            | —                                                                              | Indexed repos and their `repoId`                    |
+| `find_repos_by_project` | `project`                                                                      | Indexed repos of a project, matched by name         |
+| `get_repo_summary`      | `repoId`/`repoName`                                                            | Counts by kind/language, skipped files, freshness   |
+| `get_file_tree`         | `repoId`/`repoName`                                                            | Indexed file tree                                   |
+| `get_file_outline`      | `repoId`/`repoName`, `filePath`                                                | Symbols of one file                                 |
+| `get_symbol`            | `repoId`/`repoName`, `symbolId`, `verify?`, `contextLines?`                    | Source + metadata of a symbol, optional drift check |
+| `read_file_range`       | `repoId`/`repoName`, `filePath`, `startLine`, `endLine?`                       | Lines of an indexed file, always drift-checked      |
+| `search_symbols`        | `repoId`/`repoName`, `query`, `kind?`, `topK?`                                 | Lexical search on names/signatures/summaries        |
+| `search_semantic`       | `repoId`/`repoName`, `query`, `topK?`                                          | Embedding search                                    |
+| `search_text`           | `repoId`/`repoName`, `query`, `topK?`                                          | Exact text search in symbol bodies                  |
+| `find_references`       | `repoId`/`repoName`, `symbolId`, `limit?`, `minConfidence?`, `includeImports?` | Every place referencing a symbol                    |
+| `find_callers`          | `repoId`/`repoName`, `symbolId`, `limit?`, `minConfidence?`                    | The symbols calling a function/method/constructor   |
+| `update_files`          | `repoId`/`repoName`, `files[{ path, content? }]`                               | Incremental re-index (symbols, vectors and graph)   |
+| `delete_repo`           | `repoId`/`repoName`                                                            | Drop an index                                       |
+
+`repoId`/`repoName`: every tool working on one repo takes either the opaque `repoId` or a
+`repoName` such as `"PulsarTeam"`, matched case-insensitively against the repo names, then
+against the basename of their root folder (`CodeIndexService.resolveRepoId`). `repoId` wins when
+both are passed, so existing calls keep working. An unknown name, or one shared by several
+indexes (same name, different folders), is rejected with the candidates; pass `repoId` then.
+`find_repos_by_project` returns the repos of a project name, to check that the agent's
+current project is indexed before searching.
+
+Symbol IDs look like `src/auth.js::AuthService.login#method`; get them from
+`get_file_outline` or the `search_*` tools.
+
+## Freshness and sync
+
+Indexes are snapshots. Every `search_symbols` / `search_semantic` / `search_text` response (and
+`get_repo_summary`, `check_freshness`) starts with the index freshness, and its JSON is
+`{ freshness, results }`:
+
+```json
+{
+  "stale": true,
+  "indexedAt": "2026-10-25T10:00:00.000Z",
+  "lastRefreshedAt": "2026-10-25T10:12:00.000Z",
+  "indexAgeMs": 180000,
+  "indexAge": "3m",
+  "changedFileCount": 2,
+  "changedFiles": { "modified": ["src/auth.ts"], "added": ["src/new.ts"], "deleted": [] },
+  "changedFilesTruncated": false,
+  "git": {
+    "indexedCommit": "83722a7e…",
+    "currentCommit": "49391ee8…",
+    "branch": "main",
+    "headMoved": true
+  },
+  "checkedAt": "2026-10-25T10:15:00.000Z"
+}
+```
+
+- `stale` is true when an indexable file was modified, added or deleted on disk since it was
+  indexed. Files are compared by size + mtime (stored per file at indexing) and confirmed by
+  content hash, so a file touched without changes is not stale. `null` with an `error` when
+  the scan failed (e.g. the root folder is gone).
+- `lastRefreshedAt` is the latest full index, `update_files` or `sync`; `indexAge` is measured
+  from it. Up to 20 paths are listed per category (`changedFilesTruncated` when more).
+- `git` (null outside a git work tree): the HEAD recorded at the last index/sync and the current
+  one. A moved HEAD alone does not make the index stale — only file contents matter to results.
+- Results are cached for 5 s so a burst of searches scans the repo once; any index write drops
+  the cache. `check_freshness` always rescans.
+
+`sync` re-indexes incrementally: discovery runs with the limits of the original index, files
+whose size and mtime match are skipped without being read, the others are hashed — only real
+changes are re-parsed (symbols, vectors, reference graph), deleted files are dropped, touched
+files just get their new mtime, and the git HEAD is recorded. Indexes written before mtimes were
+tracked are hashed in full once, then healed by the first sync.
+
+`ensure_indexed(path)` is the one-shot entry point: it reuses the index of that root folder
+(whatever its name; `repoName` names a new index or picks among several of the same folder),
+indexes the folder when none exists, syncs when it is stale or git HEAD moved, and otherwise
+does nothing. It returns `repoId`, `action` (`indexed` / `synced` / `fresh`) and the freshness.
+
+The agent manager still pushes edits made through its own file tools via a debounced
+`update_files`; `sync` / `ensure_indexed` catch everything else (git pulls, other processes).
+
+## Reading file ranges
+
+`read_file_range` reads lines `startLine`–`endLine` (1-based, inclusive) of a file **present in
+the index** — imports, config, module-level code that no symbol covers — without falling back to
+raw file tools. The content is read live from disk and its hash compared with the file's
+indexed `contentHash`, like `get_symbol` with `verify: true`: `driftDetected: true` means the
+file changed since indexing (run `update_files` on it). The result also lists the indexed
+`symbols` overlapping the range, with their `symbolId` for `get_symbol`.
+
+- `endLine` defaults to `startLine + 199`; a range may span at most 2000 lines.
+- An `endLine` past the end of the file is clamped (`endLineClamped: true`); a `startLine`
+  past it, `startLine < 1` or `endLine < startLine` is an error.
+- Files not in the index (unsupported extension, too large, outside the repo) and indexed
+  files deleted from disk are rejected with a message pointing to `get_file_tree` / `update_files`.
+
+## References and callers
+
+**Typical refactor flow:** `search_symbols` → pick the `symbolId` → `find_references`
+(with `minConfidence: "high"` for the certain hits first) → edit → `update_files`.
+`find_callers` returns a `symbolId` per caller, so calling it again walks the call graph upwards.
+
+### How the graph is built
+
+At indexing (`index_folder`, `index_workspace`, `update_files`) each file stores, next to its
+symbols:
+
+- `imports` — ESM `import`, `export … from` re-exports, CommonJS `require`, Python
+  `import` / `from … import`, with the local names they bind (aliases included);
+- `references` — every identifier occurrence in code (comments and strings are masked first,
+  template-literal `${…}` expressions are kept), keyed by name, flagged as call / member access /
+  import, with the receiver of member accesses (`this.save()` → receiver `this`).
+
+At query time the occurrences of the symbol's name (and of its import aliases) are resolved:
+
+| Confidence | When                                                                                                                                                                                                                                                                                                                         |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `high`     | Same file; a name imported from the symbol's file (relative JS/TS specifiers with extension, `index` and `.js`→`.ts` fallbacks; Python relative/absolute modules, packages, re-exports through barrels/`__init__`); `ns.name` via a namespace import; a method called on `this`/`self` inside its class or on the class name |
+| `medium`   | A name imported from an unresolved module whose last segment matches the symbol's file (path aliases); a method called on another receiver when no other symbol shares its name; same-name uses in languages without import tracking (Go, Rust, Java, C/C++, Ruby)                                                           |
+| `low`      | Shares the name only (globals, subclasses, other receivers of a common method name)                                                                                                                                                                                                                                          |
+
+Files that import the same name from another module, or define their own top-level symbol
+with that name, are excluded. Each hit has `filePath`, `line`, `kind`
+(`call` / `import` / `reference`), `confidence`, the innermost `enclosingSymbol` and a
+`preview` of the line read live from disk.
+
+### Limits
+
+- Lexical, not type-based: `obj.method()` on an untyped receiver cannot be tied to a class,
+  hence `medium`/`low` confidence for such calls.
+- Only symbols the extractor finds can be targets or enclosing callers (e.g. JS methods whose
+  parameter list spans several lines are not extracted today).
+- Indexes created before the graph existed return `graphAvailable: false`; re-run
+  `index_folder` to build it.

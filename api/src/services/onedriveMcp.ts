@@ -3,6 +3,7 @@ import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getOnedriveAccessTokenForAgent } from '../routes/onedrive.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { joinStoragePath, recordTaskStorageChange } from './taskStorageChanges.js';
 import { createProviderFetch, readBodyCapped } from './providerFetch.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
@@ -264,6 +265,15 @@ export function createOneDriveMcpServer(
         }),
       });
 
+      await recordTaskStorageChange(agentId, {
+        provider: 'onedrive',
+        action: 'folder_created',
+        path: joinStoragePath(parentPath, result.name || name),
+        name: result.name || name,
+        itemId: result.id,
+        webUrl: result.webUrl || null,
+      });
+
       return text(
         `Folder "${name}" created successfully in "${parentPath}".\nID: ${result.id}\nWeb URL: ${result.webUrl}`
       );
@@ -298,6 +308,15 @@ export function createOneDriveMcpServer(
       }
 
       const result = await res.json();
+      // Graph answers 201 for a new file and 200 when it replaced an existing one.
+      await recordTaskStorageChange(agentId, {
+        provider: 'onedrive',
+        action: res.status === 201 ? 'created' : 'updated',
+        path: joinStoragePath(null, path.replace(/^\/+/, '')),
+        name: result.name || path.split('/').pop() || path,
+        itemId: result.id,
+        webUrl: result.webUrl || null,
+      });
       return text(
         `File uploaded to "${path}".\nID: ${result.id}\nSize: ${(result.size / 1024).toFixed(1)} KB\nWeb URL: ${result.webUrl}`
       );
@@ -325,6 +344,15 @@ export function createOneDriveMcpServer(
         const text = await res.text();
         throw new Error(`Delete failed ${res.status}: ${text}`);
       }
+
+      await recordTaskStorageChange(agentId, {
+        provider: 'onedrive',
+        action: 'deleted',
+        path: joinStoragePath(null, path.replace(/^\/+/, '')),
+        name: path.split('/').pop() || path,
+        itemId: null,
+        webUrl: null,
+      });
 
       return text(`"${path}" has been deleted (moved to recycle bin).`);
     }

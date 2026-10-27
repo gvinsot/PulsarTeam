@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import os
 import errno
-import hashlib
 import pty
 import json
 import fcntl
@@ -94,6 +93,45 @@ READ_CHUNK = 4096
 # the last capture) to tell real activity from no-op redraws — see
 # _sample_screen.
 SCREEN_SAMPLE_INTERVAL_SEC = float(os.getenv("TERMINAL_SCREEN_SAMPLE_SEC", "1.0"))
+
+# Glyphs TUIs draw as their own (software) cursor. Some CLIs blink it by
+# alternating such a glyph with a blank cell, which changes the screen text
+# every half second while the agent sits idle at its prompt.
+CURSOR_GLYPHS = frozenset(" _|\u2588\u2589\u258a\u258b\u258c\u258d\u258e\u258f"
+                          "\u2590\u2581\u2582\u2583\u2584\u2585\u2586\u2587"
+                          "\u2502\u2503\u25ae\u25af\u00a0")
+# A software cursor is at most this many cells wide (wide/double cursors).
+_MAX_CURSOR_CELLS = 2
+
+
+def is_cursor_blink(before: Optional[str], after: Optional[str]) -> bool:
+    """True when two captures of the screen differ only by a blinking cursor:
+    one line changed, in at most _MAX_CURSOR_CELLS adjacent cells, each going
+    between a cursor glyph and a blank (or another cursor glyph)."""
+    if before is None or after is None or before == after:
+        return False
+    a = [line.rstrip() for line in before.splitlines()]
+    b = [line.rstrip() for line in after.splitlines()]
+    # Trailing blank lines are not significant (a cursor alone on the last
+    # line vanishes from the capture when it blinks off).
+    while a and not a[-1]:
+        a.pop()
+    while b and not b[-1]:
+        b.pop()
+    height = max(len(a), len(b))
+    a += [""] * (height - len(a))
+    b += [""] * (height - len(b))
+    changed = [i for i in range(height) if a[i] != b[i]]
+    if len(changed) != 1:
+        return False
+    la, lb = a[changed[0]], b[changed[0]]
+    width = max(len(la), len(lb))
+    la, lb = la.ljust(width), lb.ljust(width)
+    cells = [i for i in range(width) if la[i] != lb[i]]
+    if not cells or len(cells) > _MAX_CURSOR_CELLS or cells[-1] - cells[0] >= _MAX_CURSOR_CELLS:
+        return False
+    return all(la[i] in CURSOR_GLYPHS and lb[i] in CURSOR_GLYPHS for i in cells)
+
 
 # ── Execution-scoped history capture ────────────────────────────────────────
 #
@@ -298,6 +336,31 @@ _READY_RECIPES: dict[str, _ReadyRecipe] = {
     "claude": _CLAUDE_READY_RECIPE,
     "claude-code": _CLAUDE_READY_RECIPE,
 }
+
+
+# Per-CLI screen regions that animate on their own while the CLI sits idle, and
+# must therefore not count as activity in the screen-change digest. Vibe's
+# idle banner (`petit_chat`) is a cat mascot drawn in Braille cells (U+2800–
+# U+28FF) that animates forever, so every frame looked like a fresh change and
+# the agent never went idle. Masking the Braille block is safe: a running Vibe
+# turn also renders an elapsed counter (`(3s Esc/Ctrl+C to interrupt)`) that
+# ticks every second, so real work is still seen as screen activity.
+# Each Braille cell is replaced by a space, not deleted: Vibe renders an EMPTY
+# cell as a plain space, so as the cat moves (tail, head, blinking eyes) cells
+# flip between a Braille glyph and a space — deleting the glyphs would still
+# leave a different number of spaces on the line from frame to frame.
+_BRAILLE_RE = re.compile(rb"\xe2(?:\xa0|\xa1|\xa2|\xa3)[\x80-\xbf]")
+_SCREEN_ANIMATION_MASKS: dict[str, re.Pattern[bytes]] = {
+    "vibe": _BRAILLE_RE,
+}
+
+
+def mask_idle_animation(cmd: list[str], screen: bytes) -> bytes:
+    """Blank out the CLI's idle-time animation (see _SCREEN_ANIMATION_MASKS)
+    from a captured pane so it does not register as a screen change."""
+    executable = os.path.basename(cmd[0]).lower() if cmd else ""
+    mask = _SCREEN_ANIMATION_MASKS.get(executable)
+    return mask.sub(b" ", screen) if mask else screen
 
 
 def _ready_recipe(cmd: list[str]) -> _ReadyRecipe:
@@ -642,7 +705,8 @@ class PtySession:
     # those as activity kept finished CLI agents "busy" forever. This is what
     # status() reports as idle_seconds. Fed by _screen_watch_loop.
     _last_screen_change_at: float = 0.0
-    _screen_digest: Optional[bytes] = None
+    # Visible pane text at the last capture (see _sample_screen).
+    _screen_text: Optional[str] = None
     # _last_output_at as of the last screen capture: output newer than this
     # has not been classified yet.
     _screen_sampled_output_at: float = 0.0
@@ -1818,8 +1882,8 @@ class PtySession:
             and not self._pane_dead_handled
         )
 
-    def _capture_screen_digest(self) -> Optional[bytes]:
-        """Digest of the visible pane text (no attributes), None on failure."""
+    def _capture_screen_text(self) -> Optional[str]:
+        """Visible pane text (no attributes), None on failure."""
         if not self._tmux_session:
             return None
         try:
@@ -1828,20 +1892,24 @@ class PtySession:
             return None
         if result.returncode != 0:
             return None
-        return hashlib.blake2b(result.stdout, digest_size=16).digest()
+        screen = mask_idle_animation(self.cmd, result.stdout)
+        return screen.decode("utf-8", errors="replace")
 
     async def _sample_screen(self) -> None:
         """Classify the output printed since the last sample: did it change
-        what is on screen? Only then does it count as activity."""
+        what is on screen? Only then does it count as activity. A change that
+        is only a blinking cursor glyph is not activity either."""
         output_at = self._last_output_at
         if output_at <= self._screen_sampled_output_at:
             return
-        digest = await asyncio.to_thread(self._capture_screen_digest)
+        text = await asyncio.to_thread(self._capture_screen_text)
         self._screen_sampled_output_at = output_at
         # A failed capture cannot prove the output was a no-op: count it.
-        if digest is None or digest != self._screen_digest:
+        if text is None or (
+            text != self._screen_text and not is_cursor_blink(self._screen_text, text)
+        ):
             self._last_screen_change_at = max(self._last_screen_change_at, output_at)
-        self._screen_digest = digest
+        self._screen_text = text
 
     async def _screen_watch_loop(self) -> None:
         while not self._closed:
@@ -1856,12 +1924,17 @@ class PtySession:
     def activity_idle_seconds(self) -> Optional[float]:
         """Seconds since the CLI last did something VISIBLE: the screen text
         changed. Output not yet classified by the sampler counts as a change
-        (conservative: it is at most one sample interval old). None when the
-        PTY never printed."""
+        (conservative: it is at most one sample interval old) — unless the
+        last classified output was a no-op: a CLI that keeps redrawing an idle
+        animation (Vibe's cat, a blinking cursor) always has unclassified
+        output pending, which would pin idle_seconds near 0 forever. Its next
+        bytes wait for the sampler instead. None when the PTY never printed."""
         if not self._last_output_at:
             return None
         now = time.monotonic()
-        if not self._last_screen_change_at or self._last_output_at > self._screen_sampled_output_at:
+        pending = self._last_output_at > self._screen_sampled_output_at
+        last_sample_was_noop = self._screen_sampled_output_at > self._last_screen_change_at
+        if not self._last_screen_change_at or (pending and not last_sample_was_noop):
             last = max(self._last_output_at, self._last_screen_change_at)
         else:
             last = self._last_screen_change_at

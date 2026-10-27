@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { getCommitDiff, api } from '../api';
 import { useClickOutside, useEscapeKey } from '../hooks/useDismiss';
 import { errorMessage } from '../utils/errors';
@@ -312,26 +312,30 @@ function RevertConfirmModal({
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// All Commits Diff Modal
+// Commits diff panel — the body of the All Commits modal, also embedded in the
+// task modal's Modifications tab
 // ═════════════════════════════════════════════════════════════════════════════
 
-export default function AllCommitsDiffModal({
+export function CommitsDiffPanel({
   taskId,
   commits,
-  onClose,
-  initialHash,
   agentId,
-  project: _project,
+  initialHash = null,
+  onEscape,
+  headerExtra,
+  scrollClassName = 'flex-1 overflow-y-auto p-4 space-y-3',
 }: {
   taskId: string;
   commits: TaskCommit[];
-  onClose: () => void;
-  /** The commit the caller wants scrolled into view, or null for "none". */
-  initialHash: string | null;
   /** Task.agentId — null for a board-level task, which hides the revert flow. */
   agentId: string | null;
-  /** Task.project. Accepted for parity with the caller and deliberately unused. */
-  project: string | null;
+  /** The commit the caller wants scrolled into view, or null for "none". */
+  initialHash?: string | null;
+  /** When set, the panel owns Escape: it unwinds the revert flow first, then calls this. */
+  onEscape?: () => void;
+  /** Rendered at the end of the header row (the modal's close button). */
+  headerExtra?: ReactNode;
+  scrollClassName?: string;
 }) {
   const [diffs, setDiffs] = useState<Record<string, CommitDiff>>({}); // hash -> diff data
   const [loading, setLoading] = useState<Record<string, boolean>>({}); // hash -> boolean
@@ -343,20 +347,26 @@ export default function AllCommitsDiffModal({
   // Only its truthiness is ever read (the success banner); `taskId` is nullable
   // because `result.taskId` below is a key no producer writes — see handleRevert.
   const [revertSuccess, setRevertSuccess] = useState<{ taskId: string | undefined } | null>(null);
-  const modalRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Diffs already requested: a task:updated frame hands over a new `commits`
+  // array on every change, which must only fetch the commits not seen yet.
+  const requested = useRef<Set<string>>(new Set());
+  const commitKey = commits.map(c => c.hash).join(',');
 
-  // Fetch all commit diffs on mount
+  // Fetch the diff of every commit not fetched yet
   useEffect(() => {
-    if (!commits?.length) return;
-
-    const initLoading: Record<string, boolean> = {};
-    commits.forEach(c => {
-      initLoading[c.hash] = true;
+    const pending = commits.filter(c => !requested.current.has(c.hash));
+    if (!pending.length) return;
+    pending.forEach(c => requested.current.add(c.hash));
+    setLoading(prev => {
+      const next = { ...prev };
+      pending.forEach(c => {
+        next[c.hash] = true;
+      });
+      return next;
     });
-    setLoading(initLoading);
 
-    commits.forEach(c => {
+    pending.forEach(c => {
       getCommitDiff(taskId, c.hash)
         .then(data => {
           setDiffs(prev => ({ ...prev, [c.hash]: data }));
@@ -368,7 +378,8 @@ export default function AllCommitsDiffModal({
           setLoading(prev => ({ ...prev, [c.hash]: false }));
         });
     });
-  }, [taskId, commits]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the hash list
+  }, [taskId, commitKey]);
 
   // Scroll to initial commit if specified
   useEffect(() => {
@@ -378,8 +389,7 @@ export default function AllCommitsDiffModal({
     }
   }, [initialHash, diffs]);
 
-  // Close on outside click / Escape (Escape unwinds layered state first)
-  useClickOutside(modalRef, onClose);
+  // Escape unwinds layered state first
   useEscapeKey(() => {
     if (showConfirm) {
       setShowConfirm(false);
@@ -390,8 +400,8 @@ export default function AllCommitsDiffModal({
       setSelectedCommits(new Set());
       return;
     }
-    onClose();
-  });
+    onEscape?.();
+  }, !!onEscape);
 
   function toggleSelect(hash: string) {
     setSelectedCommits(prev => {
@@ -436,82 +446,56 @@ export default function AllCommitsDiffModal({
   const totalFiles = Object.values(diffs).reduce((s, d) => s + (d?.files?.length || 0), 0);
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div
-        ref={modalRef}
-        className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col"
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 shrink-0">
-          <div className="flex items-center gap-3">
-            <svg
-              className="w-5 h-5 text-amber-400"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              viewBox="0 0 24 24"
-            >
-              <circle cx="12" cy="12" r="4" />
-              <path strokeLinecap="round" d="M12 2v6m0 8v6" />
-            </svg>
-            <h3 className="text-white font-semibold text-base">All Commits ({commits.length})</h3>
-            {allLoaded && (
-              <span className="text-xs text-gray-400 ml-2">
-                <span className="text-green-400">+{totalAdditions}</span>
-                {' / '}
-                <span className="text-red-400">-{totalDeletions}</span>
-                {' across '}
-                {totalFiles} file{totalFiles !== 1 ? 's' : ''}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Revert button */}
-            {agentId &&
-              !revertSuccess &&
-              (revertMode ? (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={selectAll}
-                    className="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1"
-                  >
-                    {selectedCommits.size === commits.length ? 'Deselect all' : 'Select all'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setRevertMode(false);
-                      setSelectedCommits(new Set());
-                    }}
-                    className="px-3 py-1.5 text-xs text-gray-300 hover:text-white bg-gray-800 border border-white/10 hover:border-white/20 rounded-lg transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => setShowConfirm(true)}
-                    disabled={selectedCommits.size === 0}
-                    className="px-3 py-1.5 text-xs text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M3 10h10a5 5 0 010 10H3m0-10l4-4m-4 4l4 4"
-                      />
-                    </svg>
-                    Revert ({selectedCommits.size})
-                  </button>
-                </div>
-              ) : (
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 shrink-0">
+        <div className="flex items-center gap-3">
+          <svg
+            className="w-5 h-5 text-amber-400"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            viewBox="0 0 24 24"
+          >
+            <circle cx="12" cy="12" r="4" />
+            <path strokeLinecap="round" d="M12 2v6m0 8v6" />
+          </svg>
+          <h3 className="text-white font-semibold text-base">All Commits ({commits.length})</h3>
+          {allLoaded && (
+            <span className="text-xs text-gray-400 ml-2">
+              <span className="text-green-400">+{totalAdditions}</span>
+              {' / '}
+              <span className="text-red-400">-{totalDeletions}</span>
+              {' across '}
+              {totalFiles} file{totalFiles !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Revert button */}
+          {agentId &&
+            !revertSuccess &&
+            (revertMode ? (
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setRevertMode(true)}
-                  className="px-3 py-1.5 text-xs text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 rounded-lg transition-colors flex items-center gap-1.5"
-                  title="Select commits to revert"
+                  onClick={selectAll}
+                  className="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1"
+                >
+                  {selectedCommits.size === commits.length ? 'Deselect all' : 'Select all'}
+                </button>
+                <button
+                  onClick={() => {
+                    setRevertMode(false);
+                    setSelectedCommits(new Set());
+                  }}
+                  className="px-3 py-1.5 text-xs text-gray-300 hover:text-white bg-gray-800 border border-white/10 hover:border-white/20 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setShowConfirm(true)}
+                  disabled={selectedCommits.size === 0}
+                  className="px-3 py-1.5 text-xs text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -526,10 +510,128 @@ export default function AllCommitsDiffModal({
                       d="M3 10h10a5 5 0 010 10H3m0-10l4-4m-4 4l4 4"
                     />
                   </svg>
-                  Revert
+                  Revert ({selectedCommits.size})
                 </button>
-              ))}
-            {/* Close button */}
+              </div>
+            ) : (
+              <button
+                onClick={() => setRevertMode(true)}
+                className="px-3 py-1.5 text-xs text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 rounded-lg transition-colors flex items-center gap-1.5"
+                title="Select commits to revert"
+              >
+                <svg
+                  className="w-3.5 h-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M3 10h10a5 5 0 010 10H3m0-10l4-4m-4 4l4 4"
+                  />
+                </svg>
+                Revert
+              </button>
+            ))}
+          {headerExtra}
+        </div>
+      </div>
+
+      {/* Success banner */}
+      {revertSuccess && (
+        <div className="mx-5 mt-3 px-4 py-3 rounded-xl bg-green-500/10 border border-green-500/30 flex items-center gap-3">
+          <svg
+            className="w-5 h-5 text-green-400 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <span className="text-sm text-green-300">
+            Revert task created successfully. The agent will process it shortly.
+          </span>
+        </div>
+      )}
+
+      {/* Body — scrollable list of all commits */}
+      <div ref={scrollRef} className={scrollClassName}>
+        {commits.map(c => (
+          <div key={c.hash} data-hash={c.hash}>
+            <CommitSection
+              commit={c}
+              diff={diffs[c.hash] || null}
+              loading={loading[c.hash] || false}
+              error={errors[c.hash] || null}
+              selected={selectedCommits.has(c.hash)}
+              onToggleSelect={toggleSelect}
+              showSelect={revertMode}
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* Revert confirmation overlay */}
+      {showConfirm && (
+        <RevertConfirmModal
+          selectedCommits={selectedCommits}
+          commits={commits}
+          onConfirm={handleRevert}
+          onCancel={() => setShowConfirm(false)}
+          reverting={reverting}
+        />
+      )}
+    </>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// All Commits Diff Modal
+// ═════════════════════════════════════════════════════════════════════════════
+
+export default function AllCommitsDiffModal({
+  taskId,
+  commits,
+  onClose,
+  initialHash,
+  agentId,
+  project: _project,
+}: {
+  taskId: string;
+  commits: TaskCommit[];
+  onClose: () => void;
+  /** The commit the caller wants scrolled into view, or null for "none". */
+  initialHash: string | null;
+  /** Task.agentId — null for a board-level task, which hides the revert flow. */
+  agentId: string | null;
+  /** Task.project. Accepted for parity with the caller and deliberately unused. */
+  project: string | null;
+}) {
+  const modalRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click / Escape (the panel unwinds its revert flow first)
+  useClickOutside(modalRef, onClose);
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div
+        ref={modalRef}
+        className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col"
+      >
+        <CommitsDiffPanel
+          taskId={taskId}
+          commits={commits}
+          agentId={agentId}
+          initialHash={initialHash}
+          onEscape={onClose}
+          headerExtra={
             <button
               onClick={onClose}
               className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
@@ -544,59 +646,9 @@ export default function AllCommitsDiffModal({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-          </div>
-        </div>
-
-        {/* Success banner */}
-        {revertSuccess && (
-          <div className="mx-5 mt-3 px-4 py-3 rounded-xl bg-green-500/10 border border-green-500/30 flex items-center gap-3">
-            <svg
-              className="w-5 h-5 text-green-400 shrink-0"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <span className="text-sm text-green-300">
-              Revert task created successfully. The agent will process it shortly.
-            </span>
-          </div>
-        )}
-
-        {/* Body — scrollable list of all commits */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-          {commits.map(c => (
-            <div key={c.hash} data-hash={c.hash}>
-              <CommitSection
-                commit={c}
-                diff={diffs[c.hash] || null}
-                loading={loading[c.hash] || false}
-                error={errors[c.hash] || null}
-                selected={selectedCommits.has(c.hash)}
-                onToggleSelect={toggleSelect}
-                showSelect={revertMode}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Revert confirmation overlay */}
-      {showConfirm && (
-        <RevertConfirmModal
-          selectedCommits={selectedCommits}
-          commits={commits}
-          onConfirm={handleRevert}
-          onCancel={() => setShowConfirm(false)}
-          reverting={reverting}
+          }
         />
-      )}
+      </div>
     </div>
   );
 }
