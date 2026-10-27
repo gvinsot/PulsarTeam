@@ -37,10 +37,16 @@ ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_FLAGS="--no-sandbox --headless --disable-gpu --disable-dev-shm-usage"
 
 # OpenClaw >=2026.9 requires Node >=24.16.0; all CLI runners share this runtime.
-# NodeSource 24.x supplies the current Node 24 LTS patch release.
+# NodeSource 24.x supplies the current Node 24 LTS patch release. The build
+# fails if the repo (or a stale mirror/cache) serves anything older than
+# 24.22.1, the 2026-10-21 security release (CVE-2026-111497 Brotli RCE,
+# CVE-2026-105481/105483/106069/106070/106071/106072/106074).
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && node -e 'const [a,b,c]=process.versions.node.split(".").map(Number); \
+        if (a<24 || (a===24 && (b<22 || (b===22 && c<1)))) { \
+          console.error("Node "+process.version+" < 24.22.1 (security release 2026-10-21)"); process.exit(1); }'
 
 # ─── Agent CLIs ────────────────────────────────────────────────────────────
 # Each runner backend invokes its own CLI binary. We install all of them
