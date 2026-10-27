@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { NATIVE_TOOL_DEFINITIONS, toExecutionToolCall } from '../nativeTools.js';
-import { ClaudeProvider, VLLMProvider } from '../llmProviders.js';
+import { ClaudeProvider, VLLMProvider, createProvider } from '../llmProviders.js';
 
 function mockProviderCreate(provider: VLLMProvider, create: (params: any) => any): void {
   (provider as any).client = { chat: { completions: { create } } };
@@ -175,4 +175,12 @@ test('ClaudeProvider keeps a tool-only assistant turn that still carries tool_us
     content: [{ type: 'tool_use', id: 'call_1', name: 'read_file', input: { path: 'a.ts' } }],
   });
   assert.equal(mapped[2].content[0].type, 'tool_result');
+});
+
+test('createProvider maps the UI provider id "anthropic" to ClaudeProvider', () => {
+  for (const provider of ['anthropic', 'claude']) {
+    const created = createProvider({ provider, apiKey: 'key', model: 'claude-opus-5-5' });
+    assert.ok(created instanceof ClaudeProvider, provider);
+    assert.equal(created.model, 'claude-opus-5-5');
+  }
 });

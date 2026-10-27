@@ -1327,6 +1327,8 @@ export function createProvider(config: any): any {
   switch (config.provider) {
     case 'ollama':
       return new OllamaProvider(config.endpoint || 'http://localhost:11434', config.model);
+    // 'anthropic' is the id the LLM-config UI stores; 'claude' is the legacy id.
+    case 'anthropic':
     case 'claude':
       return new ClaudeProvider(config.apiKey, config.model);
     case 'openai':
