@@ -1312,6 +1312,9 @@ export class MistralProvider extends VLLMProvider {
 // 'coder' → 'claudecode').
 
 export function createProvider(config: any): any {
+  if (config.provider === 'decision' || config.llmConfig?.provider === 'decision') {
+    throw new Error('Decision models are only available in board decision actions, not agent chat');
+  }
   const cliServiceType = resolveRunnerService(config.provider);
   if (isCliRunner({ runner: config.provider }) && cliServiceType) {
     return new VLLMProvider(

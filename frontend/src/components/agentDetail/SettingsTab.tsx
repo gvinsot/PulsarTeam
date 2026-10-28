@@ -1,4 +1,4 @@
-import { isRealtimeLlm, voiceOptions, selectedVoice } from '../../utils/llmConfig';
+import { isRealtimeLlm, isChatModel, voiceOptions, selectedVoice } from '../../utils/llmConfig';
 import { useState, useEffect } from 'react';
 import { Save, Trash2, RotateCw, Power, Users } from 'lucide-react';
 import { api } from '../../api';
@@ -492,7 +492,7 @@ export default function SettingsTab({
               const modelOptions = (
                 agent.isVoice && agent.voiceMode !== 'external'
                   ? llmConfigs.filter(isRealtimeLlm)
-                  : llmConfigs
+                  : llmConfigs.filter(isChatModel)
               ).filter(c => agent.isVoice || isLlmAllowedForRunner(c.id, form.runner));
               return (
                 <select

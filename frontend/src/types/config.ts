@@ -36,6 +36,7 @@ export type LlmProvider =
   | 'openrouter'
   | 'vllm'
   | 'ollama'
+  | 'decision'
   | ''
   | (string & {});
 

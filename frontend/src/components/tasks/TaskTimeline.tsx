@@ -13,6 +13,7 @@ import {
 import { MODE_LABELS, timeAgo, formatDate } from './taskConstants';
 import type { TaskCommit, TaskHistoryEntry } from '../../types';
 import { useUserDisplayName } from '../../hooks/useUserDisplayName';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 interface TaskTimelineProps {
   /** `Task.history` — always an array on a GET /tasks row, but the caller reads
@@ -39,6 +40,7 @@ export default function TaskTimeline({
   onOpenCommit,
   onRemoveCommit,
 }: TaskTimelineProps) {
+  const { t } = useLanguage();
   const displayName = useUserDisplayName();
   // `as const` on the two discriminants: without it both widen to `string` and
   // the `item.kind === 'commit'` test below stops narrowing the merged array.
@@ -144,7 +146,16 @@ export default function TaskTimeline({
                 <div className="absolute -left-[17px] top-1.5 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900 group-hover:bg-indigo-500 group-hover:ring-indigo-500/30 transition-colors" />
                 <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
                   <div className="flex items-center gap-1.5 text-xs min-w-0">
-                    {item.h.type === 'execution' ? (
+                    {item.h.type === 'decision' ? (
+                      <>
+                        <ArrowRight className="w-2.5 h-2.5 text-teal-400 flex-shrink-0" />
+                        <span className="text-teal-300 font-medium">{t('decision.model')}</span>
+                        <span className="text-dark-400 truncate">
+                          {item.h.target || t('decision.manualReview')} ·{' '}
+                          {item.h.confidence?.toFixed(3)}
+                        </span>
+                      </>
+                    ) : item.h.type === 'execution' ? (
                       <>
                         <MessageSquare className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
                         <span

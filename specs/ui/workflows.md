@@ -133,6 +133,26 @@ A modal that lets a user with edit permission rebuild the board's workflow.
 
 The default board's workflow is read-only.
 
+### Decision model action
+
+In Admin → LLM Configurations, choose **Decision model (Jev / System One)**.
+The form pre-fills AIFabric's `d3-mini` and
+`http://llamacpp-decision-service:8000`; no API key is required for this service.
+The endpoint and model can be changed for Jev or another System One service.
+Chat/agent settings exclude decision models.
+
+In the workflow editor, add **Route with a decision model** to a column's
+on-entry or conditional actions. Select the model, enter a decision question,
+then choose at least two destination columns and describe when each should be
+selected. Set the minimum confidence (default 0.6) and optionally choose a
+fallback column for uncertain results. Calibrate the threshold on real tasks.
+
+The decision reads the title, description, type and priority. No agent is started.
+Without a fallback, an uncertain answer stops the workflow for manual review;
+service errors or malformed answers also stop with an error. The task timeline
+shows the decision, confidence and destination, with details on click. A decision
+action ends the chain; actions on entry to the chosen column run normally.
+
 ---
 
 ## 9. Board plugins tab

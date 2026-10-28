@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid, Users } from 'lucide-react';
 import { api } from '../api';
 import type { AgentBatchCreated, AgentCreated } from '../api';
-import { isRealtimeLlm, voiceOptions, selectedVoice } from '../utils/llmConfig';
+import { isRealtimeLlm, isChatModel, voiceOptions, selectedVoice } from '../utils/llmConfig';
 import { useEnabledAgentTypes } from '../hooks/useEnabledAgentTypes';
 import { AGENT_TYPE_OPTION_LABELS, AGENT_TYPE_SELECT_ORDER } from '../utils/agentTypes';
 import { errorMessage } from '../utils/errors';
@@ -678,7 +678,7 @@ export default function AddAgentModal({
                           <option value="">{placeholder}</option>
                           {(form.isVoice && form.voiceMode === 'realtime'
                             ? llmConfigs.filter(isRealtimeLlm)
-                            : llmConfigs
+                            : llmConfigs.filter(isChatModel)
                           ).map(c => (
                             <option key={c.id} value={c.id}>
                               {c.name} ({c.provider}/{c.model})

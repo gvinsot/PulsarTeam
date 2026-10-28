@@ -23,6 +23,9 @@ import {
   validTransition,
 } from './taskConstants';
 import RoleSelect from './RoleSelect';
+import DecisionActionEditor from './DecisionActionEditor';
+import { validDecisionAction } from './decisionAction';
+import { useLanguage } from '../../contexts/LanguageContext';
 import { errorMessage } from '../../utils/errors';
 import type {
   Agent,
@@ -76,6 +79,10 @@ interface WorkflowActionPatch {
   agentId?: string;
   target?: string;
   instructions?: string;
+  llmConfigId?: string;
+  routes?: Array<{ target: string; description: string }>;
+  minConfidence?: number;
+  fallbackTarget?: string;
 }
 
 // ── Condition value widget ───────────────────────────────────────────────────
@@ -223,6 +230,7 @@ export default function WorkflowEditor({
   onClose,
   onSave,
 }: WorkflowEditorProps) {
+  const { t: translate } = useLanguage();
   // Both states are a structural clone of the board's workflow, so the editor
   // can be cancelled without having mutated the board in place. `JSON.parse`
   // hands back `any`; the state's type argument is what says what the clone is.
@@ -258,6 +266,14 @@ export default function WorkflowEditor({
     : enabledAgents;
 
   const handleSave = async () => {
+    if (
+      transitions.some(transition =>
+        transition.actions.some(action => !validDecisionAction(action, cols))
+      )
+    ) {
+      setSaveError(translate('decision.invalidAction'));
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -627,7 +643,9 @@ export default function WorkflowEditor({
                                     >
                                       {ACTION_OPTIONS.map(o => (
                                         <option key={o.value} value={o.value}>
-                                          {o.label}
+                                          {o.value === 'decision_model'
+                                            ? translate('decision.action')
+                                            : o.label}
                                         </option>
                                       ))}
                                     </select>
@@ -701,6 +719,13 @@ export default function WorkflowEditor({
                                   </div>
 
                                   {/* Instructions for agent actions */}
+                                  {action.type === 'decision_model' && (
+                                    <DecisionActionEditor
+                                      action={action}
+                                      columns={cols}
+                                      onChange={patch => updateAction(idx, ai, patch)}
+                                    />
+                                  )}
                                   {action.type === 'run_agent' &&
                                     action.mode !== 'title' &&
                                     action.mode !== 'set_type' && (

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { X, Save, Eye, EyeOff, Cpu } from 'lucide-react';
 import type { LlmConfigDraft } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
+import { isDecisionModel } from '../utils/llmConfig';
 
 const PROVIDER_OPTIONS = [
   'anthropic',
@@ -12,6 +14,7 @@ const PROVIDER_OPTIONS = [
   'openrouter',
   'vllm',
   'ollama',
+  'decision',
 ];
 // Overrides only: any provider without an entry falls back to its capitalised
 // id below, so the lookup is keyed on the open provider string, not a union.
@@ -29,6 +32,7 @@ interface LlmConfigModalProps {
 }
 
 export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmConfigModalProps) {
+  const { t } = useLanguage();
   const [form, setForm] = useState<LlmConfigDraft>({ ...config });
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -38,6 +42,7 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
   };
 
   const isEditing = !!form.id;
+  const decision = isDecisionModel(form);
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
@@ -90,6 +95,19 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
                     updates.endpoint = 'http://claudecode-service:8000';
                     updates.apiKey = '';
                   }
+                  if (prov === 'decision') {
+                    Object.assign(updates, {
+                      endpoint: 'http://llamacpp-decision-service:8000',
+                      model: 'd3-mini',
+                      apiKey: '',
+                      isReasoning: false,
+                      managesContext: false,
+                      supportsImages: false,
+                      temperature: null,
+                      maxOutputTokens: null,
+                      contextSize: null,
+                    });
+                  }
                   setForm(f => ({ ...f, ...updates }));
                 }}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
@@ -98,7 +116,9 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
                 <option value="">Select provider...</option>
                 {PROVIDER_OPTIONS.map(p => (
                   <option key={p} value={p}>
-                    {PROVIDER_LABELS[p] || p.charAt(0).toUpperCase() + p.slice(1)}
+                    {p === 'decision'
+                      ? t('decision.provider')
+                      : PROVIDER_LABELS[p] || p.charAt(0).toUpperCase() + p.slice(1)}
                   </option>
                 ))}
               </select>
@@ -116,13 +136,22 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
               />
             </div>
             <datalist id="voice-model-suggestions">
+              {decision && (
+                <>
+                  <option value="d3-mini" />
+                  <option value="jev-latest" />
+                </>
+              )}
               {form.provider === 'openai' && <option value="gpt-realtime-2" />}
               {form.provider === 'google' && <option value="gemini-3.1-flash-live-preview" />}
             </datalist>
             {form.provider !== 'claude-paid' && (
               <div>
                 <label className="block text-xs text-dark-400 mb-1">
-                  Endpoint <span className="text-dark-500">(vLLM/Ollama only)</span>
+                  Endpoint{' '}
+                  <span className="text-dark-500">
+                    {decision ? t('decision.endpoint') : '(vLLM/Ollama only)'}
+                  </span>
                 </label>
                 <input
                   type="text"
@@ -130,6 +159,7 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
                   onChange={e => setForm(f => ({ ...f, endpoint: e.target.value }))}
                   className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                   placeholder="http://localhost:8000/v1"
+                  required={decision}
                 />
               </div>
             )}
@@ -162,105 +192,118 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
                 </button>
               </div>
             )}
-            <div className="flex items-center gap-4 pt-5">
-              <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={form.isReasoning || false}
-                  onChange={e => setForm(f => ({ ...f, isReasoning: e.target.checked }))}
-                  className="rounded border-dark-600 bg-dark-900 text-indigo-500 focus:ring-indigo-500"
-                />
-                Reasoning model
-              </label>
-            </div>
-            <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.managesContext || false}
-                onChange={e => setForm(f => ({ ...f, managesContext: e.target.checked }))}
-                className="rounded border-dark-600 bg-dark-900 text-teal-500 focus:ring-teal-500"
-              />
-              Manages own context
-            </label>
-            <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.supportsImages || false}
-                onChange={e => setForm(f => ({ ...f, supportsImages: e.target.checked }))}
-                className="rounded border-dark-600 bg-dark-900 text-emerald-500 focus:ring-emerald-500"
-              />
-              Supports images
-            </label>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs text-dark-400 mb-1">
-                Context Size <span className="text-dark-500">(tokens)</span>
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={form.contextSize ?? ''}
-                onChange={e =>
-                  setForm(f => ({
-                    ...f,
-                    contextSize: e.target.value ? Number(e.target.value) : null,
-                  }))
-                }
-                className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                placeholder="e.g. 200000"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-dark-400 mb-1">Max Output Tokens</label>
-              <input
-                type="number"
-                min="1"
-                value={form.maxOutputTokens ?? ''}
-                onChange={e =>
-                  setForm(f => ({
-                    ...f,
-                    maxOutputTokens: e.target.value ? Number(e.target.value) : null,
-                  }))
-                }
-                className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                placeholder="e.g. 16384"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <input
-                  type="checkbox"
-                  checked={form.temperature != null}
-                  onChange={e =>
-                    setForm(f => ({ ...f, temperature: e.target.checked ? 0.7 : null }))
-                  }
-                  className="rounded border-dark-600 bg-dark-900 text-indigo-500 focus:ring-indigo-500"
-                />
-                <label className="text-xs text-dark-400">
-                  Temperature
-                  {form.temperature != null
-                    ? `: ${form.temperature}`
-                    : ' (disabled — model default)'}
+            {decision && (
+              <p className="sm:col-span-2 text-xs text-teal-300">{t('decision.providerHelp')}</p>
+            )}
+            {!decision && (
+              <>
+                <div className="flex items-center gap-4 pt-5">
+                  <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.isReasoning || false}
+                      onChange={e => setForm(f => ({ ...f, isReasoning: e.target.checked }))}
+                      className="rounded border-dark-600 bg-dark-900 text-indigo-500 focus:ring-indigo-500"
+                    />
+                    Reasoning model
+                  </label>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.managesContext || false}
+                    onChange={e => setForm(f => ({ ...f, managesContext: e.target.checked }))}
+                    className="rounded border-dark-600 bg-dark-900 text-teal-500 focus:ring-teal-500"
+                  />
+                  Manages own context
                 </label>
-              </div>
-              {form.temperature != null && (
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={form.temperature}
-                  onChange={e => setForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))}
-                  className="w-full accent-indigo-500"
-                />
-              )}
-            </div>
+                <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.supportsImages || false}
+                    onChange={e => setForm(f => ({ ...f, supportsImages: e.target.checked }))}
+                    className="rounded border-dark-600 bg-dark-900 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  Supports images
+                </label>
+              </>
+            )}
           </div>
+
+          {!decision && (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">
+                    Context Size <span className="text-dark-500">(tokens)</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={form.contextSize ?? ''}
+                    onChange={e =>
+                      setForm(f => ({
+                        ...f,
+                        contextSize: e.target.value ? Number(e.target.value) : null,
+                      }))
+                    }
+                    className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. 200000"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Max Output Tokens</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={form.maxOutputTokens ?? ''}
+                    onChange={e =>
+                      setForm(f => ({
+                        ...f,
+                        maxOutputTokens: e.target.value ? Number(e.target.value) : null,
+                      }))
+                    }
+                    className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. 16384"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <input
+                      type="checkbox"
+                      checked={form.temperature != null}
+                      onChange={e =>
+                        setForm(f => ({ ...f, temperature: e.target.checked ? 0.7 : null }))
+                      }
+                      className="rounded border-dark-600 bg-dark-900 text-indigo-500 focus:ring-indigo-500"
+                    />
+                    <label className="text-xs text-dark-400">
+                      Temperature
+                      {form.temperature != null
+                        ? `: ${form.temperature}`
+                        : ' (disabled — model default)'}
+                    </label>
+                  </div>
+                  {form.temperature != null && (
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={form.temperature}
+                      onChange={e =>
+                        setForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))
+                      }
+                      className="w-full accent-indigo-500"
+                    />
+                  )}
+                </div>
+              </div>
+            </>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>

@@ -128,6 +128,9 @@ async function switchProjectContext(
 /** @this {import('./index.js').AgentManager} */
 export const crudMethods = {
   async create(this: any, config: any): Promise<any> {
+    if (this.llmConfigs?.get(config.llmConfigId)?.provider === 'decision') {
+      throw new Error('Decision models can only be used in board decision actions');
+    }
     const id = uuidv4();
     const agent = {
       id,
@@ -267,6 +270,9 @@ export const crudMethods = {
   },
 
   async update(this: any, id: string, updates: any): Promise<any> {
+    if (this.llmConfigs?.get(updates.llmConfigId)?.provider === 'decision') {
+      throw new Error('Decision models can only be used in board decision actions');
+    }
     const agent = this.agents.get(id);
     if (!agent) return null;
 

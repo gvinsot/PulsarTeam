@@ -4,6 +4,8 @@
  * Returns false for undefined/missing model so unset configs stay excluded.
  */
 type Config = { provider?: string | null; model?: string | null };
+export const isDecisionModel = (c?: Config | null): boolean => c?.provider === 'decision';
+export const isChatModel = (c?: Config | null): boolean => !isDecisionModel(c);
 export const isGeminiLlm = (c?: Config | null): boolean =>
   c?.provider === 'google' || c?.provider === 'gemini';
 export const isRealtimeLlm = (c?: Config | null): boolean => {

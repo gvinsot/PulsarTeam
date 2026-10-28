@@ -98,6 +98,7 @@ export type TaskRecurrencePeriod =
  * is optional rather than a required union.
  */
 export type TaskHistoryEntryType =
+  | 'decision'
   | 'edit'
   | 'reassign'
   | 'execution'
@@ -351,6 +352,15 @@ export interface TaskExecutionMessage {
  */
 export interface TaskHistoryEntry {
   type?: TaskHistoryEntryType;
+  /** Typed decision audit, without task content or provider credentials. */
+  llmConfigId?: string;
+  choice?: string;
+  confidence?: number;
+  probability?: number;
+  threshold?: number;
+  fallback?: boolean;
+  target?: string | null;
+  usage?: { input_tokens: number; output_tokens: number };
   /** ISO 8601; set by every producer. The timeline sorts on it. */
   at: string;
   /** Actor LABEL, not an id: 'user', a username, an agent NAME, 'workflow',

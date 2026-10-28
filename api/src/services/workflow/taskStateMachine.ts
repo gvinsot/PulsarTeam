@@ -28,6 +28,7 @@ export const Trigger = Object.freeze({
 export const ActionType = Object.freeze({
   RUN_AGENT: 'run_agent',
   CHANGE_STATUS: 'change_status',
+  DECISION_MODEL: 'decision_model',
   ASSIGN_AGENT: 'assign_agent',
   ASSIGN_AGENT_INDIVIDUAL: 'assign_agent_individual',
 });
@@ -84,6 +85,10 @@ export interface WorkflowAction {
   /** assign_agent_individual: the hand-picked agent. `null` means "unassign" —
    * see actionExecutor's `action.agentId || null`. */
   agentId?: string | null;
+  llmConfigId?: string;
+  routes?: Array<{ target: string; description: string }>;
+  minConfidence?: number;
+  fallbackTarget?: string;
   [key: string]: unknown;
 }
 
@@ -249,7 +254,9 @@ export function getWorkflowManagedStatuses(allBoardWorkflows: BoardWorkflow[]) {
   for (const { workflow } of allBoardWorkflows) {
     for (const t of workflow.transitions) {
       if (!isValidTransition(t)) continue;
-      const hasAgentAction = (t.actions || []).some(a => a.type === ActionType.RUN_AGENT);
+      const hasAgentAction = (t.actions || []).some(
+        a => a.type === ActionType.RUN_AGENT || a.type === ActionType.DECISION_MODEL
+      );
       const isConditional = t.trigger === Trigger.CONDITION && (t.conditions || []).length > 0;
       if (hasAgentAction || isConditional) {
         managed.add(t.from);

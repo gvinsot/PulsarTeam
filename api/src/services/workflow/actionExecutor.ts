@@ -29,6 +29,7 @@ import {
   type ClaimResult,
 } from './runClaims.js';
 import { resolveAutoRole } from './roleRouter.js';
+import { executeDecisionAction } from './decisionAction.js';
 import {
   needsApproval,
   taskContentForPrompt,
@@ -89,6 +90,8 @@ export interface ActionContext {
   workflow: WorkflowConfig | null;
   /** Status the chain started from — set by _executeActionChain only. */
   originalStatus?: string;
+  /** Typed decisions already resolved a column ID; never reinterpret it as a label/sentinel. */
+  exactStatusTarget?: boolean;
   /** Called once a run_agent action holds its DB claim: a recheck-dispatched
    *  chain releases its cross-replica advisory lock there (the claim fences the
    *  task from then on), instead of pinning a pooled connection for the whole run. */
@@ -303,6 +306,8 @@ export interface ActionResult {
   message?: string;
   /** true if a change_status action moved the task */
   statusChanged?: boolean;
+  /** Decision actions finish the chain, including a deliberate stay in place. */
+  stopChain?: boolean;
 }
 
 // ── Main executor ───────────────────────────────────────────────────────────
@@ -416,6 +421,9 @@ export async function executeAction(
 
     case ActionType.CHANGE_STATUS:
       return executeChangeStatus(action, task, context);
+
+    case ActionType.DECISION_MODEL:
+      return executeDecisionAction(action, task, context, executeChangeStatus);
 
     case ActionType.RUN_AGENT:
       return executeRunAgent(action, task, context);
@@ -542,12 +550,12 @@ async function executeAssignAgentIndividual(
 async function executeChangeStatus(
   action: WorkflowAction,
   task: Task,
-  { agentManager, workflow }: ActionContext
+  { agentManager, workflow, exactStatusTarget }: ActionContext
 ): Promise<ActionResult> {
   let target = action.target;
 
   // Resolve __next__ to the column immediately after the current one
-  if (target === '__next__') {
+  if (target === '__next__' && !exactStatusTarget) {
     const cols = workflow?.columns || [];
     const curIdx = cols.findIndex(c => c.id === task.status);
     if (curIdx === -1 || curIdx >= cols.length - 1) {
@@ -605,7 +613,11 @@ async function executeChangeStatus(
     console.log(
       `[ActionExecutor] change_status (board-level): "${task.status}" → "${target}" task="${task.id}"`
     );
-    const r = await applyTaskUpdate(agentManager, { task_id: task.id, status: target });
+    const r = await applyTaskUpdate(
+      agentManager,
+      { task_id: task.id, status: target },
+      { statusIsId: exactStatusTarget }
+    );
     if (!r.ok) {
       console.warn(`[ActionExecutor] change_status (board-level): ${r.error}`);
       return { executed: false, skipped: true, reason: 'board-level-update-failed' };

@@ -1,6 +1,8 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { asyncHandler } from '../lib/asyncHandler.js';
+import { decisionConfigSchema } from '../schemas/decision.js';
+import { formatZodError } from '../lib/validate.js';
 import {
   getAllLlmConfigs,
   getLlmConfig,
@@ -60,6 +62,15 @@ export function llmConfigRoutes(agentManager: AgentManager) {
         costPerOutputToken: req.body.costPerOutputToken ?? null,
         createdAt: new Date().toISOString(),
       };
+      if (config.provider === 'decision') {
+        const parsed = decisionConfigSchema.safeParse(config);
+        if (!parsed.success) return res.status(400).json(formatZodError(parsed.error));
+        Object.assign(config, parsed.data, {
+          isReasoning: false,
+          managesContext: false,
+          supportsImages: false,
+        });
+      }
       await saveLlmConfig(config);
       await agentManager.refreshLlmConfigs();
       res.status(201).json(config);
@@ -101,6 +112,15 @@ export function llmConfigRoutes(agentManager: AgentManager) {
         costPerInputToken: req.body.costPerInputToken ?? existing.costPerInputToken,
         costPerOutputToken: req.body.costPerOutputToken ?? existing.costPerOutputToken,
       };
+      if (config.provider === 'decision') {
+        const parsed = decisionConfigSchema.safeParse(config);
+        if (!parsed.success) return res.status(400).json(formatZodError(parsed.error));
+        Object.assign(config, parsed.data, {
+          isReasoning: false,
+          managesContext: false,
+          supportsImages: false,
+        });
+      }
       await saveLlmConfig(config);
       await agentManager.refreshLlmConfigs();
       res.json(config);

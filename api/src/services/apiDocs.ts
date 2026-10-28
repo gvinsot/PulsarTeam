@@ -425,7 +425,7 @@ export const MCP_SURFACES = [
     title: 'Admin MCP',
     summary: 'Shape agents, boards, projects, workflows and shares',
     description:
-      '`admin` is a tool set, not a role: every tool stays bounded by what the key owner can already administer in the UI, and instance-wide tools (`list_users`) re-check the owner role.',
+      '`admin` is a tool set, not a role: every tool stays bounded by what the key owner can already administer in the UI, and instance-wide tools (`list_users`) re-check the owner role. Board workflows support `decision_model` actions: an admin-configured System One / Jev model chooses among explicit destination columns using criteria and a confidence threshold, with optional low-confidence fallback. It never runs agent tools; invalid responses stop the workflow.',
   },
 ] as const;
 

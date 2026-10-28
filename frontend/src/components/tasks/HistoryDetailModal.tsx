@@ -24,6 +24,7 @@ import remarkGfm from 'remark-gfm';
 import { formatDate, timeAgo, MODE_LABELS } from './taskConstants';
 import type { Agent, TaskExecutionMessage, TaskHistoryEntry } from '../../types';
 import { useUserDisplayName } from '../../hooks/useUserDisplayName';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 const MODE_COLORS: Record<string, string> = {
   execute: 'text-blue-300',
@@ -352,6 +353,7 @@ export default function HistoryDetailModal({
   onClose: () => void;
 }) {
   const modalRef = useRef<HTMLDivElement>(null);
+  const { t } = useLanguage();
   const displayName = useUserDisplayName();
 
   useEffect(() => {
@@ -398,7 +400,9 @@ export default function HistoryDetailModal({
         <div className="flex items-center justify-between px-5 py-3 border-b border-dark-700 flex-shrink-0">
           <div className="flex items-center gap-3">
             {renderEntryIcon(entry)}
-            <span className="text-sm font-semibold">{renderEntryTitle(entry)}</span>
+            <span className="text-sm font-semibold">
+              {entry.type === 'decision' ? t('decision.action') : renderEntryTitle(entry)}
+            </span>
           </div>
           <button
             onClick={onClose}
@@ -410,6 +414,23 @@ export default function HistoryDetailModal({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          {entry.type === 'decision' && (
+            <dl className="grid grid-cols-2 gap-2 text-sm text-dark-200">
+              <dt>{t('decision.model')}</dt>
+              <dd>{entry.llmConfigId}</dd>
+              <dt>{t('decision.choice')}</dt>
+              <dd>{entry.choice}</dd>
+              <dt>{t('decision.confidence')}</dt>
+              <dd>
+                {entry.confidence?.toFixed(3)} / {entry.threshold}
+              </dd>
+              <dt>{t('decision.destination')}</dt>
+              <dd>
+                {entry.target || t('decision.manualReview')}
+                {entry.fallback ? ` (${t('decision.fallbackUsed')})` : ''}
+              </dd>
+            </dl>
+          )}
           {/* Metadata row */}
           <div className="flex flex-wrap items-center gap-3 text-xs text-dark-400">
             <div className="flex items-center gap-1.5">

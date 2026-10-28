@@ -253,7 +253,10 @@ export async function applyTaskUpdate(
     comment?: string;
     commits?: string;
     done?: boolean;
-  }
+  },
+  // Internal callers with a typed decision already selected an exact column ID.
+  // MCP arguments never populate this option (labels remain supported there).
+  { statusIsId = false }: { statusIsId?: boolean } = {}
 ): Promise<{
   ok: boolean;
   task?: any;
@@ -305,7 +308,11 @@ export async function applyTaskUpdate(
         error: `Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.`,
       };
     }
-    const statusResolution = resolveBoardStatus(board, task.boardId, status);
+    const statusResolution = statusIsId
+      ? board.workflow.columns.some((column: { id: string }) => column.id === status)
+        ? { status, error: undefined }
+        : { status: undefined, error: 'Decision destination no longer exists in this board' }
+      : resolveBoardStatus(board, task.boardId, status);
     if (statusResolution.error) {
       return { ok: false, error: statusResolution.error };
     }

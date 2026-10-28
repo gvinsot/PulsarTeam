@@ -500,6 +500,7 @@ export const ACTION_OPTIONS = [
   { value: 'run_agent:set_type', label: 'Set task type (agent)' },
   { value: 'run_agent:decide', label: 'Instructions (agent)' },
   { value: 'change_status', label: 'Move to status' },
+  { value: 'decision_model', label: 'Decision model' },
 ];
 
 /** `key` is an ACTION_OPTIONS value, but it arrives straight off a `<select>`,
@@ -507,6 +508,18 @@ export const ACTION_OPTIONS = [
  *  answers. `_cols` is unused today and kept because both call sites pass the
  *  board's columns. */
 export function createAction(key: string, _cols: BoardWorkflowColumn[]): WorkflowAction {
+  if (key === 'decision_model')
+    return {
+      type: 'decision_model',
+      llmConfigId: '',
+      instructions: '',
+      routes: [
+        { target: '', description: '' },
+        { target: '', description: '' },
+      ],
+      minConfidence: 0.6,
+      fallbackTarget: '',
+    };
   if (key === 'assign_agent') return { type: 'assign_agent', role: '' };
   if (key === 'assign_agent_individual') return { type: 'assign_agent_individual', agentId: '' };
   if (key === 'run_agent:refine')

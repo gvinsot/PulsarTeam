@@ -203,11 +203,21 @@ export interface WorkflowActionChangeStatus {
  * filtered out on load by both the server (taskStateMachine.ts:69) and the
  * editor (taskConstants.ts:396).
  */
+export interface WorkflowActionDecision {
+  type: 'decision_model';
+  llmConfigId: string;
+  instructions: string;
+  routes: Array<{ target: string; description: string }>;
+  minConfidence: number;
+  fallbackTarget?: string;
+}
+
 export type WorkflowAction =
   | WorkflowActionAssignAgent
   | WorkflowActionAssignAgentIndividual
   | WorkflowActionRunAgent
-  | WorkflowActionChangeStatus;
+  | WorkflowActionChangeStatus
+  | WorkflowActionDecision;
 
 /**
  * One automation rule attached to a column: when `trigger` fires on column

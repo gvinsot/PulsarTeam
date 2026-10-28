@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { decisionActionSchema } from './decision.js';
 
 const PERMISSIONS = ['read', 'edit', 'admin'] as const;
 
@@ -16,7 +17,36 @@ const workflowSchema = z
     transitions: z.array(z.any()).max(200).optional(),
     version: z.number().int().nonnegative().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((workflow, ctx) => {
+    for (const [ti, transition] of (workflow.transitions || []).entries()) {
+      if (!Array.isArray(transition?.actions)) continue;
+      for (const [ai, action] of transition.actions.entries()) {
+        if (action?.type !== 'decision_model') continue;
+        const parsed = decisionActionSchema.safeParse(action);
+        if (!parsed.success) {
+          for (const issue of parsed.error.issues)
+            ctx.addIssue({
+              code: 'custom',
+              path: ['transitions', ti, 'actions', ai, ...issue.path],
+              message: issue.message,
+            });
+        } else if (workflow.columns) {
+          const targets = [
+            ...parsed.data.routes.map(route => route.target),
+            parsed.data.fallbackTarget,
+          ].filter(Boolean);
+          if (targets.some(target => !workflow.columns?.some(column => column.id === target))) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['transitions', ti, 'actions', ai],
+              message: 'Decision destinations must belong to this board',
+            });
+          }
+        }
+      }
+    }
+  });
 
 export const createBoardSchema = z.object({
   name: z.string().min(1).max(100).optional(),

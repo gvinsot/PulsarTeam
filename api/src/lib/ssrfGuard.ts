@@ -23,6 +23,30 @@
 import dns from 'dns/promises';
 import net from 'net';
 
+/** Admin-owned service endpoints may intentionally use the private Swarm/LAN.
+ * Only use for configuration loaded from an admin-only store, never task input.
+ * Callers must disable redirects so credentials cannot leave the configured service. */
+export function assertAdminServiceUrl(value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('Invalid service endpoint');
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    url.search
+  ) {
+    throw new Error(
+      'Service endpoint must be an HTTP(S) URL without credentials, query or fragment'
+    );
+  }
+}
+
 /**
  * True for any IPv4 the perimeter should never be asked to reach: RFC1918,
  * loopback, link-local (which covers the 169.254.169.254 cloud metadata

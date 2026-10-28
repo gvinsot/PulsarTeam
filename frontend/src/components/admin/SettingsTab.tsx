@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { isChatModel } from '../../utils/llmConfig';
 import {
   Save,
   AlertCircle,
@@ -133,7 +134,7 @@ export default function SettingsTab({ active, showToast }: SettingsTabProps) {
   const loadLlmConfigs = useCallback(async () => {
     try {
       const data = await api.getLlmConfigs();
-      setLlmConfigs(data);
+      setLlmConfigs(data.filter(isChatModel));
     } catch (err) {
       showToast?.(`Failed to load LLM configs: ${errorMessage(err)}`, 'error');
     }

@@ -95,6 +95,18 @@ function rewriteTransitionReferences(transition: any, renameMap: Map<string, str
   if (Array.isArray(rewritten.actions)) {
     rewritten.actions = rewritten.actions.map((action: any) => {
       if (!action || typeof action !== 'object') return action;
+      if (action.type === 'decision_model') {
+        return {
+          ...action,
+          fallbackTarget: renameMap.get(action.fallbackTarget) ?? action.fallbackTarget,
+          routes: Array.isArray(action.routes)
+            ? action.routes.map((route: { target: string; description: string }) => ({
+                ...route,
+                target: renameMap.get(route.target) ?? route.target,
+              }))
+            : action.routes,
+        };
+      }
       if (typeof action.target === 'string' && renameMap.has(action.target)) {
         return { ...action, target: renameMap.get(action.target) };
       }

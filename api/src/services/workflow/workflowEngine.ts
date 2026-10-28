@@ -320,9 +320,9 @@ export async function processColumnEntry(
       // subsequent transition could move the task forward (via change_status)
       // before the skipped action (e.g., run_agent) gets a chance to execute,
       // causing tasks to "jump" columns without being processed.
-      if (chainResult?.skipped) {
+      if (chainResult?.skipped || chainResult?.halted) {
         console.log(
-          `[WorkflowEngine] Chain had skipped actions — deferring remaining transitions for task="${task.id}"`
+          `[WorkflowEngine] Chain ${chainResult.halted ? 'ended with a decision' : 'had skipped actions'} — stopping remaining transitions for task="${task.id}"`
         );
         break;
       }
@@ -833,7 +833,7 @@ async function _executeActionChain(
   task: Task,
   { agentManager, io, ownerId, workflow, originalStatus, onRunClaimed }: ActionContext,
   { transitionIdx = 0, startIdx = 0 }: { transitionIdx?: number; startIdx?: number } = {}
-): Promise<{ skipped: boolean }> {
+): Promise<{ skipped: boolean; halted: boolean }> {
   const status = originalStatus || task.status;
   if (startIdx > 0) {
     console.log(`[WorkflowEngine] Resuming chain from action ${startIdx}/${actions.length}`);
@@ -863,6 +863,7 @@ async function _executeActionChain(
   }
 
   let hadSkippedAction = false;
+  let halted = false;
 
   for (let i = startIdx; i < actions.length; i++) {
     const action = actions[i];
@@ -948,9 +949,10 @@ async function _executeActionChain(
     // Stop chain if status changed (change_status, or a run_agent action whose
     // agent moved the task via update_task — e.g. a decide that executed work
     // and then advanced the card to its final column).
-    if (result.statusChanged || task.status !== status) {
+    if (result.stopChain || result.statusChanged || task.status !== status) {
+      halted = result.stopChain === true;
       console.log(
-        `[WorkflowEngine] Task "${task.id}" status changed to "${task.status}" — stopping chain`
+        `[WorkflowEngine] Task "${task.id}" ${result.stopChain ? 'decision finished' : 'status changed'} at "${task.status}" — stopping chain`
       );
       break;
     }
@@ -969,7 +971,7 @@ async function _executeActionChain(
     task.completedActionIdx = null;
   }
 
-  return { skipped: hadSkippedAction };
+  return { skipped: hadSkippedAction, halted };
 }
 
 /**

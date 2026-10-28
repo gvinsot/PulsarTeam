@@ -1,6 +1,57 @@
 export type Lang = 'en' | 'fr';
 
 const translations = {
+  'decision.choice': { en: 'Model choice', fr: 'Choix du modèle' },
+  'decision.fallbackUsed': { en: 'low confidence', fr: 'confiance insuffisante' },
+  'decision.provider': {
+    en: 'Decision model (Jev / System One)',
+    fr: 'Modèle de décision (Jev / System One)',
+  },
+  'decision.providerHelp': {
+    en: 'For board decision actions. AIFabric: d3-mini, no API key. Jev: https://api.typesafe.ai, model jev-latest and your API key. This model cannot run an agent or chat.',
+    fr: 'Pour les actions de décision des boards. AIFabric : d3-mini, sans clé API. Jev : https://api.typesafe.ai, modèle jev-latest et votre clé API. Ce modèle ne peut pas exécuter un agent ou un chat.',
+  },
+  'decision.endpoint': { en: '(base URL or /v1/systemone)', fr: '(URL de base ou /v1/systemone)' },
+  'decision.action': { en: 'Route with a decision model', fr: 'Trier avec un modèle de décision' },
+  'decision.actionHelp': {
+    en: 'Classify the task title, description, type and priority into an allowed column, without running an agent.',
+    fr: 'Classer le titre, la description, le type et la priorité de la tâche dans une colonne autorisée, sans lancer un agent.',
+  },
+  'decision.model': { en: 'Decision model', fr: 'Modèle de décision' },
+  'decision.selectModel': { en: 'Select a model…', fr: 'Choisir un modèle…' },
+  'decision.unavailableModel': {
+    en: 'Model unavailable — select another',
+    fr: 'Modèle indisponible — en choisir un autre',
+  },
+  'decision.loadError': {
+    en: 'Could not load models. Reopen the editor to retry.',
+    fr: 'Impossible de charger les modèles. Rouvrir l’éditeur pour réessayer.',
+  },
+  'decision.noModels': {
+    en: 'Add a decision model in Admin → LLM Configurations.',
+    fr: 'Ajouter un modèle de décision dans Admin → Configurations LLM.',
+  },
+  'decision.instructions': { en: 'Decision question', fr: 'Question de décision' },
+  'decision.instructionsPlaceholder': {
+    en: 'Which team should handle this task?',
+    fr: 'Quelle équipe doit traiter cette tâche ?',
+  },
+  'decision.destination': { en: 'Destination column', fr: 'Colonne de destination' },
+  'decision.criteria': { en: 'When to choose this column', fr: 'Quand choisir cette colonne' },
+  'decision.missingColumn': { en: 'deleted column', fr: 'colonne supprimée' },
+  'decision.remove': { en: 'Remove', fr: 'Retirer' },
+  'decision.addRoute': { en: 'Add destination', fr: 'Ajouter une destination' },
+  'decision.confidence': { en: 'Minimum confidence (0–1)', fr: 'Confiance minimale (0–1)' },
+  'decision.fallback': { en: 'If confidence is too low', fr: 'Si la confiance est insuffisante' },
+  'decision.manualReview': { en: 'Stop for manual review', fr: 'Arrêter pour revue manuelle' },
+  'decision.confidenceHelp': {
+    en: 'Calibrate the threshold on your tasks. Service errors or invalid answers stop the workflow with an error. A fallback column is used only for valid answers below the threshold.',
+    fr: 'Calibrer le seuil sur vos tâches. Une erreur du service ou une réponse invalide arrête le workflow avec une erreur. Le repli est utilisé uniquement pour une réponse valide sous le seuil.',
+  },
+  'decision.invalidAction': {
+    en: 'Complete the decision action: model, question, at least two distinct existing columns with criteria, and a confidence threshold between 0 and 1.',
+    fr: 'Compléter l’action de décision : modèle, question, au moins deux colonnes existantes distinctes avec leurs critères, et seuil de confiance entre 0 et 1.',
+  },
   // Navbar
   'nav.features': { en: 'Features', fr: 'Fonctionnalités' },
   'nav.product': { en: 'Product', fr: 'Produit' },
