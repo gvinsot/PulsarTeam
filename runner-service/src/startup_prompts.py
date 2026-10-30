@@ -82,18 +82,13 @@ _TRUST_MARKER_WINDOW = 6
 _TRUST_MAX_STEPS = 4
 
 
-def trust_answer_keys(screen: str) -> tuple:
-    """Keystrokes that select "Yes, I trust this folder" and confirm it.
-
-    `screen` is the ANSI-stripped tail of the TUI. Returns an empty tuple when
-    the layout can't be read — callers must then send NOTHING and retry on a
-    later frame. Doing nothing leaves the dialog up for the user; guessing
-    wrong exits the CLI, which is how this bug presented.
-    """
+def _walk_to_option_keys(screen: str, option_re: re.Pattern, max_steps: int) -> tuple:
+    """Keystrokes that move the selection marker onto the LAST line matching
+    `option_re` and confirm it. Returns () when the layout can't be read."""
     lines = screen.splitlines()
     accept_idx = None
     for idx in range(len(lines) - 1, -1, -1):
-        if _TRUST_ACCEPT_RE.search(lines[idx]):
+        if option_re.search(lines[idx]):
             accept_idx = idx
             break
     if accept_idx is None:
@@ -108,13 +103,24 @@ def trust_answer_keys(screen: str) -> tuple:
     if marker_idx is None:
         return ()
     steps = accept_idx - marker_idx
-    if abs(steps) > _TRUST_MAX_STEPS:
+    if abs(steps) > max_steps:
         return ()
     move = b"\x1b[B" if steps > 0 else b"\x1b[A"  # CSI B / CSI A = Down / Up
     keys: tuple = tuple(move for _ in range(abs(steps)))
     # The confirming Enter must land AFTER the TUI has repainted its selection,
     # or it confirms the row we were moving off (see the bypass recipe).
     return keys + (PAUSE, b"\r") if keys else (b"\r",)
+
+
+def trust_answer_keys(screen: str) -> tuple:
+    """Keystrokes that select "Yes, I trust this folder" and confirm it.
+
+    `screen` is the ANSI-stripped tail of the TUI. Returns an empty tuple when
+    the layout can't be read — callers must then send NOTHING and retry on a
+    later frame. Doing nothing leaves the dialog up for the user; guessing
+    wrong exits the CLI, which is how this bug presented.
+    """
+    return _walk_to_option_keys(screen, _TRUST_ACCEPT_RE, _TRUST_MAX_STEPS)
 
 
 # Bypass-permissions warning: shown when the CLI is started with
@@ -137,13 +143,30 @@ BYPASS_PERMS_RE = re.compile(
 # the standalone script), so only its "(runs" prefix is matched — the heading
 # also changed across releases, so it isn't required. `\s*` everywhere
 # tolerates the cursor-positioned layout that ANSI-stripping compacts.
-# The match requires the "Skip until next version" row (option 3, the one we
-# pick) so a partially painted frame never triggers a keystroke early.
+# The match requires the last row ("Skip until next version") so a partially
+# painted frame never triggers a keystroke early.
 CODEX_UPDATE_RE = re.compile(
     r"(update\s*now\s*\(\s*runs"
     r".{0,400}?skip\s*until\s*next\s*version)",
     re.IGNORECASE | re.DOTALL,
 )
+
+# The numbered "Skip" row (option 2) — NOT "Skip until next version" and NOT
+# the "Esc skip" footer hint.
+_CODEX_SKIP_ROW_RE = re.compile(r"\d\.\s*skip(?!\s*until)", re.IGNORECASE)
+
+
+def codex_update_answer_keys(screen: str) -> tuple:
+    """Keystrokes that select "2. Skip" on Codex's update prompt and confirm it
+    (Down+Enter from the default "Update now" row).
+
+    The previous recipe sent a bare "3" once; when the dialog painted before
+    Codex read stdin the digit was swallowed and the prompt stayed up. Deriving
+    the move from the screen makes the recipe retryable: once the dialog is
+    gone no Skip row is found and nothing is sent.
+    """
+    return _walk_to_option_keys(screen, _CODEX_SKIP_ROW_RE, 2)
+
 
 OPENCODE_UPDATE_RE = re.compile(
     r"(new\s+release\s+v?\d+(?:\.\d+){1,3}"
@@ -170,16 +193,14 @@ class StartupPrompt:
 
 # Table order is match priority (checked first to last).
 STARTUP_PROMPTS: tuple[StartupPrompt, ...] = (
-    # Codex's update prompt: option 3 is "Skip until next version", so the
-    # prompt stays quiet until a newer release ships. The digit selects AND
-    # confirms on its own (UpdatePromptScreen.select), so no Enter follows — a
-    # trailing Enter would leak into the next screen (the trust dialog).
+    # Codex's update prompt: pick option 2 "Skip" (Down+Enter from the
+    # highlighted "Update now"), derived from the screen so it can be retried.
     StartupPrompt(
         key="codex_update",
         pattern=CODEX_UPDATE_RE,
-        keys=(b"3",),
+        keys=codex_update_answer_keys,
         description="codex update",
-        keys_label="3 (Skip until next version)",
+        keys_label="move to Skip+Enter",
     ),
     # OpenCode's update prompt: move Left to "No", confirm after a render tick.
     StartupPrompt(

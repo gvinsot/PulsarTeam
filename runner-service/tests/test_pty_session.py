@@ -238,27 +238,30 @@ async def test_auto_answers_opencode_update_prompt_once(monkeypatch):
     assert written == [b"\x1b[D", b"\r"]
 
 
-def test_auto_answers_codex_update_prompt(monkeypatch):
+@pytest.mark.asyncio
+async def test_auto_answers_codex_update_prompt(monkeypatch):
     session = PtySession(agent_id="agent-a", cmd=["codex"], cwd="/tmp", env={})
     session.master_fd = 1
     written = []
 
     monkeypatch.setattr(session, "_write_keystroke", lambda data: written.append(data))
 
+    # Codex 0.166 layout; a real PTY sends CRLF line endings.
     session._maybe_auto_answer_startup_prompt(
-        b"""
-        A new version of Codex is available.
-        1. Update now (runs `npm install -g @openai/codex`)
-        2. Skip
-        3. Skip until next version
-        """
+        b"Update available \xc2\xb7 0.165.0 \xe2\x86\x92 0.166.0\r\n"
+        b"  Release notes: https://github.com/openai/codex/releases/latest\r\n"
+        b"\r\n"
+        b"\xe2\x80\xba 1. Update now (runs `npm install -g @openai/codex`)\r\n"
+        b"  2. Skip\r\n"
+        b"  3. Skip until next version\r\n"
     )
+    await asyncio.sleep(0.2)
 
-    assert written == [b"3"]
-    assert "codex_update" in session._auto_answered
+    assert written == [b"\x1b[B", b"\r"]
 
 
-def test_auto_answers_codex_update_prompt_once(monkeypatch):
+@pytest.mark.asyncio
+async def test_auto_answers_codex_update_prompt_once(monkeypatch):
     session = PtySession(agent_id="agent-a", cmd=["codex"], cwd="/tmp", env={})
     session.master_fd = 1
     session._last_auto_answer_at = time.monotonic() - 10
@@ -267,15 +270,19 @@ def test_auto_answers_codex_update_prompt_once(monkeypatch):
     monkeypatch.setattr(session, "_write_keystroke", lambda data: written.append(data))
 
     prompt = (
-        b"1. Update now (runs `npm install -g @openai/codex`)\r\n"
-        b"2. Skip\r\n"
-        b"3. Skip until next version\r\n"
+        b"\xe2\x80\xba 1. Update now (runs `npm install -g @openai/codex`)\r\n"
+        b"  2. Skip\r\n"
+        b"  3. Skip until next version\r\n"
     )
     session._maybe_auto_answer_startup_prompt(prompt)
+    await asyncio.sleep(0.2)
+    # The dialog is gone: the next frame no longer shows the Skip row.
+    session._auto_answer_buf.clear()
     session._last_auto_answer_at = time.monotonic() - 10
-    session._maybe_auto_answer_startup_prompt(prompt)
+    session._maybe_auto_answer_startup_prompt(b"\xe2\x80\xba Ask Codex to do anything\r\n")
+    await asyncio.sleep(0.2)
 
-    assert written == [b"3"]
+    assert written == [b"\x1b[B", b"\r"]
 
 
 def test_auto_answers_codex_trust_directory_prompt(monkeypatch):

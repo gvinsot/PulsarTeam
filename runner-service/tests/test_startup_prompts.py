@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from startup_prompts import STARTUP_PROMPTS, trust_answer_keys  # noqa: E402
+from startup_prompts import PAUSE, STARTUP_PROMPTS, codex_update_answer_keys, trust_answer_keys  # noqa: E402
 
 ENTER = b"\r"
 
@@ -71,10 +71,37 @@ def _prompt(key):
     return next(p for p in STARTUP_PROMPTS if p.key == key)
 
 
-def test_codex_update_prompt_answers_skip_until_next_version():
+DOWN = b"\x1b[B"
+
+
+def test_codex_update_prompt_answers_skip_with_down_enter():
     prompt = _prompt("codex_update")
     assert prompt.pattern.search(CODEX_UPDATE_SCREEN)
-    assert prompt.keys == (b"3",)
+    assert prompt.keys(CODEX_UPDATE_SCREEN) == (DOWN, PAUSE, ENTER)
+
+
+def test_codex_update_prompt_0_166_layout():
+    screen = """\
+Update available · 0.165.0 → 0.166.0
+  Release notes: https://github.com/openai/codex/releases/latest
+
+› 1. Update now (runs `npm install -g @openai/codex`)
+  2. Skip
+  3. Skip until next version
+"""
+    assert _prompt("codex_update").pattern.search(screen)
+    assert codex_update_answer_keys(screen) == (DOWN, PAUSE, ENTER)
+
+
+def test_codex_update_prompt_confirms_when_skip_already_selected():
+    screen = CODEX_UPDATE_SCREEN.replace("  › 1. Update now", "    1. Update now").replace(
+        "    2. Skip\n", "  › 2. Skip\n"
+    )
+    assert codex_update_answer_keys(screen) == (ENTER,)
+
+
+def test_codex_update_prompt_sends_nothing_once_dialog_is_gone():
+    assert codex_update_answer_keys("› Ask Codex to do anything") == ()
 
 
 def test_codex_update_prompt_matches_compacted_and_other_installers():
