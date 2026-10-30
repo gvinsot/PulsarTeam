@@ -415,6 +415,31 @@ the native mcp_call tool (server: AWS S3; tool: create_bucket; arguments: {"buck
 - For large result sets, use the continuation_token from the previous response`,
   },
   {
+    id: 'skill-azure-cli',
+    name: 'Azure CLI',
+    description:
+      'Manage Azure resources with the az CLI, authenticated with a service principal (CLI runners)',
+    category: 'cloud',
+    icon: '☁️',
+    builtin: true,
+    mcpServerIds: [],
+    instructions: `You can manage Microsoft Azure with the Azure CLI (\`az\`) from your shell.
+
+## Authentication
+- \`az\` is already logged in with the service principal connected on this plugin; never run \`az login\` yourself and never print or store the secret.
+- The same principal is exported as AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (/ AZURE_SUBSCRIPTION_ID), and as ARM_* for Terraform, so Azure SDKs (DefaultAzureCredential) and Terraform azurerm work too.
+- Check the context first: \`az account show -o table\`. List what you can reach: \`az account list -o table\`. Switch with \`az account set --subscription <id>\`.
+- If \`az\` is missing, the runner is still provisioning it (first start on a node); retry in a minute. If it reports it is not logged in, the plugin connection is missing or was rejected: ask the user to (re)connect the Azure CLI plugin.
+
+## Usage guidelines
+- Prefer read commands (\`list\`, \`show\`) to explore before changing anything; add \`-o table\` for readable output or \`-o json\` + \`--query\` (JMESPath) for precise data.
+- Confirm with the user before deleting resources or resource groups, or before anything that costs money (new VMs, clusters, databases).
+- Pass \`--yes\` / \`--no-wait\` only when you understand the consequence; long operations can be checked with \`show\` afterwards.
+- Extensions install into your HOME: \`az extension add --name <name>\`.
+- Permissions are those of the service principal (RBAC): a 403 / AuthorizationFailed means the principal lacks a role, not a CLI bug.
+- This only works for agents running on a CLI runner (Claude Code, Codex, OpenCode, …), which have a shell.`,
+  },
+  {
     id: 'skill-auto-learn',
     name: 'Auto Learn',
     description:

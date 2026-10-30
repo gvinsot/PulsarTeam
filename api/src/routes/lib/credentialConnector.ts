@@ -2,6 +2,9 @@ import express from 'express';
 import { storeOAuthToken, getOAuthToken, deleteOAuthToken } from '../../services/database.js';
 import type { OAuthProvider, ScopeType } from '../../services/database.js';
 import { asyncHandler } from '../../lib/asyncHandler.js';
+import { sessionUser } from '../../middleware/auth.js';
+import { checkAgentIdAccess, checkBoardIdAccess } from '../../lib/agentAccess.js';
+import type { AgentAccessLevel } from '../../lib/agentAccess.js';
 
 /**
  * Shared scaffolding for the "simple credential connector" plugin routes
@@ -14,6 +17,11 @@ import { asyncHandler } from '../../lib/asyncHandler.js';
  * — everything else (scope resolution, store-with-verify, disconnect) is shared.
  *
  * Resolution policy: agent → board (no user fallback; these are agent/board only).
+ *
+ * Authorization: every route checks the caller against the resolved scope
+ * (read for /status, edit for /connect and /disconnect) through
+ * lib/agentAccess.ts. The mount only runs authenticateToken, so without this a
+ * user could read or overwrite another tenant's agent/board credentials by id.
  */
 
 /** Storage scope for the credential connectors: agent → board, else null. */
@@ -84,36 +92,70 @@ function isFailure(r: ConnectResult): r is ConnectFailure {
   return (r as ConnectFailure).error !== undefined;
 }
 
+/**
+ * Check the caller's access to the scope `resolveScope` would pick. Sends the
+ * error response and returns false when access is denied.
+ */
+async function authorizeScope(
+  req: express.Request,
+  res: express.Response,
+  scope: { scopeType: ScopeType; scopeId: string },
+  level: AgentAccessLevel
+): Promise<boolean> {
+  const user = sessionUser(req, res);
+  if (!user) return false;
+  const access =
+    scope.scopeType === 'agent'
+      ? await checkAgentIdAccess(scope.scopeId, user, level)
+      : await checkBoardIdAccess(scope.scopeId, user, level);
+  if (!access.ok) {
+    res.status(access.status || 403).json({ error: access.error || 'Access denied' });
+    return false;
+  }
+  return true;
+}
+
+function idParam(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null;
+}
+
 export function credentialConnectorRoutes(opts: CredentialConnectorOptions): express.Router {
   const router = express.Router();
   const { provider, label } = opts;
 
-  router.get('/status', (req, res) => {
-    const agentId = (req.query.agentId as string) || null;
-    const boardId = (req.query.boardId as string) || null;
-    if (!agentId && !boardId) {
-      res.json({ connected: false, agentId: null, boardId: null });
-      return;
-    }
-    const scope = resolveScope(agentId, boardId);
-    if (!scope) {
-      res.json({ connected: false });
-      return;
-    }
-    const token = getOAuthToken(provider, scope.scopeType, scope.scopeId);
-    res.json({
-      connected: !!token,
-      ...opts.statusFields(token?.meta),
-      agentId,
-      boardId,
-    });
-  });
+  router.get(
+    '/status',
+    asyncHandler(async (req, res) => {
+      const agentId = idParam(req.query.agentId);
+      const boardId = idParam(req.query.boardId);
+      const scope = resolveScope(agentId, boardId);
+      if (!scope) {
+        res.json({ connected: false, agentId: null, boardId: null });
+        return;
+      }
+      if (!(await authorizeScope(req, res, scope, 'read'))) return;
+      const token = getOAuthToken(provider, scope.scopeType, scope.scopeId);
+      res.json({
+        connected: !!token,
+        ...opts.statusFields(token?.meta),
+        agentId,
+        boardId,
+      });
+    })
+  );
 
   router.post(
     '/connect',
     asyncHandler(async (req, res) => {
       const body = req.body || {};
-      const { agentId, boardId } = body;
+      const agentId = idParam(body.agentId);
+      const boardId = idParam(body.boardId);
+      const scope = resolveScope(agentId, boardId);
+      if (!scope) {
+        res.status(400).json({ error: 'agentId or boardId is required' });
+        return;
+      }
+      if (!(await authorizeScope(req, res, scope, 'edit'))) return;
 
       try {
         const result = await opts.connect(body);
@@ -122,7 +164,6 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
           return;
         }
 
-        const scope = resolveScope(agentId, boardId)!;
         await storeOAuthToken(
           {
             provider,
@@ -150,13 +191,14 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
   router.post(
     '/disconnect',
     asyncHandler(async (req, res) => {
-      const agentId = req.body?.agentId || null;
-      const boardId = req.body?.boardId || null;
-      if (!agentId && !boardId) {
+      const agentId = idParam(req.body?.agentId);
+      const boardId = idParam(req.body?.boardId);
+      const scope = resolveScope(agentId, boardId);
+      if (!scope) {
         res.status(400).json({ error: 'agentId or boardId is required' });
         return;
       }
-      const scope = resolveScope(agentId, boardId)!;
+      if (!(await authorizeScope(req, res, scope, 'edit'))) return;
       await deleteOAuthToken(provider, scope.scopeType, scope.scopeId);
       const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
       console.log(`🔌 [${label}] Disconnected ${target}`);

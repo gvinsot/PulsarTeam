@@ -82,6 +82,7 @@ import { internalRunnerConfigsRoutes } from './routes/internalRunnerConfigs.js';
 import { internalRunnerLlmRoutes } from './routes/internalRunnerLlm.js';
 import { internalRunnerMcpRoutes } from './routes/internalRunnerMcp.js';
 import { internalRunnerInstructionsRoutes } from './routes/internalRunnerInstructions.js';
+import { internalRunnerAzureRoutes } from './routes/internalRunnerAzure.js';
 import { internalTokenUsageRoutes } from './routes/internalTokenUsage.js';
 import { codexAuthRoutes } from './routes/codexAuth.js';
 import { jiraRoutes } from './routes/jira.js';
@@ -91,6 +92,7 @@ import { createWordPressMcpHandler } from './services/wordpressMcp.js';
 import { githubRoutes, githubOAuthRedirectRouter } from './routes/github.js';
 import { createGitHubMcpHandler } from './services/githubMcp.js';
 import { s3Routes } from './routes/s3.js';
+import { azureRoutes } from './routes/azure.js';
 import { localFolderRoutes } from './routes/localFolder.js';
 import { createS3McpHandler } from './services/s3Mcp.js';
 import { createLocalFolderMcpHandler } from './services/localFolderMcp.js';
@@ -288,6 +290,7 @@ app.use('/api/settings/general', authenticateToken, settingsRoutes());
 app.use('/api/jira', authenticateToken, jiraRoutes());
 app.use('/api/wordpress', authenticateToken, wordpressRoutes());
 app.use('/api/s3', authenticateToken, s3Routes());
+app.use('/api/azure', authenticateToken, azureRoutes());
 app.use('/api/local-folder', authenticateToken, localFolderRoutes());
 app.use('/api/auth-browser', authenticateToken, authBrowserRoutes());
 app.use('/api/github', authenticateToken, githubRoutes());
@@ -308,6 +311,11 @@ app.use(
   '/api/internal/runner-instructions',
   authenticateCoderApiKey,
   internalRunnerInstructionsRoutes(agentManager)
+);
+app.use(
+  '/api/internal/runner-azure',
+  authenticateCoderApiKey,
+  internalRunnerAzureRoutes(agentManager)
 );
 app.use(
   '/api/internal/token-usage',

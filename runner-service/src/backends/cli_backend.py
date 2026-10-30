@@ -22,6 +22,7 @@ from .base import RunnerBackend
 from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_config_store import PersistedConfigMixin
 from .runner_llm_config import fetch_agent_llm_config
+from .runner_azure_config import apply_azure_env, configure_azure_credentials
 
 
 # Most CLI agents (claude, opencode, codex, hermes, openclaw) render an initial
@@ -340,6 +341,8 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         if agent_user and agent_user.get("home"):
             from agent_user import apply_github_token_env
             apply_github_token_env(env, agent_user["home"])
+            # Azure CLI plugin service principal — see runner_azure_config.
+            apply_azure_env(env, agent_user["home"])
         return env
 
     def _verify_model_config(
@@ -440,6 +443,13 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         BOTH the interactive PTY and headless paths."""
         return
 
+    def _configure_azure(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+        """Log the agent's `az` in with its Azure CLI plugin service principal
+        (or out, once the plugin is detached) before a spawn. Shared by every
+        CLI — `az` is a tool the LLM shells out to, not CLI config. Called right
+        after _configure_instructions; see runner_azure_config.py."""
+        configure_azure_credentials(agent_user, agent_id)
+
     # ── Interactive terminal (shared template) ───────────────────────────
 
     # Whether prepare_interactive logs the model-wiring summary via
@@ -537,6 +547,7 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         await run_blocking(self._configure_instructions, effective_user, agent_id)
+        await run_blocking(self._configure_azure, effective_user, agent_id)
         self._post_configure_interactive(agent_user, effective_user, agent_id)
         env = await run_blocking(self._agent_env, effective_user, agent_id)
 
@@ -586,6 +597,7 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         # instructions file (CLAUDE.md / AGENTS.md) so they're in context even
         # for backends that don't consume system_prompt in _build_command.
         await run_blocking(self._configure_instructions, effective_user, agent_id)
+        await run_blocking(self._configure_azure, effective_user, agent_id)
         # Resolve the spawn env off-loop too (_get_llm_config may fetch from
         # team-api on a cache miss); this also warms the per-agent LLM config
         # cache for _build_command below.
@@ -671,6 +683,7 @@ class CliBackend(PersistedConfigMixin, RunnerBackend):
         await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         await run_blocking(self._configure_instructions, effective_user, agent_id)
+        await run_blocking(self._configure_azure, effective_user, agent_id)
         env = await run_blocking(self._agent_env, effective_user, agent_id)
 
         cmd = self._build_command(prompt, stream=True, system_prompt=system_prompt, agent_id=agent_id, task_id=task_id, permissions=permissions)

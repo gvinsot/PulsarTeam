@@ -325,7 +325,7 @@ export interface BoardUpdateInput {
  *  - OAuth providers — onedrive, gmail, outlook, gdrive, slack, github
  *    (api/src/routes/oauthProviderRoutes.ts:137) — emit `configured`, `connected`,
  *    `agentId`, `boardId` plus per-provider extras (email, username…).
- *  - CREDENTIAL providers — jira, wordpress, s3
+ *  - CREDENTIAL providers — jira, wordpress, s3, azure
  *    (api/src/routes/lib/credentialConnector.ts:90-108) — emit NO `configured` key
  *    at all, and their two early returns omit `agentId`/`boardId` as well.
  *
@@ -613,6 +613,7 @@ const github = oauthIntegration('github');
 const jira = integration('jira');
 const wordpress = integration('wordpress');
 const s3 = integration('s3');
+const azure = integration('azure');
 
 export interface NewTaskOptions {
   status?: TaskStatus;
@@ -1333,6 +1334,25 @@ export const api = {
     }),
 
   disconnectS3: s3.disconnect,
+
+  // Azure CLI plugin — service principal (per-agent / per-board)
+  getAzureStatus: azure.status,
+
+  connectAzure: (
+    agentId: string,
+    boardId: string | undefined,
+    sp: { tenantId: string; clientId: string; clientSecret: string; subscriptionId?: string }
+  ) =>
+    post<IntegrationAck>('/azure/connect', {
+      agentId,
+      ...(boardId && { boardId }),
+      tenantId: sp.tenantId,
+      clientId: sp.clientId,
+      clientSecret: sp.clientSecret,
+      ...(sp.subscriptionId && { subscriptionId: sp.subscriptionId }),
+    }),
+
+  disconnectAzure: azure.disconnect,
 
   // Local Folder (desktop bridge — per-user, not agent/board scoped). Status
   // reflects whether THIS user's desktop app is online with a folder shared.

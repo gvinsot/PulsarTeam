@@ -81,6 +81,7 @@ from .runner_mcp_config import (
     strip_codex_managed_block,
 )
 from .runner_instructions_config import configure_codex_instructions
+from .runner_azure_config import apply_azure_env
 
 
 # Codex CLI honors $CODEX_HOME for its auth/state location. When set, the
@@ -255,6 +256,7 @@ class CodexBackend(CliBackend):
         await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         await run_blocking(self._configure_instructions, effective_user, agent_id)
+        await run_blocking(self._configure_azure, effective_user, agent_id)
 
         # cwd: the agent's project workspace when available, else the
         # generic CLI cwd.
@@ -275,6 +277,9 @@ class CodexBackend(CliBackend):
         # CODEX_HOME is implicit via the HOME of the
         # dropped UID (see ensure_agent_user).
         env = sanitize_env(os.environ, agent_user)
+        # The Azure CLI plugin's AZURE_*/ARM_* vars don't touch codex's own
+        # auth selection, so they are safe to add here (see runner_azure_config).
+        apply_azure_env(env, (effective_user or {}).get("home"))
 
         kwargs = get_subprocess_kwargs(effective_user) or {}
 

@@ -9,7 +9,7 @@ This file documents every OAuth or credential-based integration the platform exp
 - A `POST /disconnect` to revoke the stored token / credentials.
 - An `ALL /mcp` JSON-RPC endpoint that backs the corresponding MCP server.
 
-All `/status`, `/auth-url`, `/connect`, `/disconnect`, `/mcp` routes require JWT. OAuth `/oauth-redirect` is public — it exchanges the code server-side and renders a result page that notifies the SPA popup opener via `postMessage`.
+All `/status`, `/auth-url`, `/connect`, `/disconnect`, `/mcp` routes require JWT. The credential integrations (Jira, WordPress, S3, Azure) also check the caller's access to the `agentId` / `boardId` they target: read for `/status`, edit for `/connect` and `/disconnect` (403 otherwise). OAuth `/oauth-redirect` is public — it exchanges the code server-side and renders a result page that notifies the SPA popup opener via `postMessage`.
 
 Each integration is **scoped**: an `agentId` query (or `boardId`) selects which agent/board the connection belongs to. With no scope, the token is stored at the user level. The MCP layer reads the most-specific token (agent → board → user).
 
@@ -53,6 +53,13 @@ Each integration is **scoped**: an `agentId` query (or `boardId`) selects which 
 - **Credential-based** (access key + secret + region + optional endpoint).
 - `POST /connect` validates by calling `ListBuckets`.
 - MCP tools: list_buckets, list_objects, get_object, put_object, delete_object, generate_presigned_url.
+
+## Azure CLI — `/api/azure/*`
+- **Credential-based** service principal: `{ tenantId, clientId, clientSecret, subscriptionId? }`. Tenant is a GUID or a domain, client/subscription are GUIDs. Public Azure cloud only.
+- `POST /connect` validates with a client-credentials token from `login.microsoftonline.com`, then lists the ARM subscriptions. A given `subscriptionId` must be among them; without one, the only subscription (if exactly one) becomes the default.
+- `GET /status` returns `tenantId`, `clientId`, `subscriptionId`, `subscriptionName` — never the secret.
+- **No MCP**: the `Azure CLI` plugin (`skill-azure-cli`) is used through the `az` CLI on CLI runners. Before each spawn the runner calls `GET /api/internal/runner-azure/agents/:agentId` (CODER_API_KEY), which returns the principal (agent scope, else board scope) only while the plugin is attached to the agent or its board, else `{ configured: false }`. The runner then runs `az login --service-principal` as the agent's UID into `$HOME/.azure` (secret passed via a 0600 `@file`, not argv), once per credential set, and exports `AZURE_*` / `ARM_*` to the CLI. Detaching the plugin logs a managed login out on the next spawn.
+- `az` itself is not in the runner image: `runner-service/src/azure_cli.sh` installs it once per node into the `azure-cli` volume (`/opt/azure-cli`, `AZURE_CLI_VERSION` pins the release, `none` disables it).
 
 ---
 

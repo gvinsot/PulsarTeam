@@ -290,6 +290,7 @@ services:
       # secret above. Only the per-node toolchain volumes below are kept.
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -373,6 +374,7 @@ services:
       - sandbox-data:/app/data
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -438,6 +440,7 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -518,6 +521,7 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -606,6 +610,7 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -693,6 +698,7 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -774,6 +780,7 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -856,6 +863,7 @@ services:
     volumes:
       - rust-toolchain:/opt/rust
       - android-toolchain:/opt/android
+      - azure-cli:/opt/azure-cli
     # Disk write ceiling, enforced per node by the io-limiter service
     # (Swarm ignores blkio_config): a runner's builds/installs must not
     # starve the disk shared with Postgres and the other services.
@@ -1133,6 +1141,10 @@ volumes:
   # runner-service/src/android_toolchain.sh (shared, agent-writable through the
   # toolchain group; replaces the old claudecode-android-cache).
   android-toolchain:
+    driver: local
+  # Azure CLI, provisioned once per node by runner-service/src/azure_cli.sh and
+  # shared read-only by every runner of that node (kept out of the image).
+  azure-cli:
     driver: local
   office-data:
     driver: local

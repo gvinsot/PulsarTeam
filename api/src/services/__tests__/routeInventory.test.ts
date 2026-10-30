@@ -418,6 +418,11 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'POST /api/s3/connect': ['authenticateToken'],
   'POST /api/s3/disconnect': ['authenticateToken'],
 
+  // ── /api/azure ────────────────────────────────────────────────────
+  'GET /api/azure/status': ['authenticateToken'],
+  'POST /api/azure/connect': ['authenticateToken'],
+  'POST /api/azure/disconnect': ['authenticateToken'],
+
   // ── /api/local-folder ─────────────────────────────────────────────
   'GET /api/local-folder/status': ['authenticateToken'],
 
@@ -503,6 +508,7 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'DELETE /api/internal/runner-config/:runner/agents/:agentId': ['authenticateCoderApiKey'],
   'GET /api/internal/runner-mcp/agents/:agentId': ['authenticateCoderApiKey'],
   'GET /api/internal/runner-instructions/agents/:agentId': ['authenticateCoderApiKey'],
+  'GET /api/internal/runner-azure/agents/:agentId': ['authenticateCoderApiKey'],
   'POST /api/internal/token-usage/agents/:agentId': ['authenticateCoderApiKey'],
 
   // ── /api/codex-auth ───────────────────────────────────────────────

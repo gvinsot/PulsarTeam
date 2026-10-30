@@ -81,7 +81,7 @@ Manages the plugins and MCP integrations attached to the agent.
 - "Available plugins" picker with category filter (coding, devops, writing, security, analysis, general).
 - Each plugin can declare per-agent **user config** (e.g. an API key field) — those are editable here and persisted with the agent.
 - For OAuth-backed plugins (GitHub, Gmail, Drive, OneDrive, Outlook, Slack), this tab shows a **Connect** button that triggers the OAuth flow in a popup. Once connected, it displays the connected account identifier and a Disconnect button.
-- Hardware MCPs (Jira, WordPress, S3) prompt for credentials inline; connection is tested before being stored.
+- Hardware MCPs (Jira, WordPress, S3) and the Azure CLI plugin (service principal) prompt for credentials inline; connection is tested before being stored.
 
 ### 4.4 Permissions
 

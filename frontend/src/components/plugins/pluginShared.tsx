@@ -11,6 +11,7 @@ import JiraConnect from '../JiraConnect';
 import WordPressConnect from '../WordPressConnect';
 import GitHubConnect from '../GitHubConnect';
 import S3Connect from '../S3Connect';
+import AzureConnect from '../AzureConnect';
 import LocalFolderConnect from '../LocalFolderConnect';
 import RemoteMcpConnect from './RemoteMcpConnect';
 import AuthBrowserConnect from './AuthBrowserConnect';
@@ -30,6 +31,13 @@ export const MCP_CONNECTOR_MAP: Record<string, ComponentType<ConnectWidgetProps>
   'mcp-github': GitHubConnect,
   'mcp-aws-s3': S3Connect,
   'mcp-local-folder': LocalFolderConnect,
+};
+
+// Connectors keyed by PLUGIN id, for plugins whose credentials are used by a
+// CLI tool rather than an MCP server (the Azure CLI plugin has no MCP: the
+// runner logs `az` in with the stored service principal).
+export const PLUGIN_CONNECTOR_MAP: Record<string, ComponentType<ConnectWidgetProps>> = {
+  'skill-azure-cli': AzureConnect,
 };
 
 export function getPluginMcpIds(plugin: Plugin): string[] {
@@ -108,6 +116,7 @@ export function AssignedPluginCard({
 }) {
   const pluginMcps = (plugin.mcps || []).filter(m => m.id);
   const connectorMcpIds = getPluginMcpIds(plugin).filter(id => MCP_CONNECTOR_MAP[id]);
+  const PluginConnector = PLUGIN_CONNECTOR_MAP[plugin.id];
   return (
     <div className="bg-dark-800/50 rounded-lg border border-dark-700/50">
       <div className="flex items-center gap-3 p-3 group">
@@ -140,8 +149,9 @@ export function AssignedPluginCard({
           </button>
         )}
       </div>
-      {connectorMcpIds.length > 0 && (
+      {(connectorMcpIds.length > 0 || PluginConnector) && (
         <div className="px-3 pb-3 space-y-2">
+          {PluginConnector && <PluginConnector {...connectorProps} />}
           {connectorMcpIds.map(mcpId => {
             const Connector = MCP_CONNECTOR_MAP[mcpId];
             return <Connector key={mcpId} {...connectorProps} />;

@@ -187,6 +187,14 @@ ENV JAVA_HOME=/opt/android/current/jdk \
     GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx3g -Dorg.gradle.daemon.idletimeout=600000"
 ENV PATH="/opt/android/current/bin:/opt/android/current/sdk/platform-tools:/opt/android/current/jdk/bin:$PATH"
 
+# Azure CLI (dev tool inside agent workspaces, used by the Azure CLI plugin)
+# Same model as Rust: `az` (~700 MB of Python packages) is provisioned by
+# azure_cli.sh into the per-node `azure-cli` volume at /opt/azure-cli, never
+# baked in here. Only its bin/ (a single `az` wrapper) goes on PATH.
+RUN mkdir -p /opt/azure-cli && chmod 0755 /opt/azure-cli
+ENV AZURE_CORE_COLLECT_TELEMETRY=false
+ENV PATH="/opt/azure-cli/current/bin:$PATH"
+
 # Install Docker CLI (for agents that manage containers)
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list \
@@ -207,8 +215,8 @@ RUN pip install --break-system-packages pytest black
 # Copy server code (modular Python files) and entrypoint
 COPY runner-service/src/*.py .
 COPY runner-service/src/backends/*.py ./backends/
-COPY runner-service/src/entrypoint.sh runner-service/src/rust_toolchain.sh runner-service/src/android_toolchain.sh ./
-RUN chmod +x entrypoint.sh rust_toolchain.sh android_toolchain.sh
+COPY runner-service/src/entrypoint.sh runner-service/src/rust_toolchain.sh runner-service/src/android_toolchain.sh runner-service/src/azure_cli.sh ./
+RUN chmod +x entrypoint.sh rust_toolchain.sh android_toolchain.sh azure_cli.sh
 
 # Verify installations
 RUN echo "=== Python ===" && python --version && \

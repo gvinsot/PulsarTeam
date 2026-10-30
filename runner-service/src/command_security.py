@@ -113,6 +113,9 @@ ENV_ALLOWLIST = {
     # GitHub — injected per-agent from the plugin token resolved by the API,
     # so CLI runners and the `gh` tool can authenticate without re-prompting.
     "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "GITHUB_USER", "GITHUB_API_URL",
+    # Azure CLI (per-node volume, see azure_cli.sh); the plugin's AZURE_*/ARM_*
+    # credentials are added per agent by runner_azure_config.apply_azure_env.
+    "AZURE_CORE_COLLECT_TELEMETRY",
 }
 
 # Environment variable name patterns that are safe to pass through

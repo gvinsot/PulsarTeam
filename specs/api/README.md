@@ -11,7 +11,7 @@ Per-domain endpoint lists:
 - [boards.md](boards.md) — boards, workflow, shares, audit
 - [projects.md](projects.md) — projects, board linkage, GitHub helpers
 - [plugins-and-mcp.md](plugins-and-mcp.md) — plugins, agent skills, MCP servers
-- [integrations.md](integrations.md) — GitHub, Gmail, Drive, OneDrive, Outlook, Slack, Jira, WordPress, S3
+- [integrations.md](integrations.md) — GitHub, Gmail, Drive, OneDrive, Outlook, Slack, Jira, WordPress, S3, Azure CLI
 - [budget-and-llm.md](budget-and-llm.md) — budgets, LLM configs
 - [code-index.md](code-index.md) — code-index API & MCP
 - [mcp-surfaces.md](mcp-surfaces.md) — the scoped MCP surfaces `/api/mcp/admin` and `/api/mcp/management`, and the per-user API keys that open them

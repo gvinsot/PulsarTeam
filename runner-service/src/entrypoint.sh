@@ -110,6 +110,8 @@ echo "  Projects dir: ${PROJECTS_DIR:-/projects}"
 ( ( ./rust_toolchain.sh || echo "[rust-toolchain] WARNING: provisioning failed — Rust unavailable" ) & )
 # Same for Flutter/Android (android_toolchain.sh) — a much longer first run.
 ( ( ./android_toolchain.sh || echo "[android-toolchain] WARNING: provisioning failed — Flutter/Android unavailable" ) & )
+# Same for the Azure CLI (azure_cli.sh) — `az` is too big for the image.
+( ( ./azure_cli.sh || echo "[azure-cli] WARNING: provisioning failed — az unavailable" ) & )
 
 echo "Starting FastAPI server on port ${PORT:-8000}..."
 exec python server.py
