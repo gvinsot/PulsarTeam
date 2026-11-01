@@ -109,7 +109,10 @@ services:
         constraints:
           - node.hostname == server-b
       restart_policy:
-        condition: on-failure
+        # A failed healthcheck or a host restart sends SIGTERM; the API shuts
+        # down gracefully with exit 0. Restart even after that clean exit so
+        # Swarm restores the replica instead of leaving the API at 0/1.
+        condition: any
       update_config:
         order: start-first
         delay: 10s
