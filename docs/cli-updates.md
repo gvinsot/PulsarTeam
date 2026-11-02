@@ -1,5 +1,19 @@
 # Runner CLI refresh
 
+## Claude Code, Codex and OpenCode — 2026-11-02
+
+`RUNNER_CLI_CACHE_BUST` and `OPENCODE_CLI_CACHE_BUST` bumped to `2026-11-02` so
+cached image builds reinstall the latest CLIs. Codex follows npm `latest`
+automatically (remote `ADD`). Versions observed on npm:
+
+| CLI | Version |
+| --- | --- |
+| Claude Code | 2.1.316 |
+| Codex | 0.166.0 |
+| OpenCode | 1.19.5 |
+
+Deployments that set `RUNNER_CLI_CACHE_BUST` in their `.env` must bump it there too.
+
 ## Codex: automatic latest release — 2026-09-23
 
 Every runner image build now checks the npm `latest` metadata for `@openai/codex`

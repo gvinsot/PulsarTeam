@@ -56,7 +56,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
 
 # All CLIs below use upstream latest releases. Bump this shared key to refresh
 # every installer, including Claude/OpenClaw/Hermes, on cached image builds.
-ARG RUNNER_CLI_CACHE_BUST=2026-09-29
+ARG RUNNER_CLI_CACHE_BUST=2026-11-02
 
 # Claude Code CLI (Anthropic)
 RUN echo "Agent CLI refresh key: ${RUNNER_CLI_CACHE_BUST}" \
@@ -68,7 +68,7 @@ RUN echo "Agent CLI refresh key: ${RUNNER_CLI_CACHE_BUST}" \
 # OPENCODE_CLI_CACHE_BUST (or build with --no-cache) when rebuilding an
 # unchanged Dockerfile so Docker re-runs this layer and re-checks npm.
 ARG OPENCODE_CLI_VERSION=latest
-ARG OPENCODE_CLI_CACHE_BUST=2026-09-28
+ARG OPENCODE_CLI_CACHE_BUST=2026-11-02
 RUN (echo "OpenCode CLI refresh key: ${OPENCODE_CLI_CACHE_BUST}" \
      && if [ "${OPENCODE_CLI_VERSION}" = "latest" ]; then \
           OPENCODE_RESOLVED_VERSION="$(npm view opencode-ai@latest version)" \
