@@ -1,5 +1,11 @@
 # AGENTS.md — working on PulsarTeam as an AI agent
 
+Règles communes : `../AGENTS.md` dans l'espace de travail aidlc (https://github.com/gvinsot/aidlc, privé).
+
+Si le sous-dossier n'est pas aidlc, alors continuer avec les règles suivantes :
+
+Si ce fichier est absent, le signaler avant de commencer, puis cloner aidlc si vous y avez accès. Sinon, suivre les instructions suivantes :
+
 This repository is developed by AI agents. This file is the entry point. Read it
 before your first edit. `CLAUDE.md` files import it, and each sub-project has
 its own `AGENTS.md` with local rules:
