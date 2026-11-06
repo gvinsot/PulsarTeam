@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:c3de5f1e2fe6435c4f12fbb3e638703843f168e189d358900d16cc7906e8969b",
+  "claims": [
+    {
+      "id": "claim_774643d37f034747850e10d453f30038",
+      "statement": "The runner is one FastAPI image selecting a backend through RUNNER_TYPE, and capabilities a backend lacks return 501.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/backends/base.py#L15-L31",
+          "version": "repo-lines-v1:sha256:c43922b564db56af26e004f46d0d7325ce6af2a67412e61b555f3b53b95943d1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRmNDZiZjdhOWIxMzQwYmJhMjg0YjQ1ZTg0MWNiMGY0NGU5OTBmYzQxYzkwNDI3YjVmNDI5N2ExNjlkZWNjYWQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM4ZWRhMGIzNjgyMTMxODhkYWZlNzZlZGQwYzNkNmM2ZDA4ZTJhNzE1OGJjOGVjYWY0MTlmMzNkYWMyYzdmODkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVjNDU2M2IzNmM2YzNjYzI3ZjBkNTM2YTJiYzZkMmZmMDA1ZmUzMGM0ZjljNzM0ZWU4MGI5NGIzYzRhNDRkOTUifQ"
+        },
+        {
+          "resource": "repo://runner-service/src/server.py#L1-L18",
+          "version": "repo-lines-v1:sha256:b01f0bdf669a6572eeea5eb5f0c79a8cb4e640096c5f68532f111c19a704e442:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjgxYmVlMTE2ZDgxZmIxNWZkOTc0NjRjMDVlNDFmNGM5MWQ1NzM2ZjljY2ZjZDAzZTNlNTk2OTU1NGRlNjVmNWYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_54a6276103534f7a9075993f943634fd",
+      "statement": "pty_session keeps one subprocess per agent shared by all attached clients, with scrollback replay, and it survives the last viewer until an idle timeout.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/pty_session.py#L1-L22",
+          "version": "repo-lines-v1:sha256:145bc68244eb2f6b38632b6db57617f9ce4e8a79cba870540d29fcdee63236ce:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ5ZWFhN2FjZDQzNTQ5Y2EwY2ExZGY2NDJhYjFlNzRkOGU1MmUyOTFiZTc2ZGJhNmU4ZGI1NjUwOTE0OTYzNTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_e4dfc1abdbe44b38a9cc5408e74e42cc",
+      "statement": "ExecutionManager routes per-agent calls to one HTTP client per runner type, falling back to sandbox for unknown types.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/execution/executionManager.ts#L1-L25",
+          "version": "repo-lines-v1:sha256:66aceafd76e07ac47b10d4eff896f67e56400486e6028364a49c2333ae883541:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE2ZTg5M2QxZjQ2MTJiODk5YWVhOGZkMTg4YmVlMzhmNDRmYmUyM2UyM2MzMzk4MjU3NTg4YTJhZGMwMmY2ODQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIxY2NkYzZhYjE5N2MyYTk3ZDI0YTJkNzc4N2U2M2JmMjQ2NWI5ODg3OTdiMzVlOGJlZjRlYWQ1NzM2MzcxNzQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImRlMWI5OWJiN2I3YzVmZTM2YzgxZjY0MGU5NTE1Yzg2YzJjYThkOWIyMDU5ZmM2YzkyM2YzMDMyYjUwYzUwYzMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ebf76c4249a94fef82552f57639afc9d",
+      "statement": "The runner registry is the single mapping from runner type to service URL.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/execution/runnerRegistry.ts#L1-L20",
+          "version": "repo-lines-v1:sha256:82a6114095e5fcaee008f08244072908fc11498c6a3ffd89e646937af9b1e50e:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjlkMmY2MWFkOGIyZjdiYTY1MDNjOTQ4YTVkYWM1ZDlkNGZjYzMwM2E2ZjFjNjdjOTA2N2JkYWU1NDEzMmNkYWMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc1ZmZlY2YzOTg4ZTM4Y2FmZmUxMzEzZTI1MjU0OTgxZWQ2ODgzNzQwMDM2ZjEzN2IzNmQ2ZTBmZWQxYTdjOTQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjA2M2EyNDdhODI2NTMwMDhiMmY1ZjE3MDY5NGJiNjQxZGRmZmYxZDZhYTgzODRlYzk1OTNmNGVkODNlOGM0MjUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_6b71668122fd416ab2cba8ec2f64b92c",
+      "statement": "The clone URL guard allowlists the final URL because the runner splices the agent's token into it.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/execution/cloneUrlGuard.ts#L1-L20",
+          "version": "repo-lines-v1:sha256:4db88549beb3d1d900d746742f98cfb397ed26f55ad303193314eff55e6d8873:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA4MTAxZDZmOWM0YzQwNGRhYWZmOTI5MGIxOTM3NzQ4OTljNmY0YTBiNDNmN2ViNjNiZjQwNTJhMzFiOWI4MjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgzMDg2OGFjMDI5NDVjOTk5NjBiZjMwZWMxY2ZiNDVlNDIzODcyNjc4ZmRiZGRmNzc3ZDliOTc0OTBjNjQxZmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRkNDk0MTkyMDMyMTgxODE3Y2NlNWNmOGMzNmZmNGFkMGI4M2NlMzQ4NDgyZGRkN2RlZTFkNjg5NGY4MjhhNzcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_93f81115f19f4453b58d1f9a7ddb2d98",
+      "statement": "A CLI's busy state is inferred from relayed output, the runner's idle seconds and reported tokens, with a stall rule when no tokens are consumed.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/cliActivity.ts#L1-L30",
+          "version": "repo-lines-v1:sha256:291a3b3bbe07ff6548a0c8a18f67f02de6e71e529fa3e5506bfa45fe08b9e4e9:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU0YTVlYWYzMGM0YWI4YmI0OWNkZTMzYjg3NTBhNjI1NzM4ZGUzZWUyOWIxZDdlZTE2MDI4Yjg4ZDE0N2Y3MjEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM0ZTczY2I1OTBjZTIyMmFjNzJiZjcyYzhlMjgxYjMwYjY0ZGFhMjU1NmFhYjE2NjlmMWVkZjI3NGFkMGZiYWYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_200ab0c3cd734bd7814e82945a48f38c",
+      "statement": "Terminal-driven auth failures resemble finished tasks, so the runner's latched auth error is polled before the workflow advances.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/tasks.ts#L1860-L1870",
+          "version": "repo-lines-v1:sha256:99bd8deb78b08cbe1c8567fc0b072c499e76cd17876df829e5aa602aedbfe72f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRmMmEyZjk5NmYwOGU2ODBiZDI5MjEzNWE2ZmE0OTc4YmRhMjZlNjAyZDg0ZjMzY2IxZDU5NDc3NWQ0MzA0YjUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2MzYxNmU0ZWQxZjExMjUxM2EyZDk0YTQ3MTI1MjYxOWFjN2RiNGRkYjAzY2U4OWFkMzZjNzE4NDM1MGY3YTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNmOGU4OGJlNTY1YjRmZGYzYTI4NmE5NDYzZTI4MTQ0MTRkZWVlODMzZDRlNWU4YThjNmQ4MTUxMDIwNjI5MWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU5MzUwM2Q3ZDM4NjJlNmFkMTQyMDgwODIxMmViOTZlNjcyNTU1MjdjMDc0YjYyM2MyZjE1NzA5NzZiY2Q0MzEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_964ce86f078b408fb2c86e87414ff3af",
+      "statement": "HTTP 200 for terminal input acknowledges delivery rather than completion, and a task is never pasted twice.",
+      "evidence": [
+        {
+          "resource": "repo://docs/codex-input-recovery-2026-09-16.md",
+          "version": "repo-file-v1:sha256:a03a3e62baa49d31a48fa9ce37a5913d321bff8dd5720a8e738788fce8e7d0e8"
+        }
+      ]
+    },
+    {
+      "id": "claim_ecf01b19cba549199038b679738f11cb",
+      "statement": "Claude Code MCP servers come from a generated file passed with --mcp-config and --strict-mcp-config.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/backends/runner_mcp_config.py#L1-L21",
+          "version": "repo-lines-v1:sha256:ef3fe8e8cb8947d7dcb0c5640cba739801c3204d9370193d02a400fbe737b810:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU1YjZlODcwNmI0MzA0N2YyYTZkYjY3ZjEzMjYzODU5NTYwNGU2N2YzNjk2Njg3NmNlMDE1OGYwMDUzZTZiZDEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_bec2904e326648319f2479c783012ea0",
+      "statement": "Codex follows npm latest through a remote Dockerfile ADD, while other CLIs rely on cache-bust values.",
+      "evidence": [
+        {
+          "resource": "repo://docs/cli-updates.md",
+          "version": "repo-file-v1:sha256:aad022fb581c3e337a7b170465c23b908512064c480c41c286238cd8366c6126"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

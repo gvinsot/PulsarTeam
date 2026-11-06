@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:961a3408e3bece6c564e40476d7d69481aab3c0461270e29cbe7ff5ba870da64",
+  "claims": [
+    {
+      "id": "claim_7f62f4d5dd204b46972e2a0bfb8ed10e",
+      "statement": "Startup verifies the Node runtime, secrets and CORS, initializes the database, seeds data and loads agents, and connects MCP servers only after HTTP is listening.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L628-L653",
+          "version": "repo-lines-v1:sha256:f0eacd7755089ecb077cfc428bd2d7fa716f25333a883794df0c37d8ec00f281:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk0NTRmMjYzMjRiZTNlNDM2OWE1MTM5YTQxZmZhZTM2MjcwZmVkODI5NGU1NWM3MWZlOTkwNTQ1Mjc1YWQ1MDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZjZDMwZDM4YzkyNDYwNmU1MWQzNjE0ZmEzYWRiMjA5YzBlNmE5MmI0MTc5M2FjN2MxYTQ0MDRhMTE2ZjhhMGIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY5ZjQxMzRlMzJhMjFkMGU2ZDRmYzEyNTYzNGExNDg0YWQ5MWRkZjE2NTU2ZDVmZTI5NDIwZTE2NmU5NWJmNWQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcwM2I5NmU3NTA0Y2YyYzlkZmQyNjNhNmQ2NTlhMThmZWNlMzkxMzE0YWUxZWRkN2YxMjQ2YTBiM2I3ODg4YWIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3a8fa9a7d2e34de492cb2f9e3394e09d",
+      "statement": "The server refuses a Node version lacking the Brotli decoder fix.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/lib/runtimeSecurity.ts#L1-L30",
+          "version": "repo-lines-v1:sha256:7b16ace745a2ce0961c7f969f321dd7624c36e1add960725cc9ebb3d1c858ad8:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ2ZDY3MzEzZGY0NWEzZDU5ZTJiMjc2ZjRhNDY5YTg3YjRhOGM2ODNiMzI5NWIwODRiMzYzYmJjN2UwZTJiZDcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_83724e7f03984d2f9b03839cf540ff93",
+      "statement": "Middleware applies cookie security, security headers, environment locking, a 1 MB JSON limit, a 300 per minute per IP rate limit, then CSRF protection before routers.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L198-L242",
+          "version": "repo-lines-v1:sha256:50d959fd800f98cfe6b7bb94f9371bc3df4076b01c7903ee7e7c4b20e50b94cf:eyJzZWxlY3RlZExpbmVDb3VudCI6NDUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNmYzcyNGU5ZDZmNGY1MTEwNDk2NTQ0NzI1Y2M2M2Q2ODdhODVmMDliN2Q5MzRkMDA0MzJmYWM3NDVkMGIxMzYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI2M2ViMmQ4YTE5NjUwNWZhNWRmN2IwYzNjMTkwNjVhYWJkZWFkNmI3OGJkMTdiNGY5Nzc5MzgwNWY2ZTNlOWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImIwYzU0NjQwMDMwYWQ2NzQ0YjRmYTFkNWYyOGU5ZmQ0NTA3YjJlMjNkOTJlMjBmODRiYTY0MzZmYTg3MGIxODUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM0YWU1ZmRhNWNmN2VhMjhiOTdlYTk2N2E4OGQ4YWYxYTJmNTFiZWM1Y2M3NGM3NmNjYjY2ZTM3ZjA5MGZiY2MifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_9ca1df5acaae4cb891dd2d36b2316ef3",
+      "statement": "The route inventory test boots the real app and fails on undeclared, changed or stale routes, and pins the number of public routes to 20.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/__tests__/routeInventory.test.ts#L1-L35",
+          "version": "repo-lines-v1:sha256:ce16ff4577a096b185065ff9539481f5cc21e8544ce996e5e9ea105b8bb5ab9c:eyJzZWxlY3RlZExpbmVDb3VudCI6MzUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3OWQwZWI4N2IwYWJjMmQ3NmE5ZmFiNzgwY2E2ZDEwZWRkNzE0ZTIwODA3Njc2YjI4NTY4MTQ5YmZiMzlkNjEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQzNWQ5NmZiZTI4NjE2MGRmM2ZhZGViMzk3MWVkOWYzMTM4Zjg4NzEyOTY1OGEyN2U0NGE0NDcxYzMzNzQyMzYifQ"
+        },
+        {
+          "resource": "repo://api/src/services/__tests__/routeInventory.test.ts#L619-L619",
+          "version": "repo-lines-v1:sha256:026a597dcf2b1f6263136ca09734199faf757cdcacef8e7ea5e842907d219ade:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDI2YTU5N2RjZjJiMWY2MjYzMTM2Y2EwOTczNDE5OWZhZjc1N2NkY2FjZWY4ZTdlYTVlODQyOTA3ZDIxOWFkZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMDI2YTU5N2RjZjJiMWY2MjYzMTM2Y2EwOTczNDE5OWZhZjc1N2NkY2FjZWY4ZTdlYTVlODQyOTA3ZDIxOWFkZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMThkMjUxYTRlOWRjNWM3NjAzNWFjNDdlOTlkYTRiNTBmMjQzZWQ4OTlkZjYxYmQ0MjEwMDM1ZmUyYjc2ZDM4YiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjBmNjAzM2NiMGM2YzM2Y2UyZDI2MDBjODk2OGRlYjdkNDEwNTdiM2FkNjA5ODIwMTMwYzY1MzgwNDc4M2NhMiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_514275ba065442eda534d66aa026e151",
+      "statement": "The route inventory sees only middleware guards, so inline handler checks and anonymous closures are invisible to it.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/__tests__/routeInventory.test.ts#L24-L34",
+          "version": "repo-lines-v1:sha256:db322f9f4d1e71dde3e60bcaa9b4d15d4fde4b84a849caf7327d3d810e4bc0d5:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhkODEyOWNkYTQyNDZiZGNkZGI1Mzg4ZTQ1NDdmYjRjMGI5MWVhMThhMmJmOWE2ZTBhYTE2YTljZWU0YTlhMGUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY2ODNiZjMzNjFkNzRhMDYxZjMxZjQyZmNlMzRkZTZlNzdjNjc2NTc2ZjViZjJlNGI4OGFiYzAyYjZmZDZkOGMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ4ODVjYWJkMzEzY2JlOWZkNDIwZDM3ZWIxYzBmNjQzZTU1OTBiOWFmMGU2ZWM3ZjMxODdjOTFkZTk5MGUwODAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRlMmIyZGY4ODVkY2QxNjkzOWFlOWUyMzc1Y2Q4OTY4MTMwODU2N2EzNDQ2NjQyZmU4ZmNmNDBlNDEzNTlmZDYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_19ec7a1742c54b589e0d3ffc447f0d6c",
+      "statement": "Production error responses hide details behind an errorId, and the auth-browser control route never logs or returns parse failures because they could contain credentials.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L571-L596",
+          "version": "repo-lines-v1:sha256:8c7996512b07f4c8f3da393ac85da1d21874f2ed4ecd0496243356cc7cd917f2:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhNzBmNTQxNzJiNzRmMGFlYWEyNTk4NWJkZThjOGYyNGIyNWM3OTFiNzE4OGIzNzJlNzUwY2Q4YjdmMDNmNTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2ZjViNDBiMTU4NDU3ZDE3ODY0ZjIxNzkwNzg2ZGQ1YTJlY2RiNjRiNjZhNjUxZjc4OGQ0ZTI1Y2QzMzAzZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjllZDk2ZDBjZTcyNWU5MTk4YTc5OTRjYjRlZWM0MDRhZDZiZWFkMjM0ZWZkMzI5YTczYjE2MDc5NWE1ODcyMWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY5MzQ2ZDRjYzQ2OWIzNWRiMDQ4ZGQyMzZmMjVmNGVkNmEyMDY4MGRjMzIyMWQzNzRkZGY5OGI0ZTZkODQzNDgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_d683205dee0f4ea4acca766b6a471779",
+      "statement": "Socket handshakes validate Origin and then authenticate from auth.token or the session cookie.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L598-L622",
+          "version": "repo-lines-v1:sha256:f6b737d8727afbb3ac65f5c8797fdab0022edc47477038224a91457b9fdbf019:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM0NzZhMmRmMGNhMWY5NTU0OWEzMzY1MmMwMjcwZDQ1NWY2ZTQ0NTEwY2NkNGY1NzRmYjNlOWVmYzBmZmEwNTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2ZjViNDBiMTU4NDU3ZDE3ODY0ZjIxNzkwNzg2ZGQ1YTJlY2RiNjRiNjZhNjUxZjc4OGQ0ZTI1Y2QzMzAzZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI3NzlkMTE4ZDZlM2NiZjQ1MDUzOTc0OGRlZTdhNDMwN2FjYmU2NDQ2Y2JhMjk3ZjI3NjBmYTVkMGJiYTFiYzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhmYjExZGI4OTZhZjcwYzM4YTMyMzAyZTFiMDE1ZWE4YWVkMzNlNDIyZWU3OWZiMzE0ZTc5YzEyYTg1YWM0YzkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_050533433d8e49ec859a9c8260f2bbc0",
+      "statement": "WsEmitter routes events to a board room when it can derive a board and otherwise broadcasts to all connected sockets.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/ws/emitter.ts#L72-L97",
+          "version": "repo-lines-v1:sha256:da929a69588e1dd87559d1bcdda6574106e6fd71588715b2cb25fbe73c3b2828:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUwN2I0MzJhYTI5OGMyNmQ4MTQzZWNjZDYwMjc5NDM4Zjk4ODgwZTkyNjAwMjE0NjdjYTNmYzczOTk5NTNmNzgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZTU3ODhkNWQ5ZDczZDI0YTgxZGJjMGE1YTc0YmZhODJjOWMzYjNhZjk5ZTUyYWY3OTZlOTBiNDY4YThhM2QiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE4ZDBjYTU1OGE4YTA3MzQ2OTBlYmU2ZjJmM2U3MWUyZDM5ODE0NjdlYWY0NDljM2I4YmQxNmQ4MmUwNDE3ZTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM2OTE0ZTIxNzkxODlhZGM2NjgyNDgxNGNmOGQxODcwYTQ4ZGQwNGE1ZDdhMGVlZjgwNmNiZjc0ZDUxZjdjZjgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_e5e9eb3be692443f8a10a61c2c7ae567",
+      "statement": "The OpenAPI document generates request bodies from zod schemas and MCP tool catalogues from real server instances.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/apiDocs.ts#L1-L17",
+          "version": "repo-lines-v1:sha256:1bfc3d2573c0a6ba1749b2e3fa35b1a12d7ef5488c91600097801a9c105764e8:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2NmIwMjBlMGZiYzc0YWM3MTU5NGI3NDMyZDdjMmUwM2JhNzRkN2U2ZmYwZjI0MGY3MmFhOGY5ODk1NzRhNjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM0ZDBhMDg2OWNhMjdjZTk0MjdiYjg0OGY1YTIxNTFmYTViYTZjY2E5NTJhNjdjMzkxNGQyNDRkMDA4ODdlMjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ0YWMxOGQ5YmY4MGU2Yjc0M2YzZDAwNzkxZDdhNzc2YjYzYWI5MWQ5ZGY5NzY4NTc1Y2FhNjIwMDViMDNhYWMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_27bf39dad88e4eb09bc6788fd1c99ba3",
+      "statement": "Unhandled rejections and uncaught exceptions are logged and the service continues.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L690-L696",
+          "version": "repo-lines-v1:sha256:b4b7f9d26941447fe682c3ea5d96b5bff70e7aa9855bdbffa32b5442fbb0aa2e:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmFmMTUyM2ZkYjY0MzhjMmFmODY2NGJmM2FhMGEyYzE4N2YzNGUxM2U5YzMzMjg0ZDBiMDQxYTNiODY3MjYyNyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjZmNWI0MGIxNTg0NTdkMTc4NjRmMjE3OTA3ODZkZDVhMmVjZGI2NGI2NmE2NTFmNzg4ZDRlMjVjZDMzMDNkMiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjczY2FkOTc4ZjcxMzdhZTkyZDc3MGJkM2IyZGI5NDFlYzMxZjM5ZjBiOWExNjU0MWZhZjYzYjZjZmZiZDQ1ZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzFhODI5N2ZlYTBhZGYwNjQzNWU0ODA3Yjc0NGFiMzdlZTljODI4NDE3YWE4NTI4Y2M0MDFhZWRlNjI0YTE0NyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_5cef78e758c54a6bb5d6d5eff7959459",
+      "statement": "Shutdown stops the task loop, sockets, MCP servers and execution environments, ends the pool last, and has an 8-second failsafe.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L656-L688",
+          "version": "repo-lines-v1:sha256:cfb3d6f97e860c297a2d20f911470b14a8c0818388146873e45a42ecdce39210:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJkZTU4YTUwNzRkMzFjNmY1ZjA1NTU5NjFiYmIxMDE5ZDQwOGVhZDNjMjkxMmY4ZjRhOGNlYjJkYzA0MjNhMzYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRmNjM2NDVmY2MwNWQ1OTI4Y2M0MGEwYmY1N2JhZDA0M2JlYjcxOThhNmEwODk3ZDM4OTBiMjk0NTIxMzU2YTQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE1ZTM5N2M0N2RjNGZlMWUyN2YwNjc5YTNkMzA0NGZlYWUzZTA0ZWNmMzNmYmZkODQxZWJiN2U1MmJkZmJkYTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZhNDY4NDBjNzU5ZTQ0MmQ2OTQxNGIwMzVjZmNmNmM3MTZmZGVkMTEwMmM5MDU3NDFiYTI2ZWY1MTc0OGZlMTQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_83c4875264b548cd876c74317c3f6fdc",
+      "statement": "The desktop bridge registry assumes a single API node with no Socket.IO adapter.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/ws/socketHandler.ts#L31-L36",
+          "version": "repo-lines-v1:sha256:30e45865657772ed8b18f8708890ebcbf9d42be6cb6015b94f35c4ffdf8c7907:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjA5MDI0YzRmZjYxZDgyZjdmMjQwODQ2ZmEyNTFiNGQ4MTE4NDkxODVhMzI4YjUxNDEwMjZiYjk1OTRkNzkyNyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNGM2N2ZlYTBmNGU2MGVhYmVlOTgwM2FiMjE1MDU4M2RkMGY5Yjc2OTg4MzkzNGRhYjNiYmZkODhiNDNkMzAzZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzdhYTQwOTVjMGViYTA3ODhhMmU4MWFiOGI5ZTYzNGZjYTAyNWU3YThkMTI5OGE2N2YxMmUzYjNlNjk4ODZkOSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYjNmOTEzMmZiZjZjMzUyMzczZWZkZDc0MjM2NmI4OWFkZTY5MjU0OTc1N2U3MTQwYjRmZDY4NmJjNDBiNzQwMyJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

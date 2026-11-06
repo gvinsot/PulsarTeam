@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:65f25c4fb470e934e11d02c0ee1cf969dc3787f99fb11073b525e87ff2aa0a9f",
+  "claims": [
+    {
+      "id": "claim_9b9c4207d5394e9b8dccba41e59a6e3a",
+      "statement": "CI runs typecheck, test and build on api, frontend and desktop, and lint and format only on api and frontend.",
+      "evidence": [
+        {
+          "resource": "repo://.github/workflows/ci.yml#L29-L85",
+          "version": "repo-lines-v1:sha256:54aa39b1ba5ed5ecaa5bc7866781afff4ba39ca0e2aea2dc8522e0fe4a5d52c4:eyJzZWxlY3RlZExpbmVDb3VudCI6NTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU5ZDgwMTU0ZWQ0MmZjNWM3NzliMTMzMTU3OGI1OGI4OWM4MDFlYWNlNzRmMjRjZDQ4ZWI0YTIzNTc5NDBhOTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJlMzgxNGUxZTUwNWNhZWU4MTlmYjNhNTFkODVhOGE4MDI4NTE5NWJiNjJjNzhjY2ZkN2Y1YzgwZTEyMzQyMzAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZmMWQ3MGQ3MmJhZDIzMWQ0M2M1NzVhY2VmNjk0NjU4MGU0MzljODc5Nzk0ZWQyZWExZjRhNDAzNDAyNDUxNzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRkZDA5NDZhMDg2OWE0ZGY1YTUxZjEzYTZjNjFjZTlhZjM1OGM2ODY2MGY0OWY2NzhjODkyNTQ0MTY4YWViMTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_cbca4ba5fc9e40769dfd8e746ade82ac",
+      "statement": "The any-ratchet job runs only on pull requests and refuses an increased ceiling.",
+      "evidence": [
+        {
+          "resource": "repo://.github/workflows/ci.yml#L92-L133",
+          "version": "repo-lines-v1:sha256:8bb8413854c258cd579803ae9c00e1841fa01ed180b6fd0dcd1cfb53161d98b7:eyJzZWxlY3RlZExpbmVDb3VudCI6NDIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhYmRhODhmZDU4MzhiMWNlM2JiOGJmZDRhZTE0NWU4M2EwZTRjMmI3NDE1YTIxMzk2OTc3M2U4ZjQ0NWYyMjAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk2YmNiNTJmNWVjNDU5NTEzZjAzMTgyZWJmMzg1NGRlNTNlMTA5MjA3NmRmYzcxOWJhNzBhOWZkZTdlZjM2ODMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM4Y2M1ZjZlM2UxY2IxYWNjYWEwNGVmNGM3NDkyYzg4ZTA2OTUyZDJjN2FlMDcyN2QzMWFiMzA4ZWViM2M5ZmMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_1b598d91b7d048a598cf7767e434da46",
+      "statement": "Lint enforces a pinned no-explicit-any warning ceiling for each project.",
+      "evidence": [
+        {
+          "resource": "repo://api/package.json#L16-L16",
+          "version": "repo-lines-v1:sha256:0e68bf16bbfd8b3986012ca4d1334797bfb20e8fc9b5fa72a0556f20a032679c:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMGU2OGJmMTZiYmZkOGIzOTg2MDEyY2E0ZDEzMzQ3OTdiZmIyMGU4ZmM5YjVmYTcyYTA1NTZmMjBhMDMyNjc5YyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMGU2OGJmMTZiYmZkOGIzOTg2MDEyY2E0ZDEzMzQ3OTdiZmIyMGU4ZmM5YjVmYTcyYTA1NTZmMjBhMDMyNjc5YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTc1YzY2MWQ0M2IzZjRkODBlYTNmN2JmNDZjMWQ1NGVjNjEwZTdkMDc3MTcwMGNkNjRjYzAyMTE1ZjVlMGZkMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjJhYWNmYjk2OTNkZjEwNjJhODBlYzNmNjQ0ODBkOGJlN2EzZDllYjU1NjY0ZTFlMDAxNDFhMDcwYjM5ZDZkOSJ9"
+        },
+        {
+          "resource": "repo://frontend/package.json#L13-L13",
+          "version": "repo-lines-v1:sha256:f04a2a355d64a8b00d51c3cdda950a3e7e31a6f6980adb6c0386cd65818aa7fd:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjA0YTJhMzU1ZDY0YThiMDBkNTFjM2NkZGE5NTBhM2U3ZTMxYTZmNjk4MGFkYjZjMDM4NmNkNjU4MThhYTdmZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjA0YTJhMzU1ZDY0YThiMDBkNTFjM2NkZGE5NTBhM2U3ZTMxYTZmNjk4MGFkYjZjMDM4NmNkNjU4MThhYTdmZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMDFiZjM2MTE3NzVlYjE0NDRlNjczZjFjZmMyYmRkNWFkNzJiMTcwZTYxMjU2ZWJjNTBmZjFhOTY5OThlZDBhYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjJhYWNmYjk2OTNkZjEwNjJhODBlYzNmNjQ0ODBkOGJlN2EzZDllYjU1NjY0ZTFlMDAxNDFhMDcwYjM5ZDZkOSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_12addf80b2434b48a91ee9fbeac1a1d3",
+      "statement": "API tests only run from src/services/__tests__, so files elsewhere such as api/tests are silently skipped.",
+      "evidence": [
+        {
+          "resource": "repo://api/package.json#L14-L14",
+          "version": "repo-lines-v1:sha256:5ab207122af714739f46a7495b6f0efb95c7a1e0cce695eceaf91ba2ed336698:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNWFiMjA3MTIyYWY3MTQ3MzlmNDZhNzQ5NWI2ZjBlZmI5NWM3YTFlMGNjZTY5NWVjZWFmOTFiYTJlZDMzNjY5OCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWFiMjA3MTIyYWY3MTQ3MzlmNDZhNzQ5NWI2ZjBlZmI5NWM3YTFlMGNjZTY5NWVjZWFmOTFiYTJlZDMzNjY5OCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzlmOGU5NjJiNTFkMGRlODJhNDIyN2YyNTA3MTcyYmVhYjZmY2YwM2ZmMzY1NjI0MzBjZTg5NTljNmZkNmQwMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDY5NmY1NzUyNmIyMDU1NjI5NzYzYTRhY2E1MTNlNDg5ZTMzYmEyMTI4OTM0NjZhNzNkOTUyNTQ0OWIyOWM3MSJ9"
+        },
+        {
+          "resource": "repo://api/tests/handoff.test.ts#L1-L10",
+          "version": "repo-lines-v1:sha256:0808698b1045240df93f158ab170033f278217e577dba0950fe7c507deb22f77:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc4M2JmYmE5ZDIwNTcwYWJmMThmNjYxNmEwNjE2ZTM1ZThlZjY0NTI2MWNhZTJlZjFjYWZiYTlhYWE3YzZlMjAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBkNDdjNTU4ZGU2ODM5ZmVlMjcwMDI3YWE4MTc0ZTYxYjJhYmVjNzVhMTEzOWVkNzIyZDYzNDdjYTRkMjQyYWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMwN2NmZGMzZTNhYmY2OWJlZjBhMWY4ZWIxYTgwZmY4ODVmZWU3OTllMWMwMjAwYjFjMzJjNmNkYjI1NzZkMWIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_c89680c56095445183acfaefddf11a7c",
+      "statement": "Frontend tests run only for .ts files in __tests__ directories.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/package.json#L12-L12",
+          "version": "repo-lines-v1:sha256:69f00dcab560055633bcca175c0a5ecef266783e26c34ab54ac0ab73761edb9d:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNjlmMDBkY2FiNTYwMDU1NjMzYmNjYTE3NWMwYTVlY2VmMjY2NzgzZTI2YzM0YWI1NGFjMGFiNzM3NjFlZGI5ZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjlmMDBkY2FiNTYwMDU1NjMzYmNjYTE3NWMwYTVlY2VmMjY2NzgzZTI2YzM0YWI1NGFjMGFiNzM3NjFlZGI5ZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2UyYzZlNTNlOTA2M2U2NWJiOWY1YjhiMWQ0MzNlYTE5MmFmOWY5YWE0Y2RlOTFiMDI3NDY1NDM5NWI0MDJiMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzViZmQ1NDM4OTY1OTFmMWJhMGY4MTYyNDA4OTk1NGU2OWQwYzg5ODM2ZDZkMjBhZTFlM2NhN2FkNDdhMzJkNiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_f7132a4b3252488cad9c80cb4652594a",
+      "statement": "scripts/check.sh runs every requested project even if another fails and exits non-zero if any gate failed.",
+      "evidence": [
+        {
+          "resource": "repo://scripts/check.sh#L1-L10",
+          "version": "repo-lines-v1:sha256:9572f6eda9e94339b41b5a5be190c07a975f284cf9e3eb8e664ee67c127824a1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFkOTVmYzA0YTgwYzk1MmY0OWNlNDE4ODYyN2M1M2IwZmJlOGM0NDA0MWI5NTJkNTkyYWNkMWRlOTk4NjE0NjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ5M2M0MzkwZjRiYWVmNmRhMTk5OGM5YjE3N2E3MGZhMWY4NDVmNDJmMWMzNWZhZTJjNjk2ZDNhMWI1ODVkNzQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU5ZTVlOTdmYzc2NGVlYThkMWE5OTQ5MTc0MmM1ODBjNTM1MWU1NzQ2M2YyOWE0YzdmMDNjZDA0MDBiOWE2NmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_44aa2f34126e4591843f6f463b68a375",
+      "statement": "All three tsconfig files enable strict mode, contrary to CONTRIBUTING.md's statement.",
+      "evidence": [
+        {
+          "resource": "repo://CONTRIBUTING.md",
+          "version": "repo-file-v1:sha256:b631754b054f1b67cb537fa1821c04beb751168f3e7d31d2c61ff151cd5b5cfb"
+        },
+        {
+          "resource": "repo://api/tsconfig.json#L41-L41",
+          "version": "repo-lines-v1:sha256:5b5b3bcc1ac14604cb229098e9105bdb9736a0214cda9d14209e75a36a56b1c0:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNWI1YjNiY2MxYWMxNDYwNGNiMjI5MDk4ZTkxMDViZGI5NzM2YTAyMTRjZGE5ZDE0MjA5ZTc1YTM2YTU2YjFjMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWI1YjNiY2MxYWMxNDYwNGNiMjI5MDk4ZTkxMDViZGI5NzM2YTAyMTRjZGE5ZDE0MjA5ZTc1YTM2YTU2YjFjMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODRmY2ZhZTZjOGMzYmEyNzFjMjFlYmJjYTUxZGY3ZjJiODJkZjZkYjg5M2RjZmRjZmJhNjE1YmU2M2E4Njg2NCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTY3ZjE4NzA0YTczNzkyMzAwZThhNDZjOWQxZjMwNjBlNWIyYzFkMmQ0MmI0NDk4MzhkYTY2YTE0NjRiYjM5YSJ9"
+        },
+        {
+          "resource": "repo://desktop/tsconfig.json#L8-L8",
+          "version": "repo-lines-v1:sha256:5b5b3bcc1ac14604cb229098e9105bdb9736a0214cda9d14209e75a36a56b1c0:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNWI1YjNiY2MxYWMxNDYwNGNiMjI5MDk4ZTkxMDViZGI5NzM2YTAyMTRjZGE5ZDE0MjA5ZTc1YTM2YTU2YjFjMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWI1YjNiY2MxYWMxNDYwNGNiMjI5MDk4ZTkxMDViZGI5NzM2YTAyMTRjZGE5ZDE0MjA5ZTc1YTM2YTU2YjFjMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTgyYTVlNjg4MzhmZTVmMjU3YzNlNDlhOTQ2MDU1YTRlMmU4MTZhMjhhNTU3OWEzNjMxNDllZDJjOTEwZGI0MCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjlhNjBkNmY0YTVmODA5OWM5ZDZjZGJmODMwYmRjMGNmOGM4ZWViZGY1MDMyOTQ5ZGVmMDdhNWI4MjllMTBmZSJ9"
+        },
+        {
+          "resource": "repo://frontend/tsconfig.json#L39-L39",
+          "version": "repo-lines-v1:sha256:5b5b3bcc1ac14604cb229098e9105bdb9736a0214cda9d14209e75a36a56b1c0:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNWI1YjNiY2MxYWMxNDYwNGNiMjI5MDk4ZTkxMDViZGI5NzM2YTAyMTRjZGE5ZDE0MjA5ZTc1YTM2YTU2YjFjMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWI1YjNiY2MxYWMxNDYwNGNiMjI5MDk4ZTkxMDViZGI5NzM2YTAyMTRjZGE5ZDE0MjA5ZTc1YTM2YTU2YjFjMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOWFjY2UzODQ5YmJhY2Y3M2E5ZDNiOTRkYmVjYTU5Nzg0MmEyOTgwYWJjYjg2OTA1NWU3ZWU2OTU1Y2I4ODM2YSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTY3ZjE4NzA0YTczNzkyMzAwZThhNDZjOWQxZjMwNjBlNWIyYzFkMmQ0MmI0NDk4MzhkYTY2YTE0NjRiYjM5YSJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

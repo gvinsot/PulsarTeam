@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:3f59d9ec2873dbeb293b353d85afb796cec47b452d75fb4273d98eaf7e51ce29",
+  "claims": [
+    {
+      "id": "claim_9562df8b089543fcb5b12d7e178a60d7",
+      "statement": "createProvider routes CLI runner IDs to VLLMProvider against the runner service and rejects decision models as chat providers.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/llmProviders.ts#L1314-L1361",
+          "version": "repo-lines-v1:sha256:ffa18773a138422d48f30dd8079f30e33f9e38866b92546f8845068fa07bad08:eyJzZWxlY3RlZExpbmVDb3VudCI6NDgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEyODM4NTJmYzkxMDgyODUwZDA3YjA3MzhhNTZiODA1YWE0MmVhM2U5MGRiMTkyZTVjNWUxMTljY2YxMTU5OGQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjEyNjUzZGE4MTkzMjE4MDM1NGRiOWJjNWMwODZiYThiYjQ4NjhmYzIzMmQ1ODZiMTg1NTU5MWFlMzBiZmU2MDUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_a67aca410c6b4f47bc0872e228cda806",
+      "statement": "resolveLlmConfig uses the agent's stored LLM config, and otherwise returns empty provider and model with the agent's own settings.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/index.ts#L682-L721",
+          "version": "repo-lines-v1:sha256:b5deff2f7a2d1499615c62c61310764294f27f25e04e0e36484730b2c9a98d7d:eyJzZWxlY3RlZExpbmVDb3VudCI6NDAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU3MGVhMWE3MGY3ZTY4MGRkOTExZjZiZDMzZGI4YjQ2ZmNmODJhMGI0ZGYzMWJiNTVkOGY3MzU4MzExNjY5ZTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZTU3ODhkNWQ5ZDczZDI0YTgxZGJjMGE1YTc0YmZhODJjOWMzYjNhZjk5ZTUyYWY3OTZlOTBiNDY4YThhM2QiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk3ZDg2MzJlNTRlOTI5OGFiYjk1ODcyN2UyZDUxNDA4YWJhZjEzNjYwMzUzNzkxMDE0MGFiZjY1YjMwYWI2MTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImFkYzJhOWIzN2ZlNzU5MDcyZjBjMmM0NzJjZWI5NjEwZTZmNjdlMWM0NmM2ZDcwNDU0NDUzNjJiMGUyMTdiNjcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_44ccfc2a366440c3818f126735d4a1d4",
+      "statement": "The LLM API requires a key whose owner can edit the addressed agent, rechecked per request.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/routes/llmApi.ts#L35-L50",
+          "version": "repo-lines-v1:sha256:43e71649d78cbded03c220341c9f7bd224ddf16aa364ddc0ab4de38791056954:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzZjhlMDdiNDYwOWIxNGUwM2UyNTNhZjcwNjQ2ODYwZWJjMGFlMmNhMGMyMzE5MWE5MmY4MDUzZGE4YjhiNGIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUxNGUyNDIyMmIxMWNkMDU5ODA1ZjFlZjk3NDkyNGIxNjQ4YjVkZTBlNTIzZTVlNWI0NTIxOTBhNTBjZmU1MzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI2NWZkZmQzMDEyMmJkODExN2IxOGQxMGZjYmQzNTQ0NTdjMThmMDQzMmRkOTRmMzczNjY2MjlkYmFlMjY2NzciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijc5MmQ2NTM4YTE5Yjc5MDJlZTEwZGYzOTQ3MzNkNzZiNGE0OWQwMjM3NTFmNDZkNjM1NzUyYTA0NzBlMWE1NzQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_8e11df317bfb4cdb97a9aa9b5673e696",
+      "statement": "LLM keys are limited to 20 calls per minute, and prompts to 200,000 characters.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/llmCompletion.ts#L22-L26",
+          "version": "repo-lines-v1:sha256:8310095dad6ac2e3f983a361556ae6f9c146a7c2464560086eaacde2851b1462:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTUyMjRjYzQ4MzRhOTRhZTNiZWI1ZjkwYWQyMzkwYWYzY2UzODdmZGU3MGU1NmQwZjM0ZjQxNmQ0ZmExNDM2MSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMzU3OTE4MjdmY2UyNDg3ZTlhNDhmNjMyODliNDA1YjVmZGMyN2VmNjJlNDQ3YTNjZTE2MGQ5ZjY0NjA3M2JlMSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzI5ZTM4MDAwYzdlMTgzYTQwNDIwY2NhNzM1ODI2MzIyYTJhZThkMmEwMjgyNjk0ZmY1YmM1ZDYzMGEzY2IxZiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYWExOGFiNzYxMWI5YjMwODcyZjg1N2NkMDZiNzA5N2NlNmVkMTlmZTY3M2NmNTM3NTU5ZWMzMzM3ODI3OTg2NiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_433225ee9c5b45a08dd1706f98c7e79f",
+      "statement": "The completion is taken from an answer file the agent writes, falling back to the chat reply when it is missing or empty.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/llmCompletion.ts#L1-L14",
+          "version": "repo-lines-v1:sha256:a829b06474192ab0d266bb0a947f31d764b477429efbb42e1dc56cc4dadbfda9:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjlmMWE2MWNkNzgwMmQ1NjhjNzFjY2ViOTU4OTc1ZmI0ZjY2OWRlYmJiODAyM2Q5MmI4NWM3OTc3YTYwNzdjYjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdjYWQ2NWUzNzUxYWFiNDRiZTc1MDFjMGEzZTc4NmE2NmJkMzY3ZmZlYjQ5NWZmMzM4NzlhN2IzZGE1ZjA1ODYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_436f803d1c06441f8067d493f875c6d2",
+      "statement": "Web search sources are captured server-side from the agent's browser tool calls, not read from what the agent wrote.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/llmConversation.ts#L1-L11",
+          "version": "repo-lines-v1:sha256:6282ab6afac50f7b2f07896f049385409d31bff5464190359e15030cc1cc190b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU3YWMzYzEyNzY3YTFlZDdiMDQxYmRhMWM5NTk5NmI3MjZhYzIwM2YwNTM1Nzg1NTU2Y2ZiMWEwZTgzYWYxYjEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNiZWI3ZDIyYzdiYTNmYzc4MWMzNDVlNDJhMzYzYjQ3ZWIzYWRkM2RiZDlmYjYzMWE5MTc3Nzk5NzVmMzNlNDMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI1ZjNiZjZmNDA1ZTI3NjM0ODBjOWMzOGExMmQ0ZmE1ZjhhMzMyYzBhNjEwNzAzNzFmZTIyZmJiYjJlNGE3OTQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_dcf5d46bb76b4d2c86487f12c4041c11",
+      "statement": "Terminal-injected tasks produce no HTTP usage, so the runner tails CLI transcripts and reports deltas, while chat turns are recorded by the provider pipeline to avoid double billing.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/routes/internalTokenUsage.ts#L8-L25",
+          "version": "repo-lines-v1:sha256:4212816247d5660552a3e3fc4ab1e80fddf3540ca189a331c13d01b13d3f4473:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImEwMDg4NDE1NDExZDE4Y2I3ZGU1YjNlNGZiMGQwMGFmYzdlMmRiMDdmMTk3YmFhZGE5ZTM0NzI2MWJmYzRhM2IiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE3ZTUxYTgwOGJjNjBjNWE5MTQ2ZTBhZGIzYmYzODVjNzkwYmY4MTlkYTViNzc4MmVkNjhhMTdkYjc0YzUxYmUifQ"
+        },
+        {
+          "resource": "repo://runner-service/src/usage_watcher.py#L1-L25",
+          "version": "repo-lines-v1:sha256:cb73c5c53cc54e1e1fb2240e7bbf02f28645364802d8efbec99d9dc4a907a8ca:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJjYzcxODNhMmZjM2ZiYTg0YWIzNzJlMmY1NjAwN2I3NzhjZmM2NmQ2MWZlZmY2ODZjMWE3ZGIyOWU1MThiN2MiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVhMTgyN2M4YTc4Y2NhMzg1NDgzZGUyZWQ3M2ZmNzA1ZmZhNTZkNDBmYjQxNGQ1ZGIyMzdlNGE3ZTk5N2MyMzYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0c3892ad67b34d5a84cca50d308f94b7",
+      "statement": "Budget configuration is read only by the budget routes, so limits produce reports and alerts but do not stop agents.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/routes/budget.ts#L27-L38",
+          "version": "repo-lines-v1:sha256:2b3b3a50096178c5a497d719d640a3e2e12c7c37e16a43f11997264460074f16:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3NTRjOTBiYjc3MGVhMjA1MjMwZDVhMjIzM2EwMTkxOWU4NTllZDY1Mjc5OGZkYTgzZGEwY2I2MTdiNjVkNTgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ5MTU4YjlmMGRkNjk3YmY5ZmFmMWY5YzMzNWU4NjJjMGNkM2I4NjYyNDEzNzE0NGE2OTEyOWZiNDBiMDdiYTIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ2ODYzYWFmYzkwOGYxNTA5YTlhNTM3ZTJlZGRmNGI1ZmEzOWMyM2NhNjI0NTNmZWNjMzFhY2I2YzZmZDZhNTgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjljZWJjOTIxZjdhNTRhODQ1MDFmODRkMzFjYjQ0Yzk1ZDBhYmVmZjBlN2I5NTYzNWZhZTQwMGZjM2MwZDI5N2IifQ"
+        },
+        {
+          "resource": "repo://api/src/routes/budget.ts#L275-L299",
+          "version": "repo-lines-v1:sha256:a0500248b1d64c55322c1f63fae4ce32ed377501476a387f65a41a68a71167f7:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0Yzg2YzNjMzdlY2Q2YzczNTcyNGIyOWYwMjgxZDA1ZmZjMjAxNjFlYzUxZmQ2MTNhYTBjYTg5MzliYjJhMTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIyMzUyNTg5YzM0ZDNjNjA2ODU5MzFiNmVjYzRkNTA5OTFhN2M1NmM4ZmJhMjg5NDExNDY1NzY5MDI3MmNhYzMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjAzODIyMGEyOWU0OTI2ZWYwZGNlOTVlOGVkMjEwMDZjNmE4N2YyYTYxNDUyZTIxMGY0ZDQ5ZWM5MGFlOGVmMzUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjAzODIyMGEyOWU0OTI2ZWYwZGNlOTVlOGVkMjEwMDZjNmE4N2YyYTYxNDUyZTIxMGY0ZDQ5ZWM5MGFlOGVmMzUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_093d44f2daeb42d7bd1726fbffefa125",
+      "statement": "External voice audio transits the API so the operator's provider key never reaches the browser.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/routes/voiceProxy.ts#L1-L16",
+          "version": "repo-lines-v1:sha256:e93c7f64563899b06bd4d43743538aa00c03a53967a821832b9d84eb1b7a664f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYyM2NiNGMxM2Q2Nzc1OWQ1NGY3NjcxZDQ0MDM0OTcyZDA5MDNhMzlkMDhhZmFlNzNiYjk4MWViOWFiMGRjZjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE1MWJjZTA4MTdhMGZjNzU4MTVkOGJmNjkyM2M0MTIwMmMyYzI3ZDk0YjA2YTk0Njc4MWRlM2IzNTJhYzgzNjkifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

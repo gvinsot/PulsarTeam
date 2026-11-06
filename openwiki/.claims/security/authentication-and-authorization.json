@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:62c070048ec7b2652923226ed7d85e0998970e39b47b51974e7c5d9a18a2c70f",
+  "claims": [
+    {
+      "id": "claim_2636ff21e4d34d1db4284f77dc333772",
+      "statement": "authenticateToken accepts a Bearer token or the HttpOnly session cookie, and cookie-authenticated state changes also pass CSRF checks.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/middleware/auth.ts#L5-L33",
+          "version": "repo-lines-v1:sha256:54918aa0c7e6f3e8591f013210090d61090e8345f4bd2b2c1bef39183baa2c4e:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImU0MjJmMmM2MmY1ZDFjN2VmNjQ2ZWM2MWNjNGM4NjI4YTk0N2QzYWViZTlhNTUwNjg4ZWJhYjZlNzYzY2FiMmUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQ0YTEyZjM4NmIzN2NjMDA3ZmQ0YTY0MzFhZjBkMjI5ODRlYjg0YjZjN2Q0MzhkYmIwYjAwODczYmZmNTBjOTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_6c17a324afdc4da2aed53b7b2cc9f59b",
+      "statement": "The CSRF token is a random claim inside the signed JWT, chosen over a double-submit cookie that a sibling subdomain could fixate.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/middleware/session.ts#L15-L27",
+          "version": "repo-lines-v1:sha256:42de795a35da38308aa25fe9bcccb76d49e06fc8f440b925696c74091e8873a5:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYyM2NiNGMxM2Q2Nzc1OWQ1NGY3NjcxZDQ0MDM0OTcyZDA5MDNhMzlkMDhhZmFlNzNiYjk4MWViOWFiMGRjZjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM5ZmQ2MDJhMDAxYjkyZDU1MzZjYTAyNGE2NDQwNzYwNWM4Y2M1MTM0YjI2YzUyNTU2Yzk1OWY1YzZlY2JjMDQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI0NzRmMjY5OGU4Mzk2MTE0MWYxNTY3ZTQ4MWYzZTVlNDIyZmEwYWJlODNkNTk0MTUwOTYwMzIxNWM4M2RiZjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjllZjc4MzMzMTlhNDQ1ZWJhMjhiMjg2NDY0YjJlZmRjYTk5MGUyOTEzMWNiNTNiMDBkNzc4YWNhZTA3YmNjZjYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ea52ed80078746fcbe6ad30819522d04",
+      "statement": "Production uses a __Host- prefixed cookie with a 24-hour lifetime.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/middleware/session.ts#L44-L58",
+          "version": "repo-lines-v1:sha256:7126aa7158fdbb85b78f2d15cf284dea4f5a9636cb11825eb6b6bc7de982c342:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ1ZWI5Nzc2YmU1OTFiYjJiN2YyOWNmMDdiOTcwM2Q4NTk1ZTMyNGFkMzNlM2IyMzRhYzkwMzcyYTM2OTg4MDgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY1ZmE1MzA5MGUyMmQxMjY4ZWM3YjNkMjJlNWNjNDE1NGJjNDEzNTczNzVhZGFlZWQwY2JlYTM0MjcyOTI0OTkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZiMjg0ZWVhMGM3MmFhZjUwN2FlYjM0NTdmNjEwN2E5ZjkyNjYwNzAyZjNiM2M1OWZjZTMwOWY3MTU3ZjVjNDEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdiNGRmMTFmMzViN2UzOGI2YWVmZGI4ZTkwMTAzMjZhM2ZmNDQ0MDg4NzdiYzkxMGI0NWRhZmE2ZThhNDJhZGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_64b5d3e95a8d4bc2b10181160b2bca79",
+      "statement": "CSRF checks are skipped for safe methods, session entry paths, Bearer requests and requests without a verifying cookie, and HTTP Origin is deliberately not checked because of the desktop proxy.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/middleware/csrf.ts#L30-L39",
+          "version": "repo-lines-v1:sha256:279b60486692afd678fd8a919264bbb900609008f8f7fb501a5bc1c449208451:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ0NWRiYTQxOTFiOTQ3YzI5MjA4NmNiN2M3YzBjOGZiZWZjOGM1ZmU4NGE0ZTJiYmM1YjlkYmE2Yzk4MDExMmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRiOGJiZWY0YjVmZGNlMDk4NzcxMDBlNjJmZmMxMWJkNzYwODg0MWRlNzhmODgwMjQ1YmFlNWI1ZThhNzFiNWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJlN2I0NzZlOWU3YzQ5ZjM5ZTM2MjM2MjdkNDVkYWYzODQzMGU4NTllMTM0YzI0MGE0ZTZhZGY0NDYyMjNkMDgifQ"
+        },
+        {
+          "resource": "repo://api/src/middleware/csrf.ts#L52-L79",
+          "version": "repo-lines-v1:sha256:64205628bad982060dc7a678d4fe70ca4c926d0bb218b5844042c2826fa33c72:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImViMWU4ZGU4ZDVlZGE0ZDU0NDA3MzEwMDdjMDliY2Q5MjEyMjBlZTc1ZWVhODE2YzgwMDMxZDFjNmI1ZWJmYTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM5NzU3ZDc0ZDc3NjQ1ZTZiOGQ0ODQ1MzY3ZGU0NTY2MDkwNzNmNjM4ZGM0YWI3OTI3ZmQ5NWUyOGM1MDJjMDkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY3ZWMyY2RjZTcwYTZlZmUwNTgyNzlkNzE0YzI5ZGVhMjQxOGUyZDY5MTk5MzdlOTliNDk5ODI3ODcyZWIyYmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_089ac1f1072c4bf383718014083f2613",
+      "statement": "Board access goes to the owner and system admins, and otherwise requires a share with a sufficient level.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/middleware/authz.ts#L28-L60",
+          "version": "repo-lines-v1:sha256:dc589d5d236cc5e3e7ad167e865d7fc679c9d8da960d39aa917cfc1dd6bd013e:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYzNTk5Y2U2NmNkMWU5MDk5MjZmMzJiNDY5N2FjNmRhMzdlYzE3ZDZlM2Q3ZmU3NDAwYWM1MTFkOWQ4MDFkMGYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM3OTI5ZTkxZTBmOTljM2U4MjVkZTY5YjQzNWZiNjQ4NGQxYjBhMWRmMmY0NjU2MWFiZjFhMjlmMDQxODhiODgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU0NzZlMzBhMDEwZDJmNzYxMjM1NGNmOGJkYmVmYmYwODM2NWMyNzI2OGE1YzI1YzA5ZWI1ZDJjNmE0NzdjN2UifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_12352ff413e148b1b03c4ab801aceb5b",
+      "statement": "Agent visibility follows the board, then the owner, and agents with neither are visible to admins only.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/lib/agentAccess.ts#L18-L33",
+          "version": "repo-lines-v1:sha256:71c5e400a7bbd4f1e4f5a27194e7f91837034244ddcf6b23cad35a5916ce4f64:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZmYmQxYWE5MmZkYmJiZjYwOTQwMTA1NTdhMDNjZjUzZjRlMGM5YjI0ZDUwZWU5Njc5MzM0ZmYxZGFiMjUxNGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEwMWVhZDkzNmEyMjgxZDUzZGNjMDY0YjdlMmEyYWIwZDUzYjkyZWYzZWY3YjM0YjY2ODY3MzAwNzg5NWM4NjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjlmMzAzYTAyMGIwODNkYjA3MTdiM2MwN2Y0OTQ5YzZjNTZjMjc5OTRjZjQ0ZWY4NTFkMTFmNTIzNDIwMzc1YmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY4YWQzM2JmMTA3ZTBhZGZjMmRkMjkzZGI1MTRjZTNhM2RhOTRkNjQyZjhjMGJiMWE0NzlkZTQwNjA3NTkzYTQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_42d25a2b648a4a129896e669fd00b49d",
+      "statement": "API keys name an owner and scope, and the owner is re-read per request so demotion or deletion restricts keys immediately.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/middleware/apiKeyAuth.ts#L13-L36",
+          "version": "repo-lines-v1:sha256:7fac34e272e4e9375b7b7f012b2e196fdd3c88723c7a69a0da76a472b8183e2d:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUwYzljZDYxNmI1Y2E1OWExOWNkYzEzZjgzYTU2YTk3NjRkZTRiOGI4ZTM1MDVlYzliYzE1OGQyYjA4MDRiMGEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjliOGMzZTUzMGRiMWM4MWUyM2I2MmU5ODUwYzY3NzlkMWMyOTFiYzBhNmIyMTJlNGMyNmQ1NGM1N2Y5Y2IyZjQifQ"
+        },
+        {
+          "resource": "repo://api/src/services/apiKeyManager.ts#L13-L40",
+          "version": "repo-lines-v1:sha256:2460a14b1eaf4233c9e761c4c1f567934251f3110fe9421fa7ae0ce8a4565145:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYyM2NiNGMxM2Q2Nzc1OWQ1NGY3NjcxZDQ0MDM0OTcyZDA5MDNhMzlkMDhhZmFlNzNiYjk4MWViOWFiMGRjZjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYyM2NiNGMxM2Q2Nzc1OWQ1NGY3NjcxZDQ0MDM0OTcyZDA5MDNhMzlkMDhhZmFlNzNiYjk4MWViOWFiMGRjZjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJjOGNmNDExNGM4YTkwMDUzMzRmY2RmNDM1YzA5MTkyOTNjYWMzNDI1NGFkNDNiYjM0NTE3YzkzMGFiZmFjMTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdmM2M1YWE5ZTcxM2FkZjU1YzRmYmRlZjBjODIxYTBmNWQxY2E2ZjU4MDRiYWY1YTM4NzlmOGI0NDliMzNiNmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_682f5bd0eb2945b6bfd416f3c88cd9e9",
+      "statement": "API keys are stored as an HMAC with a server secret that defaults to a derivation from JWT_SECRET.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/apiKeyManager.ts#L110-L115",
+          "version": "repo-lines-v1:sha256:de9b44962326d08182598369e697962f85cd78434f99283706be547df72579fc:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYjA1NzBjOTEyNTU1ZjljM2ZmYmY0Y2Q0MDY3OWJlYzM4YjM4ODFiZGY0YWFiN2Q4MjIyODJlMzk1YzNkZGRlOCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWE3YmE0YTIxOTIxNTcyNWNiODU0YmFiYjRlYjBlNWFjMDY0Njg5MTAxYWZiYThiYWZkMDdiMzM3YjhmYmI3ZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYjZiZWIwMzRhYTY3ZGZlMWZhMmI2ZmJkZjdiNGE1MDE3YjAwNjc0NTQ5OTkxNjA0ZTUyYTFlMDU0OTlkY2M4YiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOWFjZWJmZDMwMDg2NmYxYzc4YWFhMmNkZWU4MjNiZTQ4M2E2NGNiMmY3NWUzNTg3ZGZkN2ZjM2QyMmZmZDkwZiJ9"
+        },
+        {
+          "resource": "repo://api/src/services/apiKeyManager.ts#L41-L48",
+          "version": "repo-lines-v1:sha256:3d2cfe0363f2b026734c17ddf5053c7460797e8862277f53115863d65812b3f6:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTMxZjY2ZDlhMTViNDgyZjRjN2U4NzcwMmY2NDg0MmRlYjhlZWU5YTQ3ZjczYWJmOWVkNzYyZjM2ZjZmOTBlOSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjEwYTVhYzhmMWE3Njg2ZTJkZWUwZjUxNzRlZjQ1YjdhZDM0ZmJkNzM2ZmQ5ZWYxOGQxYTI0ZDNhZDYxZTQ3ZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjEwMDNjOWJlNDZiZWUxNDczNzg0N2FmZTFlODNkMjFlY2RiZWJiNTZhMzQxNTZmYzljNjE0MWQyZmQyMzQxZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYWNlMGE1MDFjOWYzZDQyNjAyMjNiOTgwNGI2NmYzZDAzYzk2MzRjZDZkM2UxOTBmNzU3MWRmMTRjZWM0MWU5NSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_436df805b08044ea914a96f8e5114ea4",
+      "statement": "Internal API routes authenticate with the shared CODER_API_KEY using a constant-time comparison.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/middleware/coderApiKeyAuth.ts#L5-L28",
+          "version": "repo-lines-v1:sha256:afbc463696698a56308cec67f3ee1305cfb549669de1042e2066e9685f413074:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRjNDBiYzFiOWIwYjkxODdiOGEwNzBlNjdjZGYxZjIzMzVjMzMzMDM4MWNiOWRkMTdkNTI3ZmIzZDQ0ZTQ3MDkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjJhZmIyM2EzN2QxN2E1MWM2MTViZWZiOWI4ZGJlYjI1Njk1NzRhNWUzY2E0Y2IyY2YxOWE4MGM2NDgzODczNTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_8908a9401ff54473bfcfc825bfb0efd4",
+      "statement": "New OAuth accounts start pending and receive no session until an admin approves them.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/userApproval.ts#L6-L13",
+          "version": "repo-lines-v1:sha256:bcad17a78868a2013f39b9ac49305ea447c8aca8eee09df0ea71a089f36e8b1f:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZWFmMjJjZjA3MzI1OTJjMjQ3MTQxY2JlNjFlZmExMTAxMjYxMmY1YTMxMjJiOWFmOWJiYWY1MmY1NzI0ZDE5NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTcyYTQyOTM4MmIyZTE0NzE4ZTBlMzdiMDU3MGE4YTE3MDI5OTFmY2Q4NDk4Y2Q4NDA2MGE4YmY0ZjA1MDE3YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNzdkMGUzNTA1OWU5MWI3MmUzMjZmZmM5Nzk5ODlmMzViMWNmZmRlZjE4ZGVhNmYyY2UxYTU1OTg5MGVjOTZiYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNzVhZGI1MzgzYThkMWZmYzc2ZjA3NzAwNzJhOGJjM2Y2NDZhY2E1YTM3NmU1ODJkNzhjOGZlMTcxMzA2ZTE0ZSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_00a78d1cb67a4903ac0ebaf9336ab126",
+      "statement": "The SSRF guard rejects internal URLs and does not follow redirects, so callers must revalidate hops.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/lib/ssrfGuard.ts#L1-L24",
+          "version": "repo-lines-v1:sha256:7f4ca34ab7c66db41ba4f22cb76174f77bdde86f9b49c7a442f365e33ae84065:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjcxMzRmMGViZDZlNTY3MmI0ZDY1Mjc3ZGQ1NGI3NTIzYWI3YzZkODFkZjM4MDQ0OTA5ZWM1ZDg3YmQ3ODA2ODgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVlZjRmZTYyYTdmYmI3YmVjOTAzZGI1NTE3ZTc0NTE1M2Y1ZjgwYjE1ZjE1YTE1MjNhYmI1YzI1NDllNjU2YjAifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

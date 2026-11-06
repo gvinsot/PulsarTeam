@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:3911b956b71a8c8d18223475de5fa6031a46d3a430d613b71146164b7faa777b",
+  "claims": [
+    {
+      "id": "claim_8b6dfbf477934bd3a29dfbbda2e3de08",
+      "statement": "Browser SSRF checks run both in the API and in mcp-browser, because only the latter sees redirects followed by crawl4ai.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/browserMcp.ts#L15-L28",
+          "version": "repo-lines-v1:sha256:dd49477a73424f93ec5ac3b95b54c7b482b934d23ee14e16e1574f506df86ed9:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE2NDMyNzE4NjRhNDQ2NWJlMWUwODM2MmUyNmJlZTY4YTQ3MzYxNjM3ZTFlZGM0MzgzYmFhMDk1NWRiMTMwYzAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY2YTAwNjk0NjAyZmMwMzI5NTRjMDdlZDk4NWI4YzVjOTZkYWZmMDM4MmM2ZDExZmM0OGE4MzgwZDE1M2E3MDkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcxMTEyMDA2MTAwMmU4ZTU1OGE0MTQ4YjNhM2M3ZDJiZTZjZTRiYjI0MzZhYTJmOWQ3OTI2MzE1NTA2ZTAyN2YifQ"
+        },
+        {
+          "resource": "repo://mcp-browser/src/server.py#L114-L190",
+          "version": "repo-lines-v1:sha256:da8f310c771f5d71f4a2bdb85496cdc3df5b461d3ec5898bef5a7a68128ef0bb:eyJzZWxlY3RlZExpbmVDb3VudCI6NzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlYWJiYmZmYTk0N2IwYmMwNjViYzAxMmE3MDkwNjBjZDZjYTY4YTU2ZDg3OTQ4NWYyODFiYWNiNzNjMTY1MTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZhMTFjMDU2N2QwYTVmOWU5YjEzNWY2NWNkMjUzNzJkZmQ2Mjg3NzVmN2MxZWQyNTNmOGJhZDQyZGQyZDY2NjkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc2NTdjMjVlYzRmMTAwMTQ2ODYzYzAzMGQ0ZTk3OTE2ZjQ1NDg5YTQ2OTc1ODhhMTQ2YzJlMDRjOWIxYTYzOTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVmYzdmNGUzYzdiOGFhNDY5NzY0M2RhYTNlZjEyZWRlNzkwOTMwNDNmOWEyZWY4MzMxM2NkNGM5ZGY1ZDhmYzYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_23ee3ad0a7e44cebbfe9dd59072760a6",
+      "statement": "The authenticated browser uses a one-time session handoff rather than remote control of a local tab.",
+      "evidence": [
+        {
+          "resource": "repo://docs/authenticated-browser.md#L1-L12",
+          "version": "repo-lines-v1:sha256:1698d8973093f2570da1bb755a063f02f581f0ba4d7bbe7bae1477c72283dd98:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFjNThkZWZjNWMxMzZmMDYzYWUwNTVjNzZlYjFhZTY3MzA4MDcwMjhlZWM0ZTdjY2JhZjU0ODA1ZGQxNjc2NDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFjZjg0N2YyNWRmMWY0MTJhMzUyNzI0MGM4YzA3OTFjZTgyMWJmOWQzZDZmYTBkYzU2NDZkY2NiMTdlMTE1ZGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJlYTc2ODBlNmY3MTlkODFmY2FkZTI3MTI1Mjg2YTM0OGZmMjcxN2RhNGEwYzQ4N2FkNTg4YjlhOTQ3ZTkwMDIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_50be29ae9ae742b988654e8466b461e1",
+      "statement": "Chromium's traffic passes through a loopback proxy that resolves once, validates answers, and allows HTTPS only to public destinations.",
+      "evidence": [
+        {
+          "resource": "repo://mcp-auth-browser/src/egress.py#L1-L30",
+          "version": "repo-lines-v1:sha256:e2a9c735e3b68fd1cf938e7754abaec9d4003e87bc433a1682cd2c5159e1cb52:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVjN2Y4MWIyYjQyZjRmYzNjMzUyZTA1MDU1M2I2ODIzMjk1NDI3NWQ1ZjI4ZTM0ODZiYmY4NDczOTg1Yjc1ZDgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJiMWEwZTMzM2IzYTJjMGU0NzViY2JmNDAxYzUyMGMwNGE0YzVkMTc4MjRlNjFjY2U4M2RhMDg5MTViYTFjNmYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUwNzIwMWRjNjRhYzE1NDRmOWM0YzQ5ODdlMzBmYTUyMmJjYzgyYWFmYWI1MTBkMDViMDI3MDRhODJhOWQ3ZjgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_dbb1790faa2c460ebb25b2795e0a6433",
+      "statement": "FlareSolverr receives only the site root, never user cookies, and returns only clearance cookies and its user agent.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/flaresolverr.ts#L3-L14",
+          "version": "repo-lines-v1:sha256:717ea192eef8856c2e715774603f2e890f07894b3d3c4c0d6f35724f8c6607c8:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjoyLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdjNjliOWRjNDFjYzhjOGRiMWMwMjllOGJlNTNlMmVhODViNTRjODg2NzBiMWU1ZTUzMjMyZGZiNWM5Njk4ZGMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZlMmQ5NGE4NzZiY2Y3YTM5NGJiNTJmNzM3YzE2ZDRlYzJkODVkZGY5MTg2YTE3YzZlMThmMjg0NzIwN2E5ZmQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_9e8dd265b62344dfa0709d68e4f521a2",
+      "statement": "office-engine has two deployments sharing one codebase, with LibreOffice only in convert.py.",
+      "evidence": [
+        {
+          "resource": "repo://office-engine/README.md#L1-L30",
+          "version": "repo-lines-v1:sha256:287b6da2acbecd865b39814a216898a3b615698f210875306e0b65a21e5f0b08:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjlkMjgyMDc3N2Q3YmM3NWUxOTM2ZDQxZmI1Nzc5Y2YzNDM4MTJmMzQzMGQ3MDM0MzU3YjBmYWNkOGNjYTM4OTgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMwNjZlZjA3YjcyYTA2ODBkOGZlYzBlZDgzZDA0YjUzMGY1NjJmNzRkZWVhOTdlMTI1MmI5MjAyZjkzYTY0OGUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVhYzE4MDY1NzZkMjcwZjA0YmU0MzJmY2E4NDgyY2M4ZGYxOWFjMmUyMjdmZTJlZGQ1YzliYzZjYjI3NTRkNmUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_896b536bc59d4658939715deda6755ab",
+      "statement": "The office image runs unprivileged because LibreOffice parses attacker-supplied documents.",
+      "evidence": [
+        {
+          "resource": "repo://office-service/Dockerfile#L1-L13",
+          "version": "repo-lines-v1:sha256:3f025c1b296c4ce19aa0002e5dfba6c8ce9f0396532bacee61f1c4545c020ec8:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ3OTQwOTNmZWU1MGY5YTM0YWQ2NWFmOWI2YTFkYzZhYjJlOGQ1NmE4OTEwNmU0MzhjNGVkZDk3ZjE4YTM4ZDEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE3Y2JmMWU3NmRjNTdmZTA0NjA0NWQ4MmE3MmFjYTA3YmZmNDlmMDcyMjExZjZiZmVhMWQxNjFlMjVlODJjNmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZiODE4ZDFkZDBiMjg3MWY2MWNhM2NjMjFjOTczODhiNzIyOWYyZDRmYjBiYjI3ZDhjY2I4M2Q4YWZiMWM2Y2UifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_751283bd294143f9a3611daea8744a77",
+      "statement": "io-limiter applies labelled write limits directly to container cgroups because Swarm has no block IO settings.",
+      "evidence": [
+        {
+          "resource": "repo://io-limiter/io_limiter.py#L1-L27",
+          "version": "repo-lines-v1:sha256:c6542214c9bf5e265bd62d2c6f29af2e07138eeb84251e76bd21a1e5ffb1546a:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYwNTk1ZTAxZmU0NTYzMjdlMDY5NGZkNGE4MTUyZDJlZDM5NjVhYjIxZDFmZDdmOTI2YTU4MzJlODc3YjFmZjgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ac5182e5724a489c83b0ff5cbe468206",
+      "statement": "fsGuard confines every path to a chosen folder, defeats symlink escapes, rejects traversal and device paths, and never trusts the server.",
+      "evidence": [
+        {
+          "resource": "repo://desktop/src/fsGuard.ts#L1-L13",
+          "version": "repo-lines-v1:sha256:255681625c36bb2af849795ce68720e476b28eab74ca23e9f765704d0b31d16d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY5NTRhMTI4NGFmY2JmODQ2MTI3OTBhZWNmOWVjZmYyZTMwNGI5YTdhN2E0NGY1MDEzOTUxZWVjNDQ3YmU4YWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU0Y2RiY2ZhNWYxMTFmODNiMWNlMDhkZmM2YTAxMTY5NzBkYTA5YzA1NTY2NjM4YjllYmQ0NzU5NTQxOGE4ZjIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f75819e4ee7b426ea31b49ffe9873f00",
+      "statement": "Local Folder tools have no server-side implementation and address only the owning user's desktop room.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/localFolderMcp.ts#L9-L24",
+          "version": "repo-lines-v1:sha256:c9a324caef735ace876ab1d795a1593884ac4b7db16ce1586fc7a998be01d708:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ3ZGQwMzdmYzg4ZGVkM2QxYjkzMmUwNGJiYjFlYWIzYjAxNzU5NmI0MGRhNzhkYzhhMmU0ZDI4OWE0Yzg2YjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU4Njc3NzBhNGU1NDFjODUyM2IwZTRiMDQxN2UyODliYmFjNjIzN2ZlYWY5OGM3N2YzYjMzZjU3NjQyYTY4N2QifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ade70111822b4247b2e225eb4f291b03",
+      "statement": "The desktop bridge records every call in an activity log shown to the user.",
+      "evidence": [
+        {
+          "resource": "repo://desktop/src/bridge.ts#L1-L10",
+          "version": "repo-lines-v1:sha256:d04db2706616b66d8ac5c40f2dc1d11a7ef200ae75af81db64b5969e84141412:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjgwNTM4OWE4MjdjNzg5MTZiYzdlOTI3YmI5OWJlNjMxODZjYjYwZDkwYjA1YWZkYmM3ZjYxZWNjYzI2Y2ExOTQifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

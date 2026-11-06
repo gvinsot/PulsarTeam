@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:c2d828602998be167fb29215a8b056e0ad67123f6be99ce3b19a2bf4294652c2",
+  "claims": [
+    {
+      "id": "claim_353a03d90e064d369f65200cff91ccd0",
+      "statement": "Agents load from the database at startup with transient status reset, and tasks are not cached in memory because the database is their source of truth.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/index.ts#L636-L668",
+          "version": "repo-lines-v1:sha256:24018e28693ddaa4f479a091257941ee538338273ca1d0154d3b127e4f4e99f0:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgyNTdlMmVkZDUzMzM4Y2UxZGI2NmNmNDFmMWExYTM0NTU5NGIyYTBmNjdmNTdiNTk4OTNkNmZjZGFjYTgyOWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI1MDYxMjEwODFmYWJiNGExMDUwMjg1ZjIyZjU4YThmYmJkODViODYxYWQzNTI1ZTQxMDIzNTU2ZjUzYTYyYjIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk1ZDBmYmMxMDM5YTkzYTIzNzE5YmFkZjM3NWJhM2FjZjczMTY5OGU5M2ZiZDg4YTliYjJhYTZjY2UxNjFmODYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEyNDkzZmE3ZmUxMGIxM2JiOTEwNDc1ZjE0ZTVjMWFkNGJhZGNjYTQ5NDdiMTc3Y2E0YTNmNDZhNzkyNWEzNjYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_59af5686c69d4db4babe79d58d519932",
+      "statement": "Stale action_running cleanup is deferred to the first task loop tick so a sibling deployment's locks are not cleared.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/index.ts#L673-L676",
+          "version": "repo-lines-v1:sha256:39f28389e0b24094f6da9e88fb801ee65808111db52d87e34c3d3ad1fad4814e:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiN2U1MWViYzdmYTU4NmQyYjYzODg0NDY2NmJmZjYyZjM0ODgyODE3ZjA4MmFkNmZlMzY1NWVlNzBiNWYxMjdkZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWNlMzU0ZmNkYmMxYzdiYWM5N2M4ZDk2ZDM3MzEyMDcwMTc2YTU1ZTc3NTVlZDkzN2I5YjY3YmZiZjllMzZiZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMjk2OTg5MDdmOTc2NDVjY2RjNWNiYWViYTNkMzRhYTg1ZTcyMTE4Mjk0OTgxNzNkYTcxZGQwYWQ0NDM1MjFkMSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGI0YjQ2M2IxM2FkNDc1N2ViM2YyZGZkZmM0YjljYjk5OTliMTk2MWQ1ZDIyNTE5NWM1M2Y5YzNmYTk0MjNjNyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_b40e79f6435840bf8c4d939e5c39f980",
+      "statement": "isCliRunner in runners.ts is the source of truth for whether an agent uses a CLI runner, with coder kept as a deprecated alias of claudecode.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/runners.ts#L1-L34",
+          "version": "repo-lines-v1:sha256:5d11f3f5c9bb3f5857c4a58d5d3b2df3e8ddd2a4b54046bf872b3d2d52981b97:eyJzZWxlY3RlZExpbmVDb3VudCI6MzQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgwODc3MTE5YTg3NTRlYjI5MWUyY2Y3ZmQzODIwNGUxNDc3MDIzMGZiNjdlMDI5NzQ1MjFlNTczNzBmZjYzZDUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImRmNDk4NjgyMmE4YWE2NTkwZjE2OTIwYmI1MGZkYjZkNmM2NmJiZjQ4OWJlYzA2NGQ2ODQyY2IzNmYwMGMxN2IifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_e79ce5f46612475d89a0c6fe00556302",
+      "statement": "A top-level sendMessage takes a per-agent lock: a duplicate message returns null, a different one throws, and a lock on a non-busy agent is cleared as stale.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/chat.ts#L120-L137",
+          "version": "repo-lines-v1:sha256:25cd466a24705a0235d9d5f0d1df0d4c661260d3dc7c9fcc0be1ab71110e4749:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE1MmVjNWMzYmM3MjE2NmQ2MTkwNDk2OWNlZTI1ZmU2ZmU5ZTMzZTg5MjEzOTQ2N2E1ZmZmOGM5NDM4NWY3YzMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ4OTNmNDBlMzc4MWViODk2YzgyZDA0NmEwODA2N2ExMWUzNWNkZjJmMWRmYWYyNmZlYTkwYjhkYjY2NzY0MTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFkOTViYTk5YzkwNzE2MzE2Mzc3YTUzNDM0MjJlYjBmMzlkMGFhYzRhNWIxY2Y2NTgxZWIzYTI5OGY1OTkyMDEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBmNjZhMGE2N2MxMTUwMGJkZTI5ZGMyNTVlYWM5YjA5MTliNjMwYWViNGMyZmY0NTE2YWYzZjFlNzY2YmYxYWUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_45244bb4de1f42dba5bb814263b6524b",
+      "statement": "ensureProject runs on every chat because a restarted runner loses its in-memory project mapping.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/chat.ts#L207-L216",
+          "version": "repo-lines-v1:sha256:937ac515b72594906ac26d1ee85e0e96f29026d0bb1ee2a195b53d6457db085b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU5YzEzNTkwNjY1NjMyM2QxYzVlYTQxNjU0ZWU2NmFmYjU4NWFjZGNmYWVhY2ExMjFkNWUzMGJmMTkzZWVkZDciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2ZWRhMWIyMjgzYzY3YmNlN2YwMzZiYmU4NWMwOTlkMGIxYjllNWQ0MGQ4OTM5OWRiMGQ5MDIwOGIyMDliYWMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM5ZGY4ZmM0YmQ3ZDM4ZTcxMDllODhjM2JiZmI1NjY5M2E1ODJmOGNmYmFmZDBkOWIyMTY3MTM5NjY2NDk0MjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBkMTBhNGM2YTY0ZWQ1YzZjY2FiMmRlN2E5NDc3MDcwNzM4NzE2NWJjMWE4ZGQyYWUzNmUzNWU0ZTZkNWFlZTgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_9e11f6401fa54becac566a0dbd8bbe7d",
+      "statement": "The user message is persisted before the LLM call so a crash during streaming does not lose it.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/chat.ts#L268-L283",
+          "version": "repo-lines-v1:sha256:e59094353009bbdaec87ad4cfe1d75817861b211ad7b3ff02f4a1c89bfda5070:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRmZTM0NTA0MTgyODMxNTE1ZmQ0OTdkNTQxZTEzY2I0MGJmNTE2YzU4MzRlMjI5NjdkZTQ2YTBkM2QxMWQ4MTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU1MTMzZDdjMTEzNThkZmMwMDI4MjJjYzM0NGNiM2Q4MjEzYzE5ZjMzZjA4N2UwZTdhMTliZDMzZTY0M2ZlMjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJkYTBlZTk1Y2YzYTQ1YWVhZGU1YzJjYjQwOTYwOTQyYTJiMDFjYTdiN2QzN2U3OGYwOTY4NjY2N2UzM2ViMjYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM5MGI3ZTEzZjRmMjk3NDc4MWFhNmU2MDBmZTgwOGIxMjZlMjU1NDFmYzgwYWFlNzdjMzliN2VhZjllNTQzOGMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0cb6ca5726844de68bc7c81dd0491b72",
+      "statement": "Native tool loops are limited to 40 rounds and only run for non-CLI agents.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/chat.ts#L328-L331",
+          "version": "repo-lines-v1:sha256:8ccc876ed5814ebfe5c0bb54b2adab0c327c7383fc95e83d43fe93538a469da7:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiM2U4Zjc4NjI5Y2NiNmI4N2MyODQwMDExN2QzOWJhMDEyNTEwMmVmNGJjYzFkYTgwMTY5ODVlNmUwZDgxMTUyYyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTUwOWY0YjMwMGZhOTI0OWYxZTY2YzM1ZjIyNDI4OTg4NjlmZDUyNGU4NGJhODY5ZmViZWVjZTY2NjcwMDg2YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNjBiMjA4YWFmZDkyNDVlNWU5YTNkNmRkOTQ2ZDJkNTliZjc0N2YwYjA2M2U5ZTQ5ZTliZTE5ODAzMDA5NTUyYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNjZjZjMyZTAwMDcwNzVlNjkyYTMxZmFkZTlhMDRhMzEyZGQ3YjhhODgxNmM0NjBiODg2Yjk5OGVmZWI0ZTUyNCJ9"
+        },
+        {
+          "resource": "repo://api/src/services/agentManager/chat.ts#L409-L448",
+          "version": "repo-lines-v1:sha256:80a85bc5662089ef0c6674f833ff58e7105f92f6772331a3bb65fc3b37b3ec59:eyJzZWxlY3RlZExpbmVDb3VudCI6NDAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg4MWNhNDM4YzBlMDU5ZDVmNjBjOWY4ZTgyNjRhZmQ5ZDdlZDM2MGZlZmQ0ZWRjM2EwYzAyMGRlM2I1M2NkNjQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIwMmFkZmZiOWY1NzFlMWQzMThmOTcwNjcxMGU0OTk4MmMwYjM3ZjM3YTcyYTU1MjI4MzIwOTExZGI3Yzg2NDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjJjZTc4MTU0NTljMzY1ZGVjOGI0MjA1NGQ3MTMxM2MyNzE0MzkzOWNlMzQzYzQwYmY3ZDExYmYyNzhhMDQ1OTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE4NmNhNTM5OTM3NjllODc5YjRmNmFmYTg2ZWIxNjE1YWI1ZTY4ZmIzY2QyYTZlMGY1OWI5ZDI4Y2I1NzViMmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_9c5122599441432fbd99ac9df8e0008a",
+      "statement": "Stored history is pruned to 30 entries while preserving messages from the active task.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/chat.ts#L498-L512",
+          "version": "repo-lines-v1:sha256:13894c7699c3d11fe5a2c762b3b517e16769632707d042ad50ff4851baa4f3d4:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhkZjQ0Y2ZjMWZhNjQ2NDZiMzRjMGNlMzc3MDc2YWI2ZjRhMzY3NzllYjA0NDQ1MWVjNjU3MzdjMGJhZjdlZjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY5ZmJhNDRlZGVjMjkwMGYwNGUxODUxZjJhOGE1YmRjNWQ2OGQxYjI2ZWZmZDczODlmNjg2YzMwMWZlMTU0ZTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjAwM2NlZjk4Njg5ZjA5MzZiMWJkMDc0MGVkZTkwMzZlMmZkZTFjMWVhZWY2ZTBjZDQwNDI5OTU4MzRiYmRkMmUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_7729d2628b1240d0be53fe745cca9c1c",
+      "statement": "Compaction thresholds scale with the model's context limit.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/compaction.ts#L12-L27",
+          "version": "repo-lines-v1:sha256:5b3e2b849a2f59b92a554f63b74d5db72833ccd078cd71fbfc80513bebb20253:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVlNzExMjdmN2Y1ZjE3MTdiOTZlN2U5NzY5MGE3ZDE4MWE1MDcyMzdmY2FkMTg4NDBiYmIwOTM0MDIyYTkyMGIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjUwNjcyMDI1NjRmY2JmNTc5ZjRiYzVkMjhlNDlhMWE2OTk5YzI4NTZlMDU5YmFmYTk4ZjJlM2E2YjlmMTNhZWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM1MzEwNzE2ZGMxOWFkMzRkOTMwMzc1YWUxOTEyMDhmNGQ5OWFmOWE4NmUzY2IyZmRjNWM3MTY3MWZjYjA0NTMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_7ac868bebca2498fab527e8858500b33",
+      "statement": "The system prompt's references to other agents, boards and repos are bounded by the agent's own board scope.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/chat.ts#L815-L824",
+          "version": "repo-lines-v1:sha256:c71ee8a733fed2c7459a1ebef5002089b4380e0d1de53596ccad06f0f602ade5:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ0ZGNmN2FmNDA5MWI5MjljNTVjYWRmYTYwNGY1YzJkZmY0YWY2NjIyODU5NmU1M2JkNmUxNDcwNjAwNGMyMTciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjcyNjJjYWVmNjM1MDU0OTI0ZDQzZGI3ZTlkY2VjZjZmYTg1NTAzZjZmMDEyZjZkMTI3MTY3MzA5NzdkYTk2ZjIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjliMzJjMTljMDY3YTkwYmE4MjMyNjliNmVjMWRlNDMyMWE4YzEwMzI3OTQ0NGM0MjU2MzdmMjM2MzE2MjViZjAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b88e561eaf9f4e4a9c2df7200ff266b0",
+      "statement": "Broadcast sends to all enabled agents in parallel and records per-agent failures without stopping others.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/broadcast.ts#L6-L38",
+          "version": "repo-lines-v1:sha256:91c2fe5bfc5b403abdaed56ddfec10a990878f7331f68b7bb39975a83e41744d:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA2NjQyNjRlOTA5MTRjNWZlYmViZTk0ZmJhYjJhZWE3NzEzMjczYzc4ZjA2MTYzMGIyMWRhMDI4ODQ4Yjg1MzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRkNWNkMmZiNGYzZGY4ODQ1MTUyNTViMzk1MjNmMmY4YjU0NzJiZWVhOWY1NjZmZmNhMjA0ZGI4MDI1NjEwNDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBiMDgyYzcwOWM1NDA2MjYxZWE5NGU4ZmRmYWIxZmFlMzdjNmJjYzg0NGI3M2ZkN2RmZjc4YmQ1ZDVlOTQyNGMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQzZjEwNzg1MGFlODhiZjdiNmExOTU1ZDhjY2UzMzVjNzZjYWRhZTYzMTkyZTg0NjFlOWE0NWY4MTJiZGMyNWMifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

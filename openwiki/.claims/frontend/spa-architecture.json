@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:7e1ae1ce241098b41eb62d2aa1945b0b9051cf1af737d819ccb40cba8b1dcd12",
+  "claims": [
+    {
+      "id": "claim_3af342205fd84f3fab8ea8da7477ce7a",
+      "statement": "The CSRF token is held in memory only, re-obtained from /auth/verify after a reload, and sent as X-CSRF-Token with credentials included.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/src/App.tsx#L223-L229",
+          "version": "repo-lines-v1:sha256:9d54c6b5863cddbf22b92e6f8fe9da75980f97aa7467ae6a95e4823988fd92eb:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiODlhNGEwMjM2N2E4Y2UxMTk0ZTEzZTg3YTg1MDNlYjlmZWY0MzA1N2JmZGRjNmU0NGE1NmQ4YzUxNjQ0Y2E1NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTdiZjE0MjRhMzJiYjgzOTlhNWZhZTMyNTBmYzg0NTk3YjlhNzY4MWFhNWEwZjUzMGI0ZTgzZGY0ZjExNjY0MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMjk1MGYzMmM1ZTE4YzFkODgyMGUxOTM1YWU2OGMwNjllNWMxMTRjNWExNmU2NTA1ODQxMjgzYmU2ODBiMjVlMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDdmZmJlMDkzOTg2YjJjOTdkM2I5N2E2MTE5NGVkY2E2NmEzZDU5ZTRlYWE1NjZiOTZmMTA0ZDg0NDY2NGFhZCJ9"
+        },
+        {
+          "resource": "repo://frontend/src/api.ts#L400-L438",
+          "version": "repo-lines-v1:sha256:4be93d974c79166e9fee9625704f63bcb37e869f115c257ea6d3bde8701bb92e:eyJzZWxlY3RlZExpbmVDb3VudCI6MzksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQyYmZlNjQ0YTViMjRjYTg0MDBkNzU4Y2UxZWYwODU5MzM4YTM2NTZhZTU4Y2RmNmIxNzcwMjU4MzNjOWZjYWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhlZmE0MDU2NjY2MzEwZTkzMmU3YWRkODQwZmE0M2NkMDNkZTk1ZDgyMDNmNDQ2Zjc0NjhmOGE3ODcwODExNTkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ac806e07c0924872b2f7eb765a8fb28c",
+      "statement": "The socket connects with no token, relying on the session cookie on the same-origin handshake.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/src/socket.ts#L7-L30",
+          "version": "repo-lines-v1:sha256:28e44dc148760ae25ef3da5cff6d4ffb77e68c6c707415e5173dc465a5f37a71:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRkM2NjMTFiZWFjOTI3NjRiNTY1NjRlMjc0NzhjYzFiYjcxY2UzNjNkY2M1MjgxYjBkYzRjMTY2YmYzNGE2MGYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjEwMmQwOWE3NDczY2VhMDFjYTJmOTA2YTgxMjYyYjdkNmY5YzdiZDFhYWRkOTVlM2EyODdiN2M3NTYyMmM5ZDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMwODA5MjY1MDAxYzZkNGZhYWQ1YjBkZGU1Y2M3MDRiZGU1ZDU2MzRlMmI1MzBmM2Y2MjY1OGZkOGMwNDkxMDUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_74f8b520ea7741e08577e9d90022c301",
+      "statement": "On connect the client requests stream state, and STREAM_RESUME carries the full active list so stale local buffers are evicted.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/src/hooks/useAgentsSocket.ts#L147-L165",
+          "version": "repo-lines-v1:sha256:c48ce781ae13dfe7a818dba6975ea374695c310bcec43758ad6dddb19d16b2f2:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3YjAyZGI0NmY0YmUxZjE3NWZkMmNkZTRjNTk3YWE5NWZkMTU3NjhhOTY3MmM2ZmI0OWFkNDAwOTBhNTZkYWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFiNTI1YWVmNWZiZjczNWE4NTA4M2E4NjY4OWY1Mjk0N2UxMDg4NmE0NzNmYmFjMmVlZjkzMTQwYzBlNzE4MzEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM5N2JlY2Y3ZGFjM2FlMjQ0ZTM1MmI5ZGJiM2I4Y2E5Yjc0Mzk0NzY5NTM5YWIyZDkwMjViMTBlZTYxN2NlY2EiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU5ZmY1NzhkMWEwYTRiYTJjZmFmOGQzNjkxZjRlNWZjMmVhNWQ1NjI4OTdiOGI3NTljNmMwMDNmMDhjODQxNzcifQ"
+        },
+        {
+          "resource": "repo://frontend/src/hooks/useAgentsSocket.ts#L213-L213",
+          "version": "repo-lines-v1:sha256:3cc73e85a676508be5a8f9a39205bc487af0c173408c851ed839acadebb6f010:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiM2NjNzNlODVhNjc2NTA4YmU1YThmOWEzOTIwNWJjNDg3YWYwYzE3MzQwOGM4NTFlZDgzOWFjYWRlYmI2ZjAxMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiM2NjNzNlODVhNjc2NTA4YmU1YThmOWEzOTIwNWJjNDg3YWYwYzE3MzQwOGM4NTFlZDgzOWFjYWRlYmI2ZjAxMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNzdmZTdjMzA5NjU3MmVjYmRiMDhlOTE0YjU5NjRmMjQxMGEyM2IzNzE2MWExOTczMTU5ZWJmMzFmZDVjNDAyMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNjc2OWFhNWY5ZTA5ZWRmZDEwZTUxNGNmMGIzYjk5NWVhZjMxZTI3ZDYxMDNiOTg2MDc2NDYwMDg0NjE5YTI3NyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_288ab235017e462eb5e18ac2772598b5",
+      "statement": "The call graph diagram is the only raw HTML sink, and its SVG passes an allowlist sanitizer that fails closed.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/src/components/CallGraphTab.tsx#L260-L260",
+          "version": "repo-lines-v1:sha256:264ff9b77e4fe34904205214bce16d8727eaa4584f5c0f897c7cb21d5f73fb9c:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjY0ZmY5Yjc3ZTRmZTM0OTA0MjA1MjE0YmNlMTZkODcyN2VhYTQ1ODRmNWMwZjg5N2M3Y2IyMWQ1ZjczZmI5YyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjY0ZmY5Yjc3ZTRmZTM0OTA0MjA1MjE0YmNlMTZkODcyN2VhYTQ1ODRmNWMwZjg5N2M3Y2IyMWQ1ZjczZmI5YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2NmZWNlNzEyOTM5MGMwOWMzOTUwN2FkYzJjMTljMzg0Y2Q4NzQ5YWYxZmJkOGZiY2QwMTY0MTYwZjhiOWIzYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMWRjM2M0ZWU1Y2NjY2MzN2E0YTcwYTFjZGFmYjMzMDVmNTUyNTA0OTQ2MDcyMjdkNjRlY2RlYTljMzI1ODkyZiJ9"
+        },
+        {
+          "resource": "repo://frontend/src/lib/sanitizeSvg.ts#L1-L21",
+          "version": "repo-lines-v1:sha256:00097cb52599a13a4cc86a0b251e4a1dc6f631d6816904aa2dfad18d80a20bb9:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJmM2E0NjNiZTExNzdjMzY1YjNmZDg5OGIwZTIwYzg5NDU0NWU4ZTliZTcxODIzODQ5OWNhYzk5ODQyNDI3Y2QifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_638a29d2be154759b43630663f193b85",
+      "statement": "nginx listens on 8080 so it can run unprivileged.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/nginx.conf#L1-L6",
+          "version": "repo-lines-v1:sha256:ccce983d895ab90bd7ba4eac6007809e14a6474c411a7fadda39a40b471c1449:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMGJiZGNkMGU1NTZlMTU0ZGYxMjFjZmViMGYxZWUyY2Q5NDIxZTdkMzY4YmNiMmJhZmMwZTBkMWJjMTBhNzBiNSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOGQxNzAzNjU4OWE3YjZjNGU3ZTZlNGY4OTQzMGVjYmJmMjc2MzA1NjMxMTZkN2QzZmFkNDM1OTY0M2U5ZGU1MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjAsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzM5NWJlZTZmODQ2YzY2YTcyMzMxNzMwYTVlODIyMjkwNWI4MGVkYTYxZDdlYTBkYjE4MGYyMTU0NmI4ZTViYiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_0e261c8e4b7a4fbb817dac66e14d0cac",
+      "statement": "The dev server proxies /api, /socket.io and /ws to the local API.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/vite.config.ts#L18-L31",
+          "version": "repo-lines-v1:sha256:ca769ec5e7ee6d80f5a056c1c8566a91de9a715108abe0fdb9fb08eca26a2a70:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU0NzQ0ZGEzZGFhMDVjMzQyNGEwZjQxY2RkMGYyM2QzYjg3NDQwOTkwZTY4NWRkNjI1NDBhMjc1NzY3N2RiMWIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFmMGNkYjk3MmE3YmZiN2VkMjQ2ZjlmZjY3MjM4NWU1NWY0OTY4ZmMxMTA0M2RjNWI2ODRkNTFkZmEzMWRiY2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ0NzI2ZjI0MDJiZDc2MjQzNTYwYjBlNzM2YjdlNDA3NDk3NWIxYWI4MzhlNjEzZGI5YjE0MzNhYzUzZmQ1OTAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoyLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI4M2MwM2ZiZGY5YjM0NmFhNTUyNzg2YjVlZWJiM2FhZDRmYWM4M2FiOWU1YzZiNWQ1MTVhM2ViNTljZWVkNTIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_9eb7b700a6b14ac0a60a66dbd0363684",
+      "statement": "Frontend tests cover only .ts modules, so React components have no automated tests.",
+      "evidence": [
+        {
+          "resource": "repo://frontend/package.json#L12-L12",
+          "version": "repo-lines-v1:sha256:69f00dcab560055633bcca175c0a5ecef266783e26c34ab54ac0ab73761edb9d:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNjlmMDBkY2FiNTYwMDU1NjMzYmNjYTE3NWMwYTVlY2VmMjY2NzgzZTI2YzM0YWI1NGFjMGFiNzM3NjFlZGI5ZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjlmMDBkY2FiNTYwMDU1NjMzYmNjYTE3NWMwYTVlY2VmMjY2NzgzZTI2YzM0YWI1NGFjMGFiNzM3NjFlZGI5ZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2UyYzZlNTNlOTA2M2U2NWJiOWY1YjhiMWQ0MzNlYTE5MmFmOWY5YWE0Y2RlOTFiMDI3NDY1NDM5NWI0MDJiMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzViZmQ1NDM4OTY1OTFmMWJhMGY4MTYyNDA4OTk1NGU2OWQwYzg5ODM2ZDZkMjBhZTFlM2NhN2FkNDdhMzJkNiJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

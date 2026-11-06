@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:c3478f6e33076937931342bafa633b9883770764d306fd2c2dd29f58c1b68fe2",
+  "claims": [
+    {
+      "id": "claim_aefbb48d9be9420c96c6e85826149d04",
+      "statement": "Each agent runs under a deterministic UID in 20000 to 60000 with a 0700 HOME, derived from the sanitized username.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/agent_user.py#L1-L17",
+          "version": "repo-lines-v1:sha256:44342a22439f76e93c1cd18af7ee8c65e2f43bf22fecac1109c51a649f248c26:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRkNGRlNTcwYzM4NzgwMDA3ZjQ3ZTNkNzExNmZjNmViMzNkNzJmNzg4ZDBiZDI1MDE1OWJhMDE5NzA1YmJhODUifQ"
+        },
+        {
+          "resource": "repo://runner-service/src/agent_user.py#L36-L65",
+          "version": "repo-lines-v1:sha256:447377106a08ea5c47d0dbd56f8998ed35723d9af98ecdd5d16b4acc3dd5f2b8:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjcwODExYTVlM2ExYmNlZjk2MzNkNzBhZDE5YWY5ZjlkNDFjMmE1MjQxNTM1ZDVkOWM1MzZkNWVkYmRmNzdlOTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM4MjdjYzg0ZWJlZjUyZTM1NjRmMjEzNDliN2MwYWY5MTc4NTZhYmE3OTRmNmE1NDAwM2RiZDgyNTQ1OTc4NDkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkyN2MzYjMxYjhlYjVjZDZhMzM3MDg2ZDNiZTZhZDJjZGMxYzE0NDAxMTZmNGM0OTcxY2VhNDQwNzA2MGEzMDMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_df4e08eb3dc849069d633986002c7e10",
+      "statement": "The runner image deliberately has no USER directive because per-agent UIDs need privileged capabilities, and containment relies on cap_drop and no-new-privileges.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/Dockerfile#L263-L277",
+          "version": "repo-lines-v1:sha256:da1877d250bf817cd2ef5fe1453090d515ef37ccdcc6d3c204ce35419d501b01:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2MTQwYjU1OTU5ODViNTA5OTE5ODE4MTYwYmI4NWQ3Y2ZiYWVmN2U0YzBhMzZlYjIwOGE0NDY1OWY4YWE5OWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY2NWNmYTY3MDAyMDA0MTg4YjZjN2ZiZDhkMDI5NGNiZjAwZTk2Y2NlZjU5ZjlhOWFjMjgyZGRkMWViZmNlYTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjE2MzRhMWIyZGFlZWUyYWFiYjJkZWVjMDVhNWEyYmI3NWVlYTQzYzZmYzYzMzI0NGViMTFjNWVmZDYyNjNjM2YiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZhMmE0ZjcwZDc2MjYxNTc1YzQ4OWRjYzk4ZWIxMTAzM2I2NzkxZGNiYTM0Y2MzMWI1NjU1Y2RiZTc3OWI0ZmQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f378c0eb44e54756b56a0c951a49663e",
+      "statement": "The command blocklist is an accident guardrail that is trivially bypassable and does not see commands run in the PTY.",
+      "evidence": [
+        {
+          "resource": "repo://SECURITY.md",
+          "version": "repo-file-v1:sha256:0cb86872117d625f41e27097bebfd1bd0cbb9701435636677c7baf5ac46c4d32"
+        },
+        {
+          "resource": "repo://runner-service/src/command_security.py#L1-L29",
+          "version": "repo-lines-v1:sha256:ac2ea43ad85a443eb6fac443cd6cf8f597b4063a86d64a4260a11c891da1142b:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE2YjVjYzVkOGVlNjUwMDFjOGNhYjE3ZDVhYTNiOGM0NDNkZjQ0Zjg2YWQ3YTBlYTQxMjAyOWZhNDc2ODlhOGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0796fa8a5d2949a2b381fd34c172f3a6",
+      "statement": "sanitize_env builds subprocess environments from an allowlist so runner secrets are absent.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/command_security.py#L122-L128",
+          "version": "repo-lines-v1:sha256:64624095849e405d91a8179399d45f888ff11eb8f662bd0cb040e90a7d5172ba:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNjBmOTE1ZDFiNDNhNTdmMDNhNzZjNDc4ZjYwMWQ5NTkyOGYxMTRlYWFjMmIyMWRlNjgzZGM1ZDQ5OTExNTE4YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjk0MTZlMDlmNzhiYTMxNmMwMzI1NjgyMTNiODU1ZWU3NTZlNDE1NjVkOTE4ZjA5NTE5YzgxZmQ2MjBmNDA2MCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2YzODI2MWFkNmRjZGEyOGRmOGYxMjJhMGI1OWFhMzZmZDRiOTQ0ZjYwMDBjMzg4YzhjMGM2NTI5NmY4M2I1YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMWYwZjQwMTVkNDFhMmI0OTNmZmU3YzE2YzRkNjgwZDg3ZTY4MjQ1MDk2MThmZWZhZTIyYzk0ZjFiNDkzNzAwYSJ9"
+        },
+        {
+          "resource": "repo://runner-service/src/command_security.py#L159-L188",
+          "version": "repo-lines-v1:sha256:67e544e5ef9e846ccc44540e91e4b6cd936633f8a5eef4b365ef930dea6c83fb:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUwYWI2YTdkMTg2NDEwMDg0ZDk2NzgxMjdjZDZjYTllOTgxMGY4NThmNDUyZDNmMDY2OWEwMmM5NWY2OTU0ZmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU4ODE5N2YxZjcxMzYwMDU3MWU0ZGYwNWJlODJkNTA4MWEwNDJiZGMyMDg1YTczYWNmMzUzNTdkNjhjY2JiYTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ3MDE0OWUwNjlhZDY3ZWNjZjQ3MzY0NmZmMWM3NTAwNTBkMzI5ZDExMDAxOGRjNTc2Njg3OGVhZmExZDYwN2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        },
+        {
+          "resource": "repo://runner-service/src/command_security.py#L84-L94",
+          "version": "repo-lines-v1:sha256:6f09530b13dc60bd32966786cfa8beac02f23be30e7bbc906ad79c77f210dba8:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNiNDViMmI2NTAxZjczMmM0NDE2OTY2MmQxMjA0NDQ5NWViZTc3ZGUzNjNhNDgwM2Q5YmMzYTRkMjFmOTEyMGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJiZTUwNjczOWIwZGU1ODhkOWRlNGNkZTRjZTU5NjM1NTJkNDVjMWViMzdmNGI4YWIyOGQ3MjNmMjQ5NjA2NGIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI0ZWZiMGNhYzc4MDFlNjIxMDM5NzMwZjJhNWU2NzBkOWJkNTJjYmI3Y2E0Y2JmNGEwYTljNzg4Njc1OGJkZjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIxYmY5NGJmZWQ2ZDc0NmI5MmYzM2Y4YzgxNTU4NWQ2OGYwNDU4OTgyMzhkNTZlYjVjMzUwMDBlOGE0NjU5NDYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_039902960c864f52ab400b2584ab66d2",
+      "statement": "The entrypoint locks /run/secrets to root-only on a best-effort basis, because Swarm mounts secrets world-readable.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/entrypoint.sh#L14-L41",
+          "version": "repo-lines-v1:sha256:42ce2be7ec0f8f9c5fece1a985e6508ffeca9ea0dc485ed47e7df1dd374b2b22:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAwY2M2ZmZkY2E0Njk2ZmZmZmY1MzA1ODM1YjI3YTI5YWZkYzMxZTJlOWJiN2MyYjQzNWI0NzkwYjUzY2EzMzQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc2YTc3NThkZTRjYTM4ZWJlOTg1N2YzNWQ4NzkxNGRmNDRkMzc3YjMzNzUzYjczM2VjMzcyMzJjMGMyNDNhMzUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjliMGExNTc4NWJmMDNjODUwMDkxMjM4NGE4NTNkZDY0OTM5ZGEwZWRkNmJmZmY2ZjgyZWI0NTJlNzY5ZDJkMTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_c54f035afd9f4077a3945f061c997e7c",
+      "statement": "Tasks from outside the tenant carry a permanent trust level, stay inert until approved, and are delimited when placed in prompts.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/lib/taskTrust.ts#L1-L20",
+          "version": "repo-lines-v1:sha256:f1dad5dd20a82cfdc3c2358be37f8305a67ef9795c8d1e64c0eaf6fee8b5aa19:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRjZWZkZTA0MzY0ZTIzMTViMTYyZjFmMmEyZTBkMjExNTM4YTBiZTBkNjE5NzQ3MzVkMjNlY2JjZTRmODJhODUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA4N2NkNWJhNDlhN2RlYmM5YTk0ZDVkZTFmN2E3ZmRjYWQwOGQzMTIwOWQyNDljYjZkZGM0OGQwZmI1Zjk2ZGYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjgzZDcwZWU4NGUwMTQ5NmFjMjUyMmMwMDg3ZWVmNzIyNWNjNzlmMmFhY2NlMWNiODM1NmYzMzk3M2EwYjkxZGMifQ"
+        },
+        {
+          "resource": "repo://api/src/lib/taskTrust.ts#L218-L226",
+          "version": "repo-lines-v1:sha256:41df51734d8a7bf87105b693816c0280da453a65cd7b41e74121e3aa42915c0e:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYmY2NmUyNzE4NGY4NDg5MWJhNWMwYzZiNDk2ZGY0N2U5MDg5YWE3MTFmODI1MTc1ZTQzZThmZDAxYzA4ZGY0YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMDFiYTQ3MTljODBiNmZlOTExYjA5MWE3YzA1MTI0YjY0ZWVlY2U5NjRlMDljMDU4ZWY4Zjk4MDVkYWNhNTQ2YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWNjZjBkNjljMzVlODYxOWMzZTQ2ODI1NzM5MWJhMTE1MDQ0MGY1ODkyNTljNjdiNjA4ZTlkOWFkMWFiZDBjZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzZmOGYxZDM2MzgxODJmOGNhMDM3YzBhMDViMTMwNWVjNTdiOTUxNGZkMTAwNzI0MTIxMWFjZmEyOWVmZmQ3MyJ9"
+        },
+        {
+          "resource": "repo://api/src/services/agentManager/tasks.ts#L1031-L1031",
+          "version": "repo-lines-v1:sha256:26e49a96eb369ebfcfc7618d755fdd66a20b6ffb0ddcd1bf99f0c15318868b44:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjZlNDlhOTZlYjM2OWViZmNmYzc2MThkNzU1ZmRkNjZhMjBiNmZmYjBkZGNkMWJmOTlmMGMxNTMxODg2OGI0NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjZlNDlhOTZlYjM2OWViZmNmYzc2MThkNzU1ZmRkNjZhMjBiNmZmYjBkZGNkMWJmOTlmMGMxNTMxODg2OGI0NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZWU5NmZhMjRmYzA3OTFkY2JjZjJkY2QxM2VmNjBkYzI2YTZmNjBmZGM4MjIzOWEwYTQ1ZjhmZDc2NTIxN2M4YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGUzYWZhMWUxYjVmMTAyNjI4M2I5Mjc3NWEyZTk2NjM5Mjg4NWJmNWJlOWRkYmYwYjRkOGZiNzhhNzE3ZTExMyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_32434f9d13534c69ac0192af75603a48",
+      "statement": "External tasks always run in a restricted profile without credentials or MCP, starting and leaving an empty context, persisted and failing closed.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/security/externalRunProfile.ts#L1-L24",
+          "version": "repo-lines-v1:sha256:8391f8e7ec6a4704e18bede2560a0fa4feaea4154deed5067a3b41327eb6af27:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE4MGIxZWU5YjM4YmZiZWU3OGI4ZmE2ZTc2NWNiYTgyMjY4ZTY5MmY2OGQ1NzI0MjAzYTE5YjAxOWExZTQ3MmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEwMWVhZDkzNmEyMjgxZDUzZGNjMDY0YjdlMmEyYWIwZDUzYjkyZWYzZWY3YjM0YjY2ODY3MzAwNzg5NWM4NjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcyMmZhYjg4OWI5MjEzOTc1YjRmNzgyOGE4ZjRkMzE0NTk2NTI1YmM3ODk4MzY1YmU3NTNkNmE4NTFmNTU5OGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ee87b6942aa442a18ed461c1a1995839",
+      "statement": "The external profile does not narrow network access or permission prompts for CLI runners.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/security/externalRunProfile.ts#L26-L33",
+          "version": "repo-lines-v1:sha256:a86ea585b3fe866bc973808605274e7ae4db2a3b1e88168706b13c142adf5c77:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjM0OThkMWFkYzA4ZTIyYzRjNTk1MzVhZjk2YTQ3MWE0OWYyZDgwOWU0ZWUyYjRjMzdjZGJmNTAxNjNkOGM0NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZWViZDUxYzc2MjAwYTg2ODI4NDAwMDUwNDg5NjJhMTIxMGM4NmQ3ZjYzMWZjMmIyMzIyZTk1YjdjNWJmOWJkNCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNGQ1YTI3Y2M5MjFhMWNmMTY5ZDE3M2MwMTdjZWVkOWNmZWYzN2E5MjhmM2RlYzc5MDlhNzYxYmMwNmU2MjQ5YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDZmN2E2Yzg0ZDMxNzYwZmM0MGFmODE2MTUzYmYwMDU1NGRlNWFmZGY4NzYxNDhhN2ZjYjhiODUzNzdhNzFhYyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_3a41d6ae8a8f42028625d3b98fc5e38c",
+      "statement": "Terminal output is scrubbed for credentials at the runner, deliberately over-redacting.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/secret_filter.py#L1-L24",
+          "version": "repo-lines-v1:sha256:3f4c9d28803848fc06139999e40b7cb7d937887d4e0eec9175c42d0d244da1f3:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZlY2QyMWNlNTljZDc0NjU2ODJlZjExMzJkOWFhZmI3Njg0YzQxMWVmMTU1MDlkY2I2YmIyMmIxNzBhNGQzZDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM4NzFmMTU4YzA1OWFlNGMxOGYzNjEzNjM4NmE2NmQwNzRmZTU0OWE5YjVjM2FkOWMyYjE4ZThjMzlhODE5MDAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImFiZGI2ZGM1YjM5MDE1ZDk4MzlmZjU1N2EyOTI1NGYwZGVkMmUzOWRiNzczZWRjNmI1OGIxYTBhM2M3MDQzZTYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_891ed4cd9f7f452dacafa91f55220232",
+      "statement": "shellAccess and restrictedPaths are enforced by the runner's HTTP tool routes.",
+      "evidence": [
+        {
+          "resource": "repo://runner-service/src/routes_api.py#L300-L303",
+          "version": "repo-lines-v1:sha256:776c53b2b8b78e1f4ec7bb020d5027b001f9f8337784b8e06e392a8ff9500dbc:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiN2YxNjQ0NDBmMjBhNDA1MjQzNTAxYzlhMTNlNTAyODBlM2NjNjIxNTkyOWE0OTdhZTY5ZGI1Yzc1YTg2ZDZmZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMzVkNmQ1OWQ4MTU5NGQ5NTE3ZGFkZDQwZDE5ODE5YzYwODk3N2E5MTgzYTk4ZGVjODcyNTg3ZTNiODgzZTg1YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODNmYTk1YzI2YzU0M2NlNTYxMzk1YWI5MTMxOGM3MjEyMjg5MTRhZTZlZWI3ZjY0ZjQ5NzUxYzNiMDlkYTQ1MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZGMyM2VjY2RlMzQyYTkxMTI4Mjc2Mzc3ZjM3ZmE0ZDlkNmE3OGYxMTMwY2JiMmFlYTYwNzkyNjE0OTZlYWIyOCJ9"
+        },
+        {
+          "resource": "repo://runner-service/src/routes_api.py#L462-L465",
+          "version": "repo-lines-v1:sha256:25c3e8b85bdb5190a15f908aa2fe7c9a566e9a9ee7e04041a1a35acfbf506eea:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiN2YxNjQ0NDBmMjBhNDA1MjQzNTAxYzlhMTNlNTAyODBlM2NjNjIxNTkyOWE0OTdhZTY5ZGI1Yzc1YTg2ZDZmZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWQ5ZTMxOTZmZTFmYzg3ZjZhN2MwOTJiY2Q1NjAyMTIzOWE3ZDQzNGY2Y2RhZDQxMWE1OTYxM2ZjNGU3OGQ3OCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODNmYTk1YzI2YzU0M2NlNTYxMzk1YWI5MTMxOGM3MjEyMjg5MTRhZTZlZWI3ZjY0ZjQ5NzUxYzNiMDlkYTQ1MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOGFlNzNhMTQ1NDE2N2ZiZWEwOGM4N2I0NzllZGNkOTI0NTYwNDFkNDRkZTU0YmI4ZDJlNmU1ODcxZDQwNjAxNSJ9"
+        },
+        {
+          "resource": "repo://runner-service/src/routes_api.py#L482-L484",
+          "version": "repo-lines-v1:sha256:6bf54890ca3e02ddc5ba9497ba5db91f5e3ecef7c4f259e66a86c024a54ab52d:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOWZmY2Q5NDE5MDI2OTE4MWM5MTEwMzk2MmJhMGQ0OTY2ZGJmMzhkNDc2N2RhNzdlODRmY2RkNjc4ZWNmZWYyZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiODY4YmQ1NTBhMDg3OGVhNWE0MWU2ZGRlODk1MTExMjQ0ZGU2YTdlMzk5ZjFlYTdjMWJhYzM1NWFhODU4YTMzNiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNzc0OGJhNjk3MmEyNjRmZmFmZGY1NGVmZjg5OWE3M2Q4Y2E0MjI0MjAwYzk1Y2UxMjJiODZlZTBiNWIxMzk1MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTQ5MWQwYzhiMGYxMWFhYTYwYmFhZWM5ZTQ0ZDIzNzMxMGFiNDBkYjk2NjgyMmQxY2FmMTJmZDI4MjUwZDA0NiJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:1fbf75c96a6f7935ad584b87b307bf95fb732ef812e64246a36fa66ab2c2cf69",
+  "claims": [
+    {
+      "id": "claim_a9f32e662c8e49679386fd3be9f8fbc6",
+      "statement": "The product is structured around agents, tasks, boards and projects, in a multi-tenant platform.",
+      "evidence": [
+        {
+          "resource": "repo://specs/README.md#L1-L25",
+          "version": "repo-lines-v1:sha256:f481fa3e73fbf9b3800a6314ec6f94b096849ec598ae160892fc8fd581afb5d6:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI0NGFiMWUwMThjMTAwYjJiMDBmMTUzMDQ0ZmFlYzg2ODA0NDUwYjA5MzU1OWNlMzAwMTQzMzBjMmY2ZGVhNWIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE5YzViMjBmMWU3ODYyNTQ4OTlmYzRlZWRiZTg3YjY4YjM5YzZlMzA2MTgxYmUxYjY2OTgzMGJhMjY2OWVhNDQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_2d7fb113f391402fbfba977d6d9e678a",
+      "statement": "scripts/check.sh runs the same gates as CI for the Node projects, while Python services are not in CI.",
+      "evidence": [
+        {
+          "resource": "repo://.github/workflows/ci.yml#L29-L53",
+          "version": "repo-lines-v1:sha256:2d6e8960aa1fb7a52f01754e09ae5d643245f6b797454e21f41a6bf6ceaa2eed:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU5ZDgwMTU0ZWQ0MmZjNWM3NzliMTMzMTU3OGI1OGI4OWM4MDFlYWNlNzRmMjRjZDQ4ZWI0YTIzNTc5NDBhOTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEyYmM0OTA2MzYxYWE5Y2RkMjcwZWU4ZmI3ZTU3ODIwZTNkMDJjYzUzNGY1NTc2NjMzMmI0OThmZjAxODMzMDYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZmMWQ3MGQ3MmJhZDIzMWQ0M2M1NzVhY2VmNjk0NjU4MGU0MzljODc5Nzk0ZWQyZWExZjRhNDAzNDAyNDUxNzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjAxNGEyOWRkZDBiZWNhYzYzNTU5NjEyOTg1OWI3NTJmMDM5OGU1MDAzOTk5NjdhMmNlNzI1NjUwZjUzOWZiZmUifQ"
+        },
+        {
+          "resource": "repo://scripts/check.sh#L1-L10",
+          "version": "repo-lines-v1:sha256:9572f6eda9e94339b41b5a5be190c07a975f284cf9e3eb8e664ee67c127824a1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFkOTVmYzA0YTgwYzk1MmY0OWNlNDE4ODYyN2M1M2IwZmJlOGM0NDA0MWI5NTJkNTkyYWNkMWRlOTk4NjE0NjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ5M2M0MzkwZjRiYWVmNmRhMTk5OGM5YjE3N2E3MGZhMWY4NDVmNDJmMWMzNWZhZTJjNjk2ZDNhMWI1ODVkNzQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU5ZTVlOTdmYzc2NGVlYThkMWE5OTQ5MTc0MmM1ODBjNTM1MWU1NzQ2M2YyOWE0YzdmMDNjZDA0MDBiOWE2NmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_45d9be91c9ec428c8714f5e2181a7afb",
+      "statement": "Compose requires mandatory secrets generated into .env before starting.",
+      "evidence": [
+        {
+          "resource": "repo://README.md",
+          "version": "repo-file-v1:sha256:48e858e8882457aa3d6fdd55b7a85b9a860a8a09746d89d2d3c6007ee28e1dee"
+        },
+        {
+          "resource": "repo://docker-compose.yml#L7-L7",
+          "version": "repo-lines-v1:sha256:1556901be96a3f07b13de891b7d310cfae063659c36ecc86d4432de964a40c59:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTU1NjkwMWJlOTZhM2YwN2IxM2RlODkxYjdkMzEwY2ZhZTA2MzY1OWMzNmVjYzg2ZDQ0MzJkZTk2NGE0MGM1OSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMTU1NjkwMWJlOTZhM2YwN2IxM2RlODkxYjdkMzEwY2ZhZTA2MzY1OWMzNmVjYzg2ZDQ0MzJkZTk2NGE0MGM1OSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYWJhNjYwNWRmNDhiZTdhZDc3MDRlYWEyMzI4ZjMyODdjNzA3NzcwYTRhZDMwYjE0NTIxYjFlMmFkZmQyOTUyMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMWM0NGU3NGQwM2Q1MjA5NTM3OThiOTVlYmMyMzBjZjc4ZTRmNzFjMDBkY2Q2Mjc0MDdhZmUyZjNjNGJmZGUyZiJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:0bbb0bce75698051f4919d0f130439d7cd64bf04d519c21fdf4cd35d5a3cb04f",
+  "claims": [
+    {
+      "id": "claim_f644201fa3bf4772b6f1124095c31b27",
+      "statement": "Runners call the API's internal routes authenticated with the shared CODER_API_KEY.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L300-L325",
+          "version": "repo-lines-v1:sha256:7fdfc565beb75ea1801871f8fb8e23f5ad0cd7ffd5e73f1a4a8f3f50c44787e4:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBlNjBiNTY1ODNkOTk1MTJlYjNiMzJiZDE1NTkxM2Q5ZWJmZTU4N2I0ODBiMzY0MWNiMWE3OGU5NWNjZjM2MTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc5Y2NlNzVlNGU2OTNkZTE4MTY5ODI0MjBjZTBmMGQxZDY2NDhiYTgxMWFjNDM2NDZjNjNkMTU4NzRmZWIyYzMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE1ZThmNGY1ZDkwZjM3YTViMjBjYmZkM2Q0YzkwOTIzZGMzZWE1MTA5YTI0YWQ0MTU0OGQyMmU0ZTRmNDUxMDUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM1NjBmM2VkNzIxYjJlNzBlMTg5NjI2MzNiNmJmMGVmZDNjYWE5NGRjOTRhMDBkZDIxZGI3Y2YyZWFhZTlmMjUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f81ae8d5a93240cd9edd6645ffa375f1",
+      "statement": "In Swarm, dedicated Traefik routers at high priority deny /api/internal on the public hostnames, case-insensitively, and target noop@internal.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L150-L170",
+          "version": "repo-lines-v1:sha256:1761e7807063ba76246137dc6083e3dc811e6dfb58c89aa957e5d352bda0314f:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg2YTJiYTFmYTI4MmYxOWJhMDhiOWU2NTI5ZWQ5YWExYTQwYzk2MzUwYjQ2NDZlYzUyNTMwMGNhZjIzZWY3MmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJiNjZiZGZjNGU5MDQ0N2FkZjVmYjliYzJlY2EwYWQ5NWRiMTY2MDE1ZWJhYWI0OGJlYjBhMGRkMTBlNjViZTkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ4OWYyOTFjNDk4MDQ4NzI3MDM1ODU5ZjVjMmRjNWM4NmJmMzdmNmIzMTQzOWNhMWI0NTRiOTQ1NmE1MDZmYzQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJmZDM4YTEzMWNhNzc4MTEwYjUwMWQ0NTllZmZkZDQ4YWFjOTU2NDIyMDM2ZmIzOTNmZTUwM2E1ZGJlZDEwNjQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_095a579d57fb48789bc01a60ca9169ce",
+      "statement": "Swarm uses an external PostgreSQL network and service name team-api, while Compose bundles postgres:16-alpine.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L1171-L1174",
+          "version": "repo-lines-v1:sha256:47330567eb3da22967842ca0e6d4f36823022a12d1c1cf2b0d47d7272d568064:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTE4ZmEzNWE2MDI3OTRkYzhlYzE0NjM5ZmExZjI2MTEwM2IyNjlhMDFhMzVkMDRmN2E3YWRiNjI1ZGQ1NWNjNyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZGJhZWI2OTNjNGU4NzBmYzg4YmRkYjdhZjdjMjA5YWE4OWI5YTgzN2NlNWQyOTM0OWUzNDEyOWVhNTBjMTRhNiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzgwYjM0YjQ4YzQ4NjU0MTBjOGVhMDMwNzFhNWUxNjdjYjYwN2JkNzg3NGZkMTZjMjQ5YTBhMTkwYmNkNzc3NyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzU2ODM2NzZlNDUzZGUzMDRiMTQxYjQxZGUzNTM0MWJlMmIzZTJhYTc0OWFkZGZjNTQwZTVmMGY4MGQzZjZjNiJ9"
+        },
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L2-L3",
+          "version": "repo-lines-v1:sha256:926d6c59775ce2506c40f1591eb842ed109e540bea4fb048580fbbf890ada1a2:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjAxM2M4YWY0ZDlkNzdiZWExMDkzY2NkODI0Y2JiMjJiODc4MDBlYWVlNmVkMWFmNTk1NzE3YmZjNTIwOTYzYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZmJiZmVmMmU3NjMwOWUzMThjMTZmNTU1YmU5ODc1MDExMGQyNjViNTQyN2I0YWExMWFhZTgwNzhmYmM4NDNiOCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjEsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZmE3M2ZjY2RjOTllYTgzNTk2N2M3ZGVlN2VmYmVkMWYzY2E4NzI2MGQ5MjkzMTg1MGZkZDY2ZGE4Y2IxMmYxZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDU3ZWFiMjAxMTQ2NjEzMWE0MDI3ZDhhNTVhMzBjMjRmOTRmODE3ODFlMzE2Y2FlNzJiOTk2ZGQyZDg4MTlkZiJ9"
+        },
+        {
+          "resource": "repo://docker-compose.yml#L2-L5",
+          "version": "repo-lines-v1:sha256:b8dfe7fe2c30f459e60b1924dfb4d57f6e4bd40c977d8c8b8914e954bae0df85:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiODBmOGRjODNhOWQxMDc3NDFlNTM2NGFlMGNmNmY0ODU5NTcwMjIwOTAzMTEyMjBhYWY5MDE4Yjg3NzBmZTE2NSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMzdmNmEyNjA4M2EzMmFlN2RkNjVmMTg2ZDBhMTQyYTQ0NTg2NDM1MzQxYjNkZDFhMTI2M2UzZWNjMjQ2Mzg4NyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjEsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZmE3M2ZjY2RjOTllYTgzNTk2N2M3ZGVlN2VmYmVkMWYzY2E4NzI2MGQ5MjkzMTg1MGZkZDY2ZGE4Y2IxMmYxZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDJiZjlmOWMxMDhlMTMxMmMxMGI2ZGIwN2ZhZTc2YjcxNjE2NmQxYjAyMmY0MjUzZGU5MmNiY2UwOTg2YmE1ZCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_420ebd1df0084b08b72947d2555065ef",
+      "statement": "aider-service and hermes-service are defined with zero replicas in Swarm.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L635-L635",
+          "version": "repo-lines-v1:sha256:c09a4f40f12cf4805c90aa1d3f6152937a56105c61242b6f0719f34d83a4a15a:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzA5YTRmNDBmMTJjZjQ4MDVjOTBhYTFkM2Y2MTUyOTM3YTU2MTA1YzYxMjQyYjZmMDcxOWYzNGQ4M2E0YTE1YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYzA5YTRmNDBmMTJjZjQ4MDVjOTBhYTFkM2Y2MTUyOTM3YTU2MTA1YzYxMjQyYjZmMDcxOWYzNGQ4M2E0YTE1YSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTkxODZiMDA1YzY5MDE0ZWVhZWY0ODJjYjlkMzFlOTVlZDAyZTBhYTVmNzg2ZDdlOTZmNmU2YzcyNDYyMDRiMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTY4MDFhOGJhMGM0MDQ3ZGY3N2YyYjU1ZDkwNjEyNDg5NDc0YzBkZDg3MmEzODBiMGI5NTJkNzEyOTk3ZTI1NCJ9"
+        },
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L888-L888",
+          "version": "repo-lines-v1:sha256:c09a4f40f12cf4805c90aa1d3f6152937a56105c61242b6f0719f34d83a4a15a:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzA5YTRmNDBmMTJjZjQ4MDVjOTBhYTFkM2Y2MTUyOTM3YTU2MTA1YzYxMjQyYjZmMDcxOWYzNGQ4M2E0YTE1YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYzA5YTRmNDBmMTJjZjQ4MDVjOTBhYTFkM2Y2MTUyOTM3YTU2MTA1YzYxMjQyYjZmMDcxOWYzNGQ4M2E0YTE1YSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTkxODZiMDA1YzY5MDE0ZWVhZWY0ODJjYjlkMzFlOTVlZDAyZTBhYTVmNzg2ZDdlOTZmNmU2YzcyNDYyMDRiMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTY4MDFhOGJhMGM0MDQ3ZGY3N2YyYjU1ZDkwNjEyNDg5NDc0YzBkZDg3MmEzODBiMGI5NTJkNzEyOTk3ZTI1NCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_3094d7deb51247a49e6b6bb47605d476",
+      "statement": "Only local-model CLI runners join llm-net to reach LLM servers in a separate stack.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L1178-L1187",
+          "version": "repo-lines-v1:sha256:62a15184d731a18a57520c0cfb1ad4b583490f4119d0f681a75502e0882a68c9:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM1MDY4NGU2ZjRiODY1YWM2NThkZmRmMjQ3YWUxNDU0NGIwZmRjMDJlYjRlYWM1YWRjNzhmMGExNTMxZWFmNjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRiYWViNjkzYzRlODcwZmM4OGJkZGI3YWY3YzIwOWFhODliOWE4MzdjZTVkMjkzNDllMzQxMjllYTUwYzE0YTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM1NjgzNjc2ZTQ1M2RlMzA0YjE0MWI0MWRlMzUzNDFiZTJiM2UyYWE3NDlhZGRmYzU0MGU1ZjBmODBkM2Y2YzYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_48909d9e76e44b748eef4d7d4c92455e",
+      "statement": "The frontend depends on React 18, contrary to the README's React 19.",
+      "evidence": [
+        {
+          "resource": "repo://README.md",
+          "version": "repo-file-v1:sha256:48e858e8882457aa3d6fdd55b7a85b9a860a8a09746d89d2d3c6007ee28e1dee"
+        },
+        {
+          "resource": "repo://frontend/package.json#L30-L30",
+          "version": "repo-lines-v1:sha256:ebf7b7e2f7b8fdff1bcbda09ef259edafd44c859f8b0f37d6fec5ec3525838e6:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZWJmN2I3ZTJmN2I4ZmRmZjFiY2JkYTA5ZWYyNTllZGFmZDQ0Yzg1OWY4YjBmMzdkNmZlYzVlYzM1MjU4MzhlNiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZWJmN2I3ZTJmN2I4ZmRmZjFiY2JkYTA5ZWYyNTllZGFmZDQ0Yzg1OWY4YjBmMzdkNmZlYzVlYzM1MjU4MzhlNiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYjgyZmY2ZmFkMGQyMDhiYzdmMzZmMzQyMjFiMmIzNGU1OGU3ZDZkYTgxNmMxZDUwNTQ2MzNjNjI2NzY4NmM1NCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiN2ZiZGIxOGIzMjBmMDNkYzVhZjc1NDI1MzQxNWZjYWJiZjFhNjdlYTEzZWY0YjgyM2Q5NDAzN2FlNTk5MGJiNiJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

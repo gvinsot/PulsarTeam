@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:f5db672f69f634a2f06bec8b83bfc1d86df3c924f4b61478125a23b7db4f92df",
+  "claims": [
+    {
+      "id": "claim_654e54e421dc4421b005552d0c6309df",
+      "statement": "CLI runners receive one injected MCP server, the Pulsar Gateway, which offers task control plus dynamic discovery and proxying of other MCP servers.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/routes/internalRunnerMcp.ts#L7-L30",
+          "version": "repo-lines-v1:sha256:52a231efee34dbf222876c3c2f6fa19ba58691c0f31671589e5eec8aec4a7a8d:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFhZDc1ZTNlZTk3YWY3NmU0YjdhZWJlZGU1NWIxZjI3YzJkNjg5OWRhOTA4YTkxNzg1MzE1MGNhYTU0MGRjZTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZkNDQzMGZkNmNiZTQ4MzVlNmI1M2FhMDIzZGUyZTVkNGQ4NTAyMWQxY2M3NGI4NmZiOWM2MDU2N2UyOWIwYzYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE2MGM3OWJkYjdjYWYyOGIzM2U0Y2UxMDdiY2UyNWY4ZDJhODc0OWM4YWYyNTNlODI0ODVlOGI4ZjU4Mzg2MmQifQ"
+        },
+        {
+          "resource": "repo://api/src/services/pulsarGatewayMcp.ts#L14-L36",
+          "version": "repo-lines-v1:sha256:600668805c193db1f070785b836cae0813f17ef9ce6a471b65a41d6e24eeb7e7:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNkNjFlYjY4OWNhMTA4YmZjOTQwYTlhNzNhMTJiMzUyNzE4ZTVhYTgzMjk1YTdjYWZjM2FmYWE0ZGJhY2ZmMTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ4Y2ZkYjE0YjNmNTdiNjc0NWJkMTYzMTU5MDVlNDI1MzI1N2M3ZDc5Mzk5MDY0NjY5Nzc5OGJhZmQyYWVhYTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJlYzUwNDQzNTk2ZGEyMDk4MGVkODhkMTgwZDkyNDg1YjYxZmE0ODQ5Yzk2NTYzZDY5NDljY2YwNjBlMzNhYWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImRmNWFmNmUxYTNlMDk0ZmE1MTIxNzgzMmRmZmNhZGM3NDYzM2QwM2IyNjQzMjk1OGJiNjdhYWYyMzM1NGUwNGUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_335a37cd97084849bded8f1fa4b4c631",
+      "statement": "Built-in MCP handlers are mounted behind authenticateToken, and the handler authorizes client-supplied agent and board headers at edit level.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L335-L364",
+          "version": "repo-lines-v1:sha256:17fd75847318e627aee678271ad4558422938783043b057d58a93d979e0a6502:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIyYWE0Njc1NTQxMmM1MjQ4ZDVkZGEyMzEwNGFmY2UwYThmNzU1MTg1YjIzNzE5MzkzMDY5MDA4YTczNTBlYjUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY0MWRkN2I2NDY0OWZiYzU5NzgxNTU4NWI4MWQ4YzFlZTRlOTg1MjcyODllMmE3YWQ4YmEzNzEzM2JjNWRiODQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM4NjAwYmFkZGFlOTAxMzkzMGUwMmJhYTNlMDBhY2RhZjI3ZTljNWExZDEyNmVhMWFhMzJhNDVlMWI2YzY5YTAifQ"
+        },
+        {
+          "resource": "repo://api/src/services/mcpHttpHandler.ts#L64-L80",
+          "version": "repo-lines-v1:sha256:1e876ce6a202baee41ddc81cecb8f0ecbd6f38356368fc2ea1119a6e0b13aea5:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY4NzdiYTEyMDZhMWNmMTY3MjY3M2JjZTk5NjI0MTU1MWZhNjcxZjEwNjg2MmZlMTRkNDIyZDJmZjZlODI1MDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJiOGFhMzY0YzFjYTEyZTI5MDQ1MTZjZjNlOWE2NTBiNGFhOTM2ZmE5OTI1NTI2MzUxYmFjYThhNTc0NTE0ZmUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkzNWZiNWU2YzEzM2Q4Zjc0NDQxMGZhNzhlZWFjYTkyYzRkNGU1ZTQwYWFlNWNiN2E2ZDhmMGJkNGU1ZTUzNzYifQ"
+        },
+        {
+          "resource": "repo://api/src/services/mcpHttpHandler.ts#L8-L17",
+          "version": "repo-lines-v1:sha256:c9fac5da6b528527a43ab8f1d29432e4b230335313139410a7d49e0b440b9c58:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYxNWNlYzFkZWFmYjQ4MDQ5ZTVjYzA3MDg0MDZiOGJjZWJhYWY0ZDQ0YTk1NDI0NTNjMDE2OWRkMWFiNGMwMzkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjE1YzZlZjM4MGQ4NTYwODYwNTBkYzA3MGEwNjRmNTQxZDUyNjVkMjNhNTg4MDVjYTEzZjE5ZDQ3NmMyMWNmYTAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg5OTZjN2M5YTZhNTQ5ZWE1MTJkZWU3N2M3M2I3NjYwNGJlYzdjNGZmY2Y3ODQyNzU0ZDVmYWNkOTQ5YmNhYjYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ac7bc25acc5445d0b21c533f85849ce7",
+      "statement": "Runner service tokens must match the agent and board headers they are used with.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/mcpHttpHandler.ts#L49-L62",
+          "version": "repo-lines-v1:sha256:7e4f503a24535e648f6d0d7af7d6bc74b9b62c74bb2c4c357d3a7b85994880a3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ3OWQyMzgxYjAwZTBmMjQyNjk0NzJiYmY0YWNhMjc2NmJjMDM3NGEzNDI5MGE0ZDA3YjFkZjhlYWQyZTY1ZmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE0MGY2MWU4YzZjYTA2MGYwZDI4ZmNkYTI4ZmY2YWNkODdmMzAyZmYzMmIxMDg3NmU2NmU2ZDM2NmI2OTIxOGEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU5ZTk1MGVmMDY3OTExY2Q2NTRjZmI3NTc4ZTg0NDExYTAzY2M1YzlkZWJhYjY5MzU0NjQwZDhlYjhiNzRmMjYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_baa4e077f3b24e18bbb38919a503ea6a",
+      "statement": "Key-scoped MCP surfaces resolve the key's owner on every request, so demotion or deletion takes effect immediately.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L366-L378",
+          "version": "repo-lines-v1:sha256:2b76326a2fc60fa66901dde0f9c2865dad6fe06849f5d7d4ed78197bf29de1b8:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEwMWVhZDkzNmEyMjgxZDUzZGNjMDY0YjdlMmEyYWIwZDUzYjkyZWYzZWY3YjM0YjY2ODY3MzAwNzg5NWM4NjAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImEyMDdiODM1Y2E2MDk4NmE1YmI2ZTMyNDg4ZjYwMTZhYzNlYTI0ODllNzRiM2I3YTZmMmRjNmYyMjU0NTdmZDMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM1ODQzYjBkMGNlZjcxODliNWQzNzZhMDYwYTdmOGJiOTAxYWY1MDEwOGJhYjcxNjE1ODE0ZTNhNGFkZTg5ODAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_88e901c87c8548eaa0c78992e0e9839a",
+      "statement": "actorScope implements no access rule of its own, calling the same checks as REST routes, and collapses denials into not-found to prevent enumeration.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/mcp/actorScope.ts#L1-L24",
+          "version": "repo-lines-v1:sha256:31c45beb2f17af7a58b3d9ea0c88ed9287449a254a47849cf29673e83b0ae0a8:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3YjRlOGU2OWU1M2FiNDk4NWMwMTZkYmY4MDk5OWJhMjNlNzYwM2ExY2IzYjk1OWRjZjhkMGFhMTQxNDlmMTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBlNWU2NzFiMWE2OTMxMzVlNzI1Yjc2MjBjZTdhYzc1OTFiMmRkY2M0OTBmYjRjZTViZWVjYjFjNzZmNGZiOGUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_7ae9ec32290a460baa985be799ea75d5",
+      "statement": "Insert keys are bound to one board that is never read from the request.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L380-L386",
+          "version": "repo-lines-v1:sha256:3b0c8574b39b8033b2b7b4dd1ec998c0e9596f4862a851539cd2a59c3a3dcc8a:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTAxZWFkOTM2YTIyODFkNTNkY2MwNjRiN2UyYTJhYjBkNTNiOTJlZjNlZjdiMzRiNjY4NjczMDA3ODk1Yzg2MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDA2NTZiMmUzYTA2NzhjODRiYWMwMGY5YTBjNGY5Njk4ZmRhNGI5MjMxZGY2MWY3NmE4ZWE5MWE5NDIzMTFmMSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZTQyNzBlNWJiNDkyMDIwNTgzYWZkOGM5YzY0ZDJjZWVkZTMzNTkzNjBhZTVkZWE3MjU2MDIwZGM2ZTExZTYzNyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNmNhNjc5ZDM2MTFhYmRlMGQ1YjlhOTM3ZjY0YTNlNThiNzk3MGFkY2ZlNGQ5MjE2OWE5ZTMxODg1NWE0NGE4OSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_9f558eeb075c4043a320f7da094b179d",
+      "statement": "Remote MCP fetching blocks private, loopback, link-local and metadata address ranges.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/remoteMcpFetch.ts#L5-L30",
+          "version": "repo-lines-v1:sha256:5ab0cab160448118bb01682da5b43bf660d8af7233dc6440bfa4435d525e4ff0:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU2ZTRiZTI1YTQ1NDk2ODE2MWY2N2FhYmRiOWI3YzE1NTlhNWM3ZTZiN2Q2ODMxMTZlMjZkMzZkMTJhMTA2OGIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3ZDZhOGFkYjU1Y2VmMTAyODk4YTQyYTZhMGZlNzFlZmM3Zjg3OWEyMjY0MWVhMGUxNTk2N2EyOTE1YjVkZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ5OGUzNjFjNWE3OGI0MzhmN2IyOGY0MWViOTFlZjlhZGE1OTAxNjM0MzgwNDA5ODk2MDc1MmFkYWM0N2NmNGQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE0ZTk1NWU5MzVlZDk3ZmQ0OGNmNmJmMjFhYjgwMTdhYjU5YzJhZTIxYjRhNGJlMTFhOTc0ZDUxZDI2YWE0OTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3832af490cb84159a698415def9aba4c",
+      "statement": "A plugin bundles instructions and MCP servers.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/skillManager.ts#L18-L35",
+          "version": "repo-lines-v1:sha256:8e3f6533929337f1449faaf8176cda109b2c2d54b1305d6c328905c420cff6b4:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhkMjYzYWVmMjU2NTJjMjk0MWIwYjIyN2YzOTYwZjNkYzhlYjRlYzUyMjVhYzFiNzA4YTc1MGZkNTI3OGY3YTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjE4NDBiMGZmYjBmZjg0N2E5OTMxZjU5ZWM5ODRiYjBiZjU2OGMzZjU2ZDI1Mzc0MGE3NDc2MjkwNjdlMmEyZTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY0N2EwYjA5NzJmYjhiOGZhYjVjN2M3NmEwMDQ1NzU5MWUzMmNiN2ViYzkzOTM3MTRlOGZmMmI4NzlkOGMyYjQifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

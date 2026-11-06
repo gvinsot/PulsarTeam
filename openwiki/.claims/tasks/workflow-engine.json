@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:e50881eea38aaa21ca0e217a76097baeeca9ff81ef00352059ee16f2e893d353",
+  "claims": [
+    {
+      "id": "claim_60cf1507ce174301841ee10972ad6327",
+      "statement": "Workflows use on_enter and condition triggers, with action types run_agent, change_status, decision_model, assign_agent and assign_agent_individual.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/workflow/taskStateMachine.ts#L21-L36",
+          "version": "repo-lines-v1:sha256:6d427671f0df61cedf5bb210af881e62c28fea05e8b35d252c402095390fc739:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjMwYjYwNjliNzcyMGQ1OTM0ZmZiYWRjNjgzMjQ4MzFkYzcwMTRjOGY3Nzc1NjI1YzNhNjQxYmU1MTM0YmY0YTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU4ZmUwNjY4YzA4MDM3M2UwMzQyMDYxNTRmMWNmNzQ3ODViNzRmZDJkOWVkZDA2NTBhMmU1YTA0M2I0NDM3NDQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ0MzBkODA0NmRhMjRlY2Y0OTVjNzE2ZjQyYWIzNTc2N2Q2NTk0OGU2MzNlZjY4ZTg2YmE0MDU3MzNmYmFkMjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY2YjE4ZTgzMDljODRhZDg2ZTc2OGU0MWZkNTcxMDgxOWVkYmVjN2Q5ODdjNjEzZTdmNjgzYTE2MTIyODI1MmQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_d78c4a1e71a04d4286173983125e035e",
+      "statement": "The engine's bookkeeping uses targeted updates guarded by the column, and never saves a whole task row.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/workflow/workflowEngine.ts#L20-L24",
+          "version": "repo-lines-v1:sha256:b945fe8aebc60e7d7b961bfcb6714ef176b57653ed739994f0c8686540d8c49e:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNzQ3ODkwZmFlMjFiZmIyMGI4NDQ2Y2EyOWQzM2U2ZmY3N2RiZmExZTNhODA1ZTdkOTg3ZmU3YzIwMDY4NGQ3NyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTcyYTQyOTM4MmIyZTE0NzE4ZTBlMzdiMDU3MGE4YTE3MDI5OTFmY2Q4NDk4Y2Q4NDA2MGE4YmY0ZjA1MDE3YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNGIzNDNjMjY3M2NiM2NhZjAxZTYxYzA0ZTdjNTUzZDc0MDA3OTVlNTI4MWQ5YTQ0ZTMxMjRkYjE1MWNkZjQyZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOTgwM2QyM2EwYTI5ZjJhZTI0MTI2NDEyYWY4MDcyYmJmNzE1NWU2MjU5NDZkNGI2NDFjNTYwMDE5NzY5ZTAyYyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_4caa4358e4254ebe984e31622f6a45db",
+      "statement": "processColumnEntry rereads the task and skips manual, unapproved, stopped and other-environment tasks.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/workflow/workflowEngine.ts#L180-L229",
+          "version": "repo-lines-v1:sha256:89d03bbeb99f72184fa4e324da81ec07bb3223ef6d5b98815b0e418e45540122:eyJzZWxlY3RlZExpbmVDb3VudCI6NTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA2NTk1ZjRlZTVmZjYzZDUwOTUwNDE5ZGMzNDQxNDUxMzg1MWRjOTczNmZkMTdhNGY3YmZhOTMwYjI2MWI2ZjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3OTJmODQ3YmIyMWNiMjkyZGQwOWY3ZmE2ZTdjYWM0YThjMTRkOTdkMzg5NjMzYjNkMTUyMGVhMTRiNWIxZGMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI1ZDNiYWY0OGU3MzEzMDlkYzQyZmJiOTM4NjVhMWQ3OTgxMzRmZjMyODU0MTIzYWVmMmE5ZGJmMWE3OGRlOTQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdiMjc3MTZjODkwM2JkZjA2YTg2ZjdmY2JiZDEwNjk4MDg4ZjU0N2IzZDczZjllNzBmMmNhYTRkYjA1NTZiMGYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_7ae24bc4ec384eafac24bf684cb77aa0",
+      "statement": "A nested column entry during processing writes a durable pending_on_enter marker rather than running.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/workflow/workflowEngine.ts#L159-L174",
+          "version": "repo-lines-v1:sha256:e9b129eae3ba804bc875a4a4721803c3d3b2c16d4d665de5127ee6179cd08e6b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNkMDMxZWZhM2Q2ZTg5MDUzNjcwN2I1NTY1N2Q1NTRmZjdiZmQ5MzcyNjM3OTc2NjA4YjNhN2EyMjk4ZmU2NDciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjljNWUzYmZhMjNkNDdkODExOTVjMTIxMGIyZDFhNDBmNGEyMmU0MDY2NTc5YTczZmYwYzNmMmZhYTZjMjExZjYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM2ZTUxZTBkMDA4ZjE2YzdhMmI3MDAyZThiYzQ2NTQ4N2FlMmY1YTMzYjA4ZjczZjUzNWQwMGJmMjhiODdmZTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdkYmMwYWFkMWZjYmZjZGZkNGU1ZThlMTA0ODIwYzI2NTBhOWZlMThkMGZmNjhjZjc5YzkyM2M3OWJhNjQzYjAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0371bf5b84074aeb9ba45910bcffedac",
+      "statement": "An agent never works two tasks at once, enforced by a synchronous reservation, a database claim with heartbeat and a unique index.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/migrations.ts#L348-L348",
+          "version": "repo-lines-v1:sha256:49f397188f5a9f0eb9c1a13154d53fa722f879cf78b7fdc19e251ea40cfa2f43:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNDlmMzk3MTg4ZjVhOWYwZWI5YzFhMTMxNTRkNTNmYTcyMmY4NzljZjc4YjdmZGMxOWUyNTFlYTQwY2ZhMmY0MyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDlmMzk3MTg4ZjVhOWYwZWI5YzFhMTMxNTRkNTNmYTcyMmY4NzljZjc4YjdmZGMxOWUyNTFlYTQwY2ZhMmY0MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMjQyMmM5NDlhODVlYjVhZTA2MDJhMmVjZjg5OTEyMjdkMGFkZjkwMmJkZTYwODQwNzZjNGU3Nzk5NDM3ZGIxMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzUzYzc3NWYzNTVhM2I1OTNlMDAxNTAyNTEzMDAxYmNmNWNmZDZmZGQwMzQxYjNiOTBiZmI0YThmYThmODg0NyJ9"
+        },
+        {
+          "resource": "repo://api/src/services/workflow/agentSelector.ts#L14-L27",
+          "version": "repo-lines-v1:sha256:ce13c90ebca60e29ee1183b13cf83340461f0761178db93d28da8b435681505e:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViMGI3N2RiOTdiYzAxMjcwYWU4YjhjODQ3ODViODMzY2UyMGVhZGQ4MjJjMDVjNjM3M2Y0MWZjNWUxOTQzM2EiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5YzAyNDM5ZDc0NTYxZWRhZDRiYjUxOGEyZDkzZGRiYjk3M2UxOWZkM2RmOWE3N2RkZDMyNThiNWM1ZmE3M2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE0ZDAxMjMzYWE3YjMwOGNmZmE2MzlkYjJhYTlhZDkzZjQ5N2EwYTljNzFjNDAwMjg5MTExNzVmNGFjMjhiNmQifQ"
+        },
+        {
+          "resource": "repo://api/src/services/workflow/runClaims.ts#L1-L28",
+          "version": "repo-lines-v1:sha256:e86ba3a1f58e1cf0042a55dfcc503280041fd4f41e140afbd475ccf565dbcb6a:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJjMTlkMDViMmM2M2Q3OWFlNzQ4ZjVjZjg3NmM5NzdiZjFmZDNhMTE4YjA1OWRhNjcyMmQ0ZGI3YTlhYmZjYTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjgwMzMzNDkxNzc1YWFmZjAyMGQ2ZGNmYTFhZDBhZGE3ZjBhNTEyMWU1MDIzMjA1NzM3YWQyYWI3YzBiOGU5NzMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_1f25f5db693c44a7b62d6574e8f56f40",
+      "statement": "Claims go stale after 120 seconds and are healed by a sweep run at most once a minute, unless the run is live in this process.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/tasks.ts#L1647-L1647",
+          "version": "repo-lines-v1:sha256:f0e467450e87466dcae2809f1cfea10ba4013051ace8ab2c0ef515b71dbe6a84:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjBlNDY3NDUwZTg3NDY2ZGNhZTI4MDlmMWNmZWExMGJhNDAxMzA1MWFjZThhYjJjMGVmNTE1YjcxZGJlNmE4NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjBlNDY3NDUwZTg3NDY2ZGNhZTI4MDlmMWNmZWExMGJhNDAxMzA1MWFjZThhYjJjMGVmNTE1YjcxZGJlNmE4NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNDg2OTg3MmQ4NDFiZWQ3MjEyOTBhNDUzMGUyOWQ4Nzc5MDdiZDI1NWNkMmUwOWU2N2YxMGJiOWE4YWI4ZGFhYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNmMyODY1MTBkNmU3ZTUwNDVhODk0Y2M5ZGZhNTQ3YzA5NzMzYTBhYjE5MjRlOGE1NmRkYWJkNGFiZjMzZjMwZCJ9"
+        },
+        {
+          "resource": "repo://api/src/services/workflow/workflowEngine.ts#L700-L720",
+          "version": "repo-lines-v1:sha256:f9a70dbb0ebbc1be4ac95233cde8c15bf8b75dd9ce5064517a49f1334c987a92:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkNTBhNWM2NGYyODgyNjVmODRmMDAyYzg2Yjg3YTgxYmZiYzkzMmI5MDc0NjdmNmVlYWMyODFkZWI4ZjU5MWUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdjMTNlYThhZGQzNTczYjM1MDUzYmUwODNkNmMyMGViNzc5Y2I4YTRmMDEwYzBlZDViMzBjYmUzYzIzOGI0NjciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRhOGFjMzlmNTUxMjFkZWNjMTFhMGMwNGEzMDA3NDk3ZGQ4ZjA1MjAwZjIzZmM4YzQzOTEzMmU3OTZiNmMwZGUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFkODZmN2E1OTgyNjExNmVhMmIzYTNhZWVhYjIyMjliY2U3ZWNjN2I3Mzg2MjcyNzg1ZDAxZWI3ODQ1NTM5ODQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0fd4054ef182495cbb07ca6d8637b9f7",
+      "statement": "Auto role selection failures throw, so the task is marked in error and the chain stops rather than repeatedly calling the LLM.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/workflow/roleRouter.ts#L1-L15",
+          "version": "repo-lines-v1:sha256:18471bcef88ae6bf21767b2c9f0443f9c457236e86d2a5a89a22e48356e0d625:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImExNTIzNjQ2OTBhNzhkNzM0ZGM1NGUzM2NjZjUzNjZjYmIxOWZjYTRlMDQ2ZThmNmE4ZDhiOWYxOTdiYjAwODgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_853e328ac6034e04be11c6c09452c612",
+      "statement": "The task loop does nothing until the environment is locked, because a QA replica once ran production's tasks.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/tasks.ts#L1480-L1494",
+          "version": "repo-lines-v1:sha256:f3460e36f92d68e3c144c047ab4a447f96a605fd6aaeb49630106d21cde2f4b2:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjcwZDE4ZTY0MGRmODNiMWJkOTBkMzliYzE5Y2YxMWUyOWY2NmYwNzI1NjI1MjI3MjI1ZDgyMWNhNjdjMzc5YzgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ4OTNmNDBlMzc4MWViODk2YzgyZDA0NmEwODA2N2ExMWUzNWNkZjJmMWRmYWYyNmZlYTkwYjhkYjY2NzY0MTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY2ZDEyYWMwMzlhOGVlNDE1NjFlZGJhN2YxZDU4OGMzZTAzYzE5ZjNlNmJiNDg1YjI4MDE5YjI5YzBiOTcxMjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhiNDEzOWYyODQ0NDJmZDU4MjY0MmQxZDlmZWI3MTU2YzQxOWQxY2NkMWMyNmM5YzYwN2Q2ZjBmZjdhNTQyNmQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_5a079dcd56444a72b86368e80a87ff7f",
+      "statement": "The environment comes from APP_ENVIRONMENT or the first public hostname seen.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/index.ts#L214-L221",
+          "version": "repo-lines-v1:sha256:8b07da89d0f2a23bf2b34ae222814a2a5773ec481ed63f6f20d7215a51958919:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZGZjZWIwMGJkNGRhODJiMGMxNmI5ZDgwYTZhNTRmYWI4ZDdjYTYzY2RkNTdhNGM5ZDAxMzZjOTBiZWU0ZWJkZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjZmNWI0MGIxNTg0NTdkMTc4NjRmMjE3OTA3ODZkZDVhMmVjZGI2NGI2NmE2NTFmNzg4ZDRlMjVjZDMzMDNkMiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMTA5N2MyOTMwODIwYzE4ZGQ3YTA4YmYxN2Q1MDA4MjNjMDJlNzI0NzAyZWI0MzVlODM2NGU5YWE1N2E1OTYzNiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTgwMzFjMjA0MWRlMzA2MWUyYzc0ZjAzZWNhNzk2YjEyMzE1OGRiNzY3YWNmNmI4ZGJjMDk2NjVhMGVmM2YwMyJ9"
+        },
+        {
+          "resource": "repo://api/src/lib/environment.ts#L1-L27",
+          "version": "repo-lines-v1:sha256:0f96d35a50bd9cee165411e4021eaea1bd8bca561bbe4b7145b9021b6bf1ce7a:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQyNWQyZjNlMjYzZmY3YWIzN2Y5ZTczYmYyMjczZGFmNGVkODU5YTVkMTgzZTAwODU1Zjc2ODM1MDk5OTc1NWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI1ZjE3M2E3ZjJhZDhlMmNiMjIyYzgyMjhlYjE2N2M0ZTMwYzJjMmJlN2ZmZmU5Yzg3YTNmNmJkYmU2ZWI5NGQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_fc5beaec57374e30835d1b23aae74461",
+      "statement": "Decision actions choose the route when confidence reaches minConfidence, and otherwise use the fallback.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/workflow/decisionAction.ts#L90-L96",
+          "version": "repo-lines-v1:sha256:6697cb117caa82378ea58c5de3149c51996610954e2928504936186b4c8ab4f5:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNjNmMDYzYjBiZTVmYTMzMDY1YjRhMDYzMDJiMmE2MDQ5ZjQ3NWIzYmUxMTg2YzRiYTY2MTIwNmQ0NWQ1ZjFmZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMTVmYmNiMjc0NzNmMmNjYjdiMDhmMjM4MjQyODVkMjFjMzM0ZThmZjNlMWIzNGFmZWY0YmNlNDgzMmFjYTFjNyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzcxNDA2ZTE3ZDgxMWIwYTFiNjA3MWJlMDQ3YmFkYTU1ZmI2ZWZlNGExMWJkYWUxNDAwZmUwYWNmNWViM2Y5MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNzhjN2M4ZTdmZmNiYThiZWI4ZTNhYWM3Y2E4YmZjMmQzOWQ4YWE5MzI2Yjc4YjhhYjNjZjYzNThlNWVlYTczYSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_88182bcc7d8444c98210e6218e7861d0",
+      "statement": "Commit linking uses run-scoped baselines because repository history alone includes unrelated commits.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/tools/gitReconcile.ts#L1-L5",
+          "version": "repo-lines-v1:sha256:17f7ee4d800ef9c920685386435a4fcebb4ac00873f13adfea5bc1fd76658b52:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZDIyNjM1Y2U5ZjhmYjU2N2IwZjZlNTI1NzM3Y2UyZWJhOTljNjRlMzMyNzUyMDkxMTdkMzNkNzk3OTdhMTQzOCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNmI4ZmIxNjZlMzMyZTVlMzQ1MDU5OTc0MDk0ZGY4NjAwYTFkNWMwODNiM2IxNWRjNjQyZTBmNmFlNGJhNzM1YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjAsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNzllODczNWFiODU2MDQ4NjdiZGExNDExZDlmNTYyOTNiMWU0OGU4MTY4NzhkNjYxYzQ4ZDE2OTRmYjU1MzQ2YSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_2e2cdd717e254de8975481f4304b7ec2",
+      "statement": "A recurring task is a template rule that spawns ordinary runs rather than resetting one row.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/taskRecurrence.ts#L1-L14",
+          "version": "repo-lines-v1:sha256:7a4f81af04a5366ce3caf23af722a58cac5b3653551234a72725fc192b08cdea:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0NGZhMjgxMGVhNmFiMDVjMmZhZjZiY2FjYmQ0MzVmZTBlYmM3ZDQxYTliNTU4Y2M3NzFmMTMwNWFiOThjMGQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQwMTY5OWUwNDIwNzQ2ZjMwMTdlZDgxMGFhYTI3NDRiYmE5N2VkY2E0NzA3ZDIxMDIwMjQzMjAxYTdmNjc3NjciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImFjNjA0MzFkMWUxNWE1MDBmZmE5ZmQxMTBhZjRkMjljNjFkODFlOTgzM2E2YmY4ZTA2OTkyMzM3NjAzNjkxMWQifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

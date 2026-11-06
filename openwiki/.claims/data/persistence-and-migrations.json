@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:b66d5c98aed21e3c2cdc10215d73c907d2c5deb2bbe841ca267c0e9d2da2c300",
+  "claims": [
+    {
+      "id": "claim_d418cba5b079405281f20051be6dfbfd",
+      "statement": "If all database connection attempts fail, initDatabase logs and returns false and the server runs without persistence.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/schema.ts#L14-L26",
+          "version": "repo-lines-v1:sha256:34be65dbfe807ce7f8cadf710f9d1adf56cc59cdd83b546d61812f6ecf828101:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU1ZmU1OTM4N2MxNTE1YTlkZWJhMzM5OTUyYjVlOGI2ZTU5YTFkYjc0ODgyYTllOTMxNzQzZWMxNzY4NTVkNmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZTU3ODhkNWQ5ZDczZDI0YTgxZGJjMGE1YTc0YmZhODJjOWMzYjNhZjk5ZTUyYWY3OTZlOTBiNDY4YThhM2QiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYxOWVhNWE1MjQ0NjVjYzMxMzgxYjM3MGU1ZWQ2ZjhhNjc4OTJmZmEyOWRjYWRiNGUzMTI0MWExMzA4ZDM0MzAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExNzUwMzlmZWVjNjQ5MWM5ODMzM2VhYWFlODNmNzU4ODgyYTFjZmRlNjNkNGVmOTc3ZTA0Mjc3NDY3MDU2ZDUifQ"
+        },
+        {
+          "resource": "repo://api/src/services/database/schema.ts#L76-L94",
+          "version": "repo-lines-v1:sha256:c92970b1695a55481d6c012b8e7c8203a9abf25894abccbe2ec0dad137ad1df3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxYjlhNjZmNWU0MDliYmVkZDFjY2Q1ZDdjNDA3YzIyNjU5NDNjZjAwNWY2ZDhlZTdhZjdiMTlkMjVmNjc4YWMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRiOWQ2OThkODllMjJiNzg4NDk5MjcxM2RkOGVhOGE1OGQzNjdjNWUzNDJlNTdjM2Q2YmUzYTE5MDg5NWZmNGUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImIwYjVhYjU1N2QyZjllNTg2OTQxNWNiOTg4MDlmZjM5MzZlODQxYjBiYjAwNDE4MzlhZTEwMjQwNWQ1NDE0Y2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b35dd69530114e9ebd4ca506477aeb89",
+      "statement": "The schema bootstrap uses a dedicated connection without a statement timeout, destroyed rather than returned to the pool.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/schema.ts#L48-L67",
+          "version": "repo-lines-v1:sha256:42e8d631a76c636379c56b8b9f0a1f864b080cea875d1115b8e4c1d8ebfebe6c:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViNGU3YmVmY2U2ZDMxMzIwOGYxNzFkOGE1ZmZjOTBkMmE2ZDk5ZGVjZTE2YTUzYTgzNDY4NmQ1Zjc0MDUwNmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjJmOWNkYThmMTU2OGY5Y2NkOThjNjUxNDFkOWVjNmEwODc4NmZlMjA2MDc0YmU2Y2Y0Yjk1ZmY0ZDc3MWYwYTkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFiNGI0ZDIxYWM2ZTFkNGUyNGRlNjAwMTY5YTBiNjE0ZDI4NjU0NzBkNmZmODk5MTU5NTU0Yjg4YzNkNDU0ZDIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_bc5a6c466e854372b92a6e28bb5ed7ba",
+      "statement": "An idle-client error listener is required because an error on an idle connection would otherwise crash the process.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/schema.ts#L37-L44",
+          "version": "repo-lines-v1:sha256:00da8e3f7de889bacea74bf9db697d1c7d081177bca2d8c5f58ee94580378852:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNzVlYjA3ZWY5NzVhODk2MWQyYjMxYzU1ZTlhYWNjMTFhYmIyNjRhMzBlMWU0MzE0ZGE2MjM1ZjM1ZTY2OTFmYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYWFmNmExMTcxNDg1YTFjZWY5MjRkNjhkNDFmYzZlNzMwYmZjYWZlMWUxYzU0MjcyOGM1YzYxZTVkNjYxZDY3ZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDNmZjg2YjUyOGJmMTk4ODA3ZTVhOWE4OGI2NjkwOTkyM2I4MGM1YWQ3MTMzYTFhY2NiNTNlM2E5ZWNmN2M5NiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMmY5Y2RhOGYxNTY4ZjljY2Q5OGM2NTE0MWQ5ZWM2YTA4Nzg2ZmUyMDYwNzRiZTZjZjRiOTVmZjRkNzcxZjBhOSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_85bfa888f51441908605e7df77c1268b",
+      "statement": "The pool maximum of 20 is sized for two deployments sharing one cluster and must exceed the task lock cap of 6.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/connection.ts#L11-L27",
+          "version": "repo-lines-v1:sha256:1e0b896ba66f8f8ea0e79bd84277a4df559bea0c137e4dde6aa59efa6c10547e:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjcxMWI3YjU3MGU2OWRkYTQxYTE3OTcyZWIzYzk4ZGQ5ZTcxNDk0OWRiNWQ1Y2VjY2QxZDYzMGNkNGNmN2I5NTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImU2NjFkODkxMTQxMDA0MTJlZjQ0MWFiMWJjN2M3MTM5NWUwMmI0NTNkYTc5MjZhMDFmNjljM2NjYjU5YzYyMGQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJkZTAzNjg4MjBlZWFjOTJjOWI5NmMwMzIyOWUyYzQyY2E5NTY4N2M5NDdmMTUwMjFhNGEwZjY5NWYwMDQ2OWQifQ"
+        },
+        {
+          "resource": "repo://api/src/services/database/locks.ts#L38-L44",
+          "version": "repo-lines-v1:sha256:e2a31f9824cba1e06793893c429dbbf7bbc60d00b796d79d79e2e9af8a0266d3:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDFiYTQ3MTljODBiNmZlOTExYjA5MWE3YzA1MTI0YjY0ZWVlY2U5NjRlMDljMDU4ZWY4Zjk4MDVkYWNhNTQ2YiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNTJiNTA4YTJkYTk0YTYyZWU5ZWZlZjYzZjgzYmY2ZTk3MzE3ODU0MmYyYWVhNmYzMjc3NWZlM2U3MjMwMDNkNyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNmJkNjI3YzlkNTk3NjVmYWZmMjFiODQwODFiODYxODlhM2RkNTEwMDAzNTQ2ZTY5YzFkMWFhZWNmNWNiNGViYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZWQ1MDgxMDkzMmM3MzRlZDI2ODU4ZGYyNGQwZDQyNGM3MzQyYTBiZmVlM2YxYjgxMzVjMDJjNmJjOWY2NjBkMCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_e07ee642a62c4be09204640ec7474eff",
+      "statement": "Applied migrations are checksummed and a changed migration makes startup throw.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/migrations.ts#L14-L44",
+          "version": "repo-lines-v1:sha256:18e0255c6a4b6a1108c62643dbc74f83b7f4b1ed7a0169b9e222313f45580796:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk4OGJlNDg5MWMzMjE2MTk1NDJkY2ZhNjgxZjEwNjMzYTdjYTlhNmExMzI4Y2I4OGQ2MDE5Y2Y0YmMxMTIxMjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU2ZTQwMGNhZmRmZDY1MzhkOTk4ODhiMTc4ZjdiNzhlZjBmOWNlYWNkZWYzM2U4YzVkNjE4MzNjMTU5ZjIyZDYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU5ZTZhNmEyMTk5MDc3ZTFjODk1OThkZmEzMjZkNTYxMzQzZDZkMWNlYzMzMjQ4NWE0NTcyMmVhMDE5NThlM2EifQ"
+        },
+        {
+          "resource": "repo://api/src/services/database/migrations.ts#L434-L434",
+          "version": "repo-lines-v1:sha256:95864280ce644412324f4cb8122723793bf3716509ed427a61ea064dc778677e:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTU4NjQyODBjZTY0NDQxMjMyNGY0Y2I4MTIyNzIzNzkzYmYzNzE2NTA5ZWQ0MjdhNjFlYTA2NGRjNzc4Njc3ZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTU4NjQyODBjZTY0NDQxMjMyNGY0Y2I4MTIyNzIzNzkzYmYzNzE2NTA5ZWQ0MjdhNjFlYTA2NGRjNzc4Njc3ZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNWZhODIzNzNlZDRjMTNjNzZlZmI3N2YwYzBlZTkxOGQ1ZTA3M2VlMGM1MWU5YjhjZWRhNjBkNjU4ZmE3YzYwNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNzg1YjBkZTUzNTA0ZDI3MjhmYjdiYmY2ODA0YTNlMjZkYjUzMTBlZTY5MWM2MzA0YTg5ZDBiYWUwNTkxNDUxYyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_ec37dc13a5a1410cb5ddab30c4f624da",
+      "statement": "Cross-deployment workflow processing uses session-level advisory locks on dedicated connections, released automatically if the process dies.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/locks.ts#L4-L22",
+          "version": "repo-lines-v1:sha256:ecc38ed2a7c9226a90a3140d79aa0a96d958f2fffdb3eebe220459273ed9efbf:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MmE0MjkzODJiMmUxNDcxOGUwZTM3YjA1NzBhOGExNzAyOTkxZmNkODQ5OGNkODQwNjBhOGJmNGYwNTAxN2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ3YzZmMGU5ZmQ1ZThiOGJlMmFjZDQxZTNmZWM0ZGFmYTI4MjM2ZTEyMDdjNGFjMjY3NmQ2N2ZjN2I3MGEyY2IiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjNmNjJhNjA4NjRiNjdjMmY0MWQyOGNmZmY1YmU4NTQwMWU2NGMxYmJjM2UxZDc5M2FlNzcwNDZkZjE5NWZmZmYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f3b619f78f1a48ef90fa29c34e570fd7",
+      "statement": "Lock slots are reserved synchronously because the earlier check-then-await allowed a single tick to exceed the cap.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/locks.ts#L27-L37",
+          "version": "repo-lines-v1:sha256:72d5f1e63dcb70f236ae6e35d15b607601e50ee4679d66ef9da27afea758b01f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0OWNhNTE0ZWViZGJkMDg3MDBkMTI4YzQ4YWEyMTFjZTliZTk5MjE4ZjMwNjVhYWU0MmQxZjEyMWUxMzhhM2UiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgwMjNmMGFmMzYwYmE0ODE0ZTZlNDY2N2I5ZWNlZjBiODc1NjAyNGMxM2NhYjQxYTQ3MDI4YmJkMjViNWM3MDAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImExMjY0ZTFlMmUxZWFkNzY5YzViNTYzMTRkZTlkNTBjMjE3ZmUzYjM0ZjkyMzQzOGIzZWQyZWEwOWY3ODk3YzgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijc4YmIxYjFkZDg4NGQ3YTQ3N2FlMmM3YWJkNTFlM2M0MTllY2RjMjU2ZTkxMjVmZGZkM2I3MjU5N2M0NjY4OWMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_016af5de2cbe4ebfa2c5eb45074f2905",
+      "statement": "OAuth tokens are scoped by provider, scope type and scope id, have no environment column so deployments share them, and are synced across replicas by LISTEN/NOTIFY.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/oauthTokens.ts#L5-L25",
+          "version": "repo-lines-v1:sha256:4916eb9766af395c06b528fcdd0571248952e14424e63d69f6a1aab1be2c34f2:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdkN2VmOWI1ZTIyMjc2OTNlMWIwMTU0NmE2ODY5NDNlYjc0ZjZiODIxMDdjZWZlZDI2MTUxZDA0YTQ3ZTY0ZTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhlYjUzYWVhYjhlMDU5ZDc4MWQxMDMxOTY0M2M2Nzc1YmU3ZGI4YzA3NjI0NTBjNTJjNzIyNGFhNTA5ODk3M2EifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_1c5bf6bf33934d4fb9fd6d5916c3ed67",
+      "statement": "Stored secrets use AES-256-GCM with a key derived from the ENCRYPTION_KEY secret, and an enc:v1 prefix identifies encrypted values.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/lib/crypto.ts#L1-L45",
+          "version": "repo-lines-v1:sha256:b20259d42bbc692d6c0d034b82934d374bc39f0ff9661bf71cf55db5d4a106a8:eyJzZWxlY3RlZExpbmVDb3VudCI6NDUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRkNmFjYTY3YTY5NzYxMDg5N2NkODFjNjUwNzhiMjYyYzQ5ZDkxZTQwNmIzZmI4YzllYTAwMzU2NjM3YWQ2YjciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFkYjNlN2NkMGMzYTYyMzA0NzY2ODE2MWQxMDRlOTlkODYyMDljYTNlNzc1NGEyNWIxMTlhNDkwNzg3ODA0MjYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_25d60e6940ea4d25bc7d1a6d0e120173",
+      "statement": "LLM config and MCP server apiKey fields are encrypted through the document store's secretFields.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/database/llmConfigs.ts#L29-L30",
+          "version": "repo-lines-v1:sha256:73b0fa5160c41895d681e0d09c54b0b35f545c1cd85e1ea55c4970469f69da20:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTUxMmU3ZTYzMDU5MDdjOWQ5OWNkZWM2YTJlNjFjNDFhNTRjZjZhMzE3NjA1YjU4ZTBiYTVmOTFiM2NkNmZjYyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTVjZGRjM2QyZDEwMWM1OWQyNzdmNzdlMmE0MTRlMzQ1MzZlMzU2ZGQ3ZTNmYzA1OGY5NTRmMGQ5MmFjMmYzYSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzI0MGE4ZjBlNWJjNDczMTYzZjE4YTVmZDU1ZDZlNzZiNjQ1NDZkNWU2ZGYzOGM1YWRmZDg4ZmViNzQwMjViNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOTEwMWQxMzc2OWQ5YzMwMGMxMjZjNGY2NWFhZmRmOGI5M2ZhNzcwZTRlMjYxYzIwOTM3ZTk2MzIyZjM3Mjc3ZCJ9"
+        },
+        {
+          "resource": "repo://api/src/services/database/mcpServers.ts#L4-L5",
+          "version": "repo-lines-v1:sha256:581fdcab28a0123e9228773440eac5cb312b4692248c3f2fdc506fec8c84ce1e:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNWZjZGE5NGI3ODc1MGQ5NjQ3MWZkZWZkY2M3Y2EyZTNjNDJlYzFkZDJjZTEyODRiZWExNTIzMjg1MmE5MGIyMiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTVjZGRjM2QyZDEwMWM1OWQyNzdmNzdlMmE0MTRlMzQ1MzZlMzU2ZGQ3ZTNmYzA1OGY5NTRmMGQ5MmFjMmYzYSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTc2OWYzZjZlMjBkYjk4NmEyNDcyZTQwNmE1ZTQxOGNjM2NlMjc1ZDA0ZjEwNTg0ZDQ3MGI5NDA2NDk0MDc0OCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGNmMTQyMmIyMDNmZjFiMjQyODhiZDRiMjY1OTdiNGEwMDRlYTFjOGM1MjE5NWZkNzk2OGI4NzY0Y2M2Zjg0NCJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

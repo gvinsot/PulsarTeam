@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:863c10b3a145bb18dc027335c9820128ac1ae6e99d5667c65d4a97925eb48ad3",
+  "claims": [
+    {
+      "id": "claim_059b959c33754b0a814db6df0a448541",
+      "statement": "Indexes are stored as files under the code index storage root, with defaults of 5000 files and 512 KiB per file.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/codeIndexService.ts#L35-L37",
+          "version": "repo-lines-v1:sha256:4a70af21eab640d9b32e30ddb7321c8a6adcbe0e396d80bc150529fad605b89e:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTI2YzdiNGRhOGQ3ZGY0MGEzNDQxY2Q1ODE3YmFhMzNlYTY5ZTUzYmZjYzY4ZDVkMDAwYWJhODFkOTU5ZTM1YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWZlMDUwZGVmNzUxZWE1ODAxMGNmMjY0NzQ1MDlkMzQ1NjUwMWRhMzhlOTE2NjJiMzRhNjJjZDYyOWE4NzU4NiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjM1MGQ1MzJkYWU1ODQ4NjE4MjQxYjE4MjU2OWE4MDYyYThlNjQyNjI2OGJlMjczMzE3N2M0MTg4NjgxNWM4ZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGI2MDJmZTk0MWQxN2VhMGEzNDNjMzI5MDJiZjNiODU5ZWE2M2ViOWE3NzIwOWMxNWEzOGI4ZjM5ZDFjNGUwYSJ9"
+        },
+        {
+          "resource": "repo://api/src/services/codeSearch/README.md#L3-L4",
+          "version": "repo-lines-v1:sha256:4670bae1fa28b3bc01a91ebfbffaac8a8db720efbf935fe2592cf561a583c318:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjVjMWRiODJkMTljM2ViOWRkMzgwYzUyZjhmZmUzODkyMTYzNjZiODVlYmFmZThhMTJjN2ZkYmUzMDdjMDBkMyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTIxN2JjNzE0ZDRjZjYyNzNiODY0OTIwMzUxNWE4NWU4NzA2NmNlZTBlMjA1YTA2YzUyNzAyODljOWViMWU4NiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjIsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMDM1NTk1ZGQyNzYyNzM2YTZlNTU0MzVjNzUxMWVjMWE4MDhjMTk5NzQ3NDdmODc0YjA0YjVkZWJiNzUzNzljMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNzEyZWFlZTdmMmIyNTJmNjEzNDQwOWQ5NDY0OGE4YmYzYTM0MDFiZjk2YjE0ZGM4ZWZjMTdlZjdlNmFjMDI0OSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_23708e22eb9d4f3b92a90420007cc3f1",
+      "statement": "Allowed folders default to the working directory and its parent plus REPOS_BASE_DIR, and paths outside them are rejected.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/codeIndexService.ts#L528-L533",
+          "version": "repo-lines-v1:sha256:9e58b9866106ec9300964f535b138d30d0b77a30b59aeb7ff6e7743ac50d42db:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjY1ZTZmZDkwMWJiOGExZDNkZjEwNjc4YTUyNDgyYmMxOTg0YTRmNjg1NGQ3M2MxOTFmNDc5NGMyYzQzZjgzYyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZWY3NDVkNTAwNmJiMTAzNjRmZTRhM2M1OWE2NjkwZWEwYjNhM2FiYTNlNjJjNWUxYmYxOGNiNWVjZWI0MTM3YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjkzODYzOWY2OWRlN2NkOTZiNTdmNmJkZmRlYzU0NTVhZmViNGJjZDU3OWJlMDQ3ZjEwYjQ3ODRkODk0N2FmZiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZWNiYzJkMDg2ZDFjYTE5YWJjZGE4OTY2YWM1MmUwNTIxMDBiYjI4M2YyOGZhODQ1MWFjYjY2YTllMzI0NDA3OCJ9"
+        },
+        {
+          "resource": "repo://api/src/services/codeIndexService.ts#L591-L596",
+          "version": "repo-lines-v1:sha256:004f04dd1f8d5f57ff9fa09107bc48d6e882f3cc5e327e8a7856211acc300f0c:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTY1Y2Q1MzQyZThhMTZkZDViYjliYjE4YmUxYmM0MzcwMDAwMGVhNzZjMWYzYzViNjRlMmIwOWVkMmIzNWU3YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjdlNTc4OGQ1ZDlkNzNkMjRhODFkYmMwYTVhNzRiZmE4MmM5YzNiM2FmOTllNTJhZjc5NmU5MGI0NjhhOGEzZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMDUyY2RlODdkYmY2YjU3YTcxNWU1Y2U5NTUwNDY3NzAwYTU5NWY2ZWQ0ZGU4YjEzZjg1MmRiY2EyMjlkNTIxMSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMDQ3MWE1Mzk2NTE1ZWUzZjU2ZmIyNzY0Y2JmMDMyYzI3ZDk2ODA0ZDc1OWE5Mjc0ODI0N2MyNWQ4NzA5ZDZkMSJ9"
+        },
+        {
+          "resource": "repo://api/src/services/codeIndexService.ts#L843-L846",
+          "version": "repo-lines-v1:sha256:030fe9cd5da4ce64e3ae3ae4d38e511db9103d762fd5c042a7d401a66febedae:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTYzMDFkNjQxMTllMGRlYmY2MDI4ZGJkMmNiODZjZmRlZGRkYWJkZTNhNGQyODUzNWU2ZTJhN2QzZTM5YmJkOSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDg5M2Y0MGUzNzgxZWI4OTZjODJkMDQ2YTA4MDY3YTExZTM1Y2RmMmYxZGZhZjI2ZmVhOTBiOGRiNjY3NjQxMyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOTMxZjY3YTkxNjJmNWJhOGVkYWY0YTY4NTM2ZjRkYjhlOTBkMWU5ZGU0MjQ3MDRhOTRhNTY5NjM3MzUzNjkzMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOTNmYjQyNjZlN2QwOGNkNjJkZDk2NGVlMzBlMjYzMDU0ZDZkY2Q0NzhhYzgxNmM1NTJkMDE5NGQ3NDFiMGU2NSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_fab184d2e26e43b6a7b22437007633d8",
+      "statement": "Semantic search uses 256-dimensional hashed token embeddings rather than a learned model.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/codeSearch/embedding.ts#L3-L3",
+          "version": "repo-lines-v1:sha256:9c3dd2f2b1d03922fb3b38672651b4dd185868c7c6e6fdc76a174a8e49973abb:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOWMzZGQyZjJiMWQwMzkyMmZiM2IzODY3MjY1MWI0ZGQxODU4NjhjN2M2ZTZmZGM3NmExNzRhOGU0OTk3M2FiYiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOWMzZGQyZjJiMWQwMzkyMmZiM2IzODY3MjY1MWI0ZGQxODU4NjhjN2M2ZTZmZGM3NmExNzRhOGU0OTk3M2FiYiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjIsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWJjYzAzZTRhOWRkOWExOTBhNzA3ZmUzZmRjYmY0OThhOGQ5YmY4MmFmNWU2ZjljMDgxYzQyOWU1ZTc4OTcyNSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMWFlNjBjZjA0YTg1YjE1ODQyOTViZGI0ZDAzYTQ3Nzc3MTRjZWZmNDhiY2I2MmQ5MmE0YTM4MWUyYWY3NjExYSJ9"
+        },
+        {
+          "resource": "repo://api/src/services/codeSearch/embedding.ts#L52-L80",
+          "version": "repo-lines-v1:sha256:7b878945ab93459e607a90e7837774f09733854878dce19b52898962a670483d:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg2MTRiMjY0ZTg3MGVkZDkxYjJkNWY0MWIxNmE5NGU0YWQ2ODJjZDg1ZmIxNjZlYmM4YjZjNThjNWZjNDI3YzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkxN2MxZTExODNmMDBlYzJlNjdiYjliMTVjOGEwMTBlYTk0NTBjMzIwMzk2OWQ4NDk3ZmI0NDNmZjg0MThkZmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjZmIwYzExOTA4NDgzM2RmNjk4OGI2ZWU1Njg2N2RmYWVjZDliMTcyMjA1NTZjMjNiODQzZmM1MWNmZjc4ZGMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzZWEyMTFjY2VkMTQwODZlODUyNDhlMjE4ODI3MThiN2E5MzY0MzBiZGIwOWFmY2I4OGE2N2M0NzI5YTI3NWEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_22a0bf60bfdb4b89a4515ed751e5030a",
+      "statement": "Reference extraction is purely lexical, and the query side attaches a confidence level.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/codeSearch/referenceExtractor.ts#L1-L17",
+          "version": "repo-lines-v1:sha256:4a8de2ff70b67b117756b56911a00ee3301ddf532cb192ee4bf0e7c4fffdf45d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZlYWVjNmYxMWJkYzE2YTgyMjU5NGQ3OGNjMTRjZDZjNTk2MzAzMjY3NDUxYzk1YTg2ZmU2ZTIyMGJjMTg0ZTgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_2b6d3a58cc5b4547a636a2b50f6782c0",
+      "statement": "Freshness compares size and mtime confirmed by content hash, and a moved git HEAD alone does not make an index stale.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/codeIndexService.ts#L1810-L1877",
+          "version": "repo-lines-v1:sha256:ecba433ba6e67b36bea8166f2f0e73fe1b67498253aa3ee81f7b845bc2a0f912:eyJzZWxlY3RlZExpbmVDb3VudCI6NjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFkMzE0ZDZlZTAxNjQ2ZjI3YThkZmNjY2RkODU3NzM4Y2NjMDQ2Mjk1NmYzM2RhZjhjMjgwMzdmMzQ0NjkyMjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYyN2Y5MDY5ZmJjY2JmY2M4NzE5MGVhMDFmZTFmZDk5Y2I0YWQ2NTkwZGJlYTNhOTIwNDZlN2M2NWM3NzI1MTUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImViMTUxZTk0ZThiYTI1NTM3ZDQzOWMzZjEyNDFlYWZjOWRjMjBiOGNjMzA4MTNjZjczN2E0NTFkNGEzOTgyNzEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ5YzRlZDg5ZGJlN2NmZjhiODY5MzU2YTNjNjYwNzhhMTllZWI1MTQwNTFhYTk3NmFjMWUxMjk0Yjc2OWVhZDQifQ"
+        },
+        {
+          "resource": "repo://api/src/services/codeSearch/README.md",
+          "version": "repo-file-v1:sha256:87a5e2f60b9fc0f060381525fb8e9548aa931777a1dbb006ac30d2be2df87bfa"
+        }
+      ]
+    },
+    {
+      "id": "claim_7c172805a65f46d992ec573befe08a96",
+      "statement": "Edits made through the agent manager are debounced for 3 seconds before updating the index.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/agentManager/index.ts#L1020-L1040",
+          "version": "repo-lines-v1:sha256:546aa1faa70321d638699c7ddbab27e9354a890383a3bb33a7e7132205f01349:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA0Mjc3NDZmYWI1NDc0ODcxNTQzYjcxYTM2ODBkYmVkMjg2MGUwYTViYmE4OGJjYmRhZmNlNDVmZDFiZjlhMTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZTU3ODhkNWQ5ZDczZDI0YTgxZGJjMGE1YTc0YmZhODJjOWMzYjNhZjk5ZTUyYWY3OTZlOTBiNDY4YThhM2QiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM0OTM3NDA4Mjc3YzE0YjZiMDk0ZjA3NGVjYWNkNTU1ZThiODNkOTc1MGU3MGJjMjlmNTliMWFkMTk1ZGEyMmEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImRjZWY4MGU2YmMyN2JlZjUxMGJmMzllNTQ3NGU5NjE2ZDRlM2IzYjM5MjJhODk1MTA3MjBmNDViNDBkN2I2MDQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_4c6830dbd5b6453cbfc5dde254166287",
+      "statement": "The vector store tries ZVEC and falls back to an in-memory store.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/codeSearch/vectorStore.ts#L362-L384",
+          "version": "repo-lines-v1:sha256:80a49997d24368a3e46323d1f29ab3babf248f811c8420f04672c0e415c74f5e:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE1MDI3YTM0NmNlOGNlNWJmMGM4YzM3Y2M3ZDc1NjE3NjY3ZjlmNDEzZmVmOWVkYzVlODE2ZmU2Y2IxMDgyYjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMxOThmZWMxNmEwZjQzNmJlYTVhOTMwMzg1YTFmMDM4NWFmMmZjNzNjOWUxNWQ4ZTY4MmJiOWFjMTkyMTNjN2MiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZiNTgwZTk2NGY4M2E0NzNmNDNkNDQzODQ2Mjk0OWQ2OGI1NjAwZmRhNzg3ZjE2Mzc0NWQwMGRlODljYmYzNmEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImNkNmFiYTM5MjI1OWY2YzQzMzdlZTYzMjVjOWE2YTNkYTMzMDJlZTJkZTJjMzU2YTEzMDk1OTQ4NTY5YTEyYjYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_33d21e3984c44fac8d936ccb23b7473a",
+      "statement": "Writes to a repo index are serialized by an in-process per-repo lock.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/services/codeIndexService.ts#L550-L559",
+          "version": "repo-lines-v1:sha256:9e83520b5a99d86b96b767466d09def64d893b7ba18efe9396aa24551a833e07:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZTU3ODhkNWQ5ZDczZDI0YTgxZGJjMGE1YTc0YmZhODJjOWMzYjNhZjk5ZTUyYWY3OTZlOTBiNDY4YThhM2QiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIyZDExY2FmNDNlOTdlZjM2OWU2YmVlZDFhMjY4YmQwNTgzOGYyOWI5ZGQyNTRiZjY5YmE2NDg4NDE0NzIzNGEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjAwZTZmZjNmOGVlYjQzNjM2ZGNhYzM3MTAyM2Q0ODQ2OWRhNzYwMThkNzMxZTE3NDIyYTFlNTY1MTNiNjAzYmMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdkNzA4ZWM4MmQxNWI5OGUxZWVkZjA2MDEwZjU0OTMyYTZhOGNkNzk2MzRlZWNmNWUxNzRlNjUyMDAzNTFjODMifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}

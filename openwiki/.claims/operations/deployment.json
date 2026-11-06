@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:ae1e4cb116da505d279d7c3267e802ea250ccf308e4abb5260e14dd91aba231b",
+  "claims": [
+    {
+      "id": "claim_9db4f8f272864f1c9937bdffa658ea1e",
+      "statement": "Secrets are read from /run/secrets with a fallback to environment variables, and the deployment mounts variables with secret-like suffixes as files.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/secrets.ts#L1-L32",
+          "version": "repo-lines-v1:sha256:5000962a4eed25691a9ade80673d4267978a84e2e12b7486cc8d852803b53f63:eyJzZWxlY3RlZExpbmVDb3VudCI6MzIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjlhZTNmYjQ4ODIwOWVkYzAxZThmYjIwNjk5YThkNjM5MzJhYmEzNDZiM2NjOTU2NWY3OGFmMzE1ZTJmNWRhZTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_de74cc6a50434802b2999101e4ff822f",
+      "statement": "In production the API refuses known placeholder values for secrets.",
+      "evidence": [
+        {
+          "resource": "repo://api/src/secrets.ts#L46-L58",
+          "version": "repo-lines-v1:sha256:1c9a092aaa29c72e62927cb2b733417d2f4d7309a476c526babc17f8acc1f084:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI2ODQ1NjhjYTUzNzhiMGZjZjczMWU2MDY3OGMzZDA3ZjQ5MDRjYzE5MjYxOGFmYWExODM3NjZjZWUwODY4MjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU1ZTI2Y2Q5MjM2NmY2MGQ4ZWQ5MmQwMjM5ZjA3ZmVmNzRjYWMxNGFhNjlhZGRmOWMyY2MwZDExZWIwMGE0NjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ1Y2NhMzVlNzVkYmVhZDMwOTg3NTY0M2NkMzM4YTRmZWUxMzdlNjA0NzZkOWM3MTRjNDRhZDljODljZmRmZTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMzNzRhNDM0ZDFmOTYxY2M4YzYyNTFmMzI0YThlN2M1NzgxNDM0NTc5ZWUzODVhMjdiNDQ4OGYxOTA2MzZiYjkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_1704f78f0288406c8ad0277c53a20a28",
+      "statement": "Compose refuses to start without mandatory secrets.",
+      "evidence": [
+        {
+          "resource": "repo://docker-compose.yml#L28-L28",
+          "version": "repo-lines-v1:sha256:f493e540cd92e46455337532ac77a517bcf8ea6f8b1b01ada71143e778c764d7:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjQ5M2U1NDBjZDkyZTQ2NDU1MzM3NTMyYWM3N2E1MTdiY2Y4ZWE2ZjhiMWIwMWFkYTcxMTQzZTc3OGM3NjRkNyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjQ5M2U1NDBjZDkyZTQ2NDU1MzM3NTMyYWM3N2E1MTdiY2Y4ZWE2ZjhiMWIwMWFkYTcxMTQzZTc3OGM3NjRkNyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZGFhNGRlYzIyMGEyNGFhYzczYmY5MWQzMDg0ODA4NDc4N2Q5ZjhhYzc3MTczMjliNTY0NzIyYjM3NTQ3ZTg4MCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMWEyNjYyMjExNGYzN2ZiM2U0MmYyMWRlMTUzOGY5YThkMDIzNjkzMjhmMmIzMzZiNmI2Y2E3MzY4ZTNiMjIwMyJ9"
+        },
+        {
+          "resource": "repo://docker-compose.yml#L7-L7",
+          "version": "repo-lines-v1:sha256:1556901be96a3f07b13de891b7d310cfae063659c36ecc86d4432de964a40c59:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTU1NjkwMWJlOTZhM2YwN2IxM2RlODkxYjdkMzEwY2ZhZTA2MzY1OWMzNmVjYzg2ZDQ0MzJkZTk2NGE0MGM1OSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMTU1NjkwMWJlOTZhM2YwN2IxM2RlODkxYjdkMzEwY2ZhZTA2MzY1OWMzNmVjYzg2ZDQ0MzJkZTk2NGE0MGM1OSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYWJhNjYwNWRmNDhiZTdhZDc3MDRlYWEyMzI4ZjMyODdjNzA3NzcwYTRhZDMwYjE0NTIxYjFlMmFkZmQyOTUyMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMWM0NGU3NGQwM2Q1MjA5NTM3OThiOTVlYmMyMzBjZjc4ZTRmNzFjMDBkY2Q2Mjc0MDdhZmUyZjNjNGJmZGUyZiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_5c0c070ef34e48d9b67edc158ec33702",
+      "statement": "The post-deploy hook reconciles security options for the authenticated browser because stack deploy ignores them, and targets DEPLOY_STACK_NAME after a past fallback reconfigured production during QA deployments.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.post.sh#L4-L12",
+          "version": "repo-lines-v1:sha256:2f0e24dcaf906d000d8ff4e38032bb2150f80f3f3ebe3723323e45ea5d664ca6:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZThhYTVlZGU2MjNmNGVkMDUzYWU4MmFjYzhmZjBhY2JmZmQ1MTExNDU5OGM0ZTA5N2FkZDEyMjMwZDQ3YTUxOCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOGEzYzA0ZTBhNzcxYzZlNWZmZjkzMmEwN2RjZjVhY2QxMDkxNGU0NjEyNTcxMmVlMWYxMGE5MzdjYjNiZDk5MCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYWQyOTIxMjRjYjYwZDcxY2EzYzE0ZWNlZjE4OGJmYmM5NjIyMjgyYWZkMmFjY2NlYzQyOWE2ODlmOGI1OWMxNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNGI3M2I0NDczMWYyN2E3M2MyYjIyZmViNWQ0YTNjODMxMGFjYTljODg4YmQ4ZGZhOWEwYzM0NzM4YWU5MDc2MiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_95d1858a780d44b59d90b31e6d88078e",
+      "statement": "team-api uses restart condition any because a graceful shutdown exits 0, and start-first updates with rollback.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L111-L119",
+          "version": "repo-lines-v1:sha256:70d5f978747bc8ecead4b847e5991d372d49137712df90ca3b5fe1d3ab86989e:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZWRlODU4NTM3ODBjYTM5MjhlN2E3YzRiMTJkYjI2Y2I1NDA2NmUyOTM4ZDM1ZWQ2ZTZmYmQ3NDdmZTM5OGZjMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiM2RlMjJiMzEyNTc3MWU5MTBlNzRmZDEwM2ViOWYxYTRhYjE3ZWUzNTU1MjFkNjFhYjU3ZGYyZDI0MTYxNGNhNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYWQxODZjMzU2ZjkzMDUwNTdmMzBlMmQ5ZDY2OTQ4MTg1ZDZlNDUxYWVkOTczMjBkODZkMjhjMjY2NmEzN2JmMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOTVhMjI3MGRhZmIzOGU3ZjAyMWM1MTNhNTRiYzJmNWYyMWExOWQ2ZTlhZWVmZGExOTE3OTI0MTc1NTMwYWRiZSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_436ff210ad14402093d16b295aa723c3",
+      "statement": "Runners need an init process because their CLIs daemonize and would otherwise leave zombie processes.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L248-L253",
+          "version": "repo-lines-v1:sha256:e8a409be03f3b6eae237d2923f40fcf311db0fdb58315fc5897ffc0371e881ae:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiY2M3NzI1ODZmNWZmZTgzNTNjOWUwZGRmZDI2ZDhkYmI3ZGFiNDljNTBkMjc4YzYzZjI2ODdiNDc0NDc5ZTk3ZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNGZhNWVhZjlkMzZhOTkwZDgwNGQyY2Y2YzI5ODI4ZDYwNzk3NDA2ZDc1M2M4ZTNmOTYyMDUwODFjMjVlYmFiMyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTIyZGI2NGZlNWFhNGY0NTJkZjNjZTE3MDk1ZWZmODE3Mzc1ZWUzNGY1ZjM2NjJhYWI5NDQzMzQyNzdjYWRhYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNjZhYjRhNGIwYjlmMzMwYjFlM2VhNDRkYTk1MmNkMGU1NzhiNGQ5N2ZlNjdiYzIwM2U0M2E5NTkxZjVlMTdlYyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_95139927812048ebab9ca9fcd625e9b0",
+      "statement": "Runners are stateless and only per-node toolchain volumes persist.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L286-L296",
+          "version": "repo-lines-v1:sha256:c53b541c06f6432a2714cb97a37fa4f74126e88cbfa4cfdc36c7f934a32d2142:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxM2Y0ZDk2NjFlOWQyYzNlMWEyODllNTgzMjI5OWJlYTE0Y2RiNjRiZjg4NjYxZGY3MTdiMTJmYTAyZDAxMWUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRjYjNkOWJlYzdlMWI3YWRhNDkzMDlmMWFhZDY1ODQ4OWJhOWJmYzhkM2ViNjA1Njg1ZjUyN2M4ZDQ3N2Y4YjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU0YWY1ZDk2MmE2M2JjNWU1YTAxMTViZTUxOWViZTEyNGYzYTI3N2EzZDU5OTY5MDkyZDdkMDhlOTEyZDYyMTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY0YTgwNmVmNWU4YjM1YTljNDE0NDEyZTBlMzUwMTg3MDAxYmFmNTgwYjgyZjc1ZTE0ZTBmNTJiM2IzMjM1NzgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_96f5a56c3d6f4695af1f5bbee3b7a626",
+      "statement": "io-limiter runs globally on x86_64 nodes only, because an arm64 node would hold a pending task forever.",
+      "evidence": [
+        {
+          "resource": "repo://devops/docker-compose.swarm.yml#L1122-L1127",
+          "version": "repo-lines-v1:sha256:b6650b46a461f04d111785ca51d0891c75b2950739488380b422fc26ea280002:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTBiMDg2Yzg4Y2YzNTEzNjg2NGI4YTRmZmZjNzMyZmU5YjdlYTE5Mzc4MjYyOGQ4ZTMzZDAwZTBhODI0YTNmMSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTU0Y2M1MjNiOWY4OTRjZWM1YmM3ODU2OTYxYTQ5N2ZlODFhMjQxOWFiYzliNDRmMTI1MzY4MzAyNmIyOWE1OSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZWExZTg1ZGQ4MTA3NDhjZWZjYjBmMzg5MzA2OTczMDJhYTlmMDFmNmU4ZjMxNTc1ODEyNzY0NTI3ZTFkYjI0MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjU0ODY2NTQ5MWNiNzc2MTgwZDkxYmNlNjcyMTFiN2RkYWYzNDQ3ZDdjNTM5YTc3M2QxNGE4OGI4NGU3NDQ3MiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_0cbbaa04295b4ac897681e58ffe7bb28",
+      "statement": "v1.0 tags are per-deploy markers, not releases.",
+      "evidence": [
+        {
+          "resource": "repo://CHANGELOG.md#L6-L9",
+          "version": "repo-lines-v1:sha256:9668a392e6b4daeea06f16b2843712684ed5fa73fd063efbd875b3a141501428:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmNhNGQzNzI0YzFjNmYyMjU0N2RiZThhMzk3MGY0YjcyODczYTYyZTkwYzEzYzAyNDY4NDQ4MWM3MTBiYjkxYiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTA5NmM0NjEyZGE3NWVmM2EzMTBjZTU0Mzk5NzcyYmRmOGU5ZDU2Y2ViZmJiYjFjYmU0ZTViOGM2MDBiYWQzMyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzUyODRlYmE5ZDYyY2RhMjg1ZDNiMmVkYzEwMGY5N2U0ODQwNGM2MDQxNWYzYjIyMjYzZDk5ZDE1ZjE4MmJlYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTM2OWRkYjgyMTcwMWZkOTVjNzM2OTdhYTQzYzA3NTc3MzAwOWMzNzExZmM0NmE4ODQ1YzI4ZmIzYmY1N2JhNiJ9"
+        },
+        {
+          "resource": "repo://SECURITY.md#L33-L36",
+          "version": "repo-lines-v1:sha256:cd95a73f1f063dd05ad382c3ca6e3e11a225374af069671cb8289bdc7ad0d91e:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNDk3ZTUwN2NhYjFkZGJhYjk5OWMwNjk3ZGMzMzA1MWFlYWE3ZTQxMDQxZTJlYTFiOWE3YTRlYTQwOTRjOTVjMyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMDFiYTQ3MTljODBiNmZlOTExYjA5MWE3YzA1MTI0YjY0ZWVlY2U5NjRlMDljMDU4ZWY4Zjk4MDVkYWNhNTQ2YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYmMzOTg5YWM2MWI3ZDMzM2U5ZDljOTBjNWM3NGRjNjBkY2M5ZDIzZTEwN2FmY2UxNTA1YTU2ZGRmNGM3MGNkMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiODFlNjk0NTJmM2Y5YzljODBjMGRlZjlmNTM1ODg0Nzc4MzZlYzRhZTFjOTNhMWI0YTVjOTdlNjk1ZDYyNGM2NSJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.9.0",
+    "at": "2026-11-06T10:37:51.796Z"
+  }
+}
