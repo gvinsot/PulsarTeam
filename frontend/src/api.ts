@@ -93,8 +93,8 @@ import type {
 const API_BASE = '/api';
 
 const DEFAULT_TIMEOUT_MS = 30000;
-export interface AuthBrowserStatus {
-  configured: boolean;
+/** One shared website of an agent or board (api/src/services/authBrowser.ts BrowserStatus). */
+export interface AuthBrowserSession {
   exists: boolean;
   connected: boolean;
   canControl?: boolean;
@@ -106,11 +106,20 @@ export interface AuthBrowserStatus {
   site?: string;
   expiresAt?: number;
 }
+/** `status` (api/src/routes/authBrowser.ts): every website, `connected` if any is shared. */
+export interface AuthBrowserStatus {
+  configured: boolean;
+  exists: boolean;
+  connected: boolean;
+  sessions?: AuthBrowserSession[];
+}
 export interface AuthBrowserControl {
   agentId?: string;
   boardId?: string;
   operation: 'status' | 'prepare_import' | 'import' | 'activate' | 'takeover' | 'disconnect';
   sessionId?: string;
+  /** Origin of the website session a command targets. */
+  site?: string;
   url?: string;
   storage?: {
     cookies: {

@@ -123,7 +123,7 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn('synthetic-httponly', await source.evaluate('document.cookie'))
                     transferred = await send(dict(type='transfer', tabId=stored['sourceTabId'], includeLocalStorage=True))
                     self.assertEqual(transferred, {'result': {'ok': True}})
-                    remote = server.sessions['board:extension']
+                    remote = server.sessions['board:extension@www.site.test']
                     self.assertEqual(remote.page.url, 'https://www.site.test/signed-in')
                     self.assertEqual(source.url, 'https://www.site.test/signed-in')
                     read = await server.execute(server.Command(scope='board:extension', operation='read'))
@@ -145,7 +145,7 @@ class ExtensionTests(unittest.IsolatedAsyncioTestCase):
                         read = await server.execute(server.Command(scope='board:extension', operation='navigate',
                             url=f'https://www.site.test/{path}'))
                         self.assertIn('Private feed', read['text'])
-                        self.assertEqual(server.sessions['board:extension'].id, sid)
+                        self.assertEqual(server.sessions['board:extension@www.site.test'].id, sid)
                     await server.execute(server.Command(scope='board:extension', controller='alice',
                         session_id=remote.id, operation='takeover'))
                     with self.assertRaises(server.HTTPException):

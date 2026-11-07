@@ -2,10 +2,26 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 const calls: Array<{ scope: unknown; operation: string; params?: unknown }> = [];
+const targets: Array<string | undefined> = [];
 let failure: Error | undefined;
 mock.module('../authBrowser.js', {
   namedExports: {
-    resolveBrowserScope: async () => ({ type: 'board', id: 'selected' }),
+    resolveBrowserTarget: async (_agent: unknown, _board: unknown, site?: string) => {
+      targets.push(site);
+      return { scope: { type: 'board', id: 'selected' }, site: 'https://site.test' };
+    },
+    sharedBrowserSites: async () => [
+      {
+        scope: { type: 'board', id: 'selected' },
+        status: {
+          site: 'https://site.test',
+          sessionId: 'existing-session',
+          connected: true,
+          canRead: true,
+          canControl: false,
+        },
+      },
+    ],
     browserCommand: async (scope: unknown, operation: string, params: unknown) => {
       calls.push({ scope, operation, params });
       if (failure) throw failure;
@@ -51,9 +67,10 @@ test('MCP exposes only existing server session tools and separates agent access 
   ]);
   const result = JSON.parse((await call('browser_status')).content[0].text);
   assert.equal(result.browserLocation, 'server');
-  assert.equal(result.canRead, true);
-  assert.equal(result.sessionId, 'existing-session');
-  assert.equal('canControl' in result, false);
+  assert.equal(result.sites.length, 1);
+  assert.equal(result.sites[0].site, 'https://site.test');
+  assert.equal(result.sites[0].canRead, true);
+  assert.equal('canControl' in result.sites[0], false);
 });
 
 test('navigation reuses the resolved scope and a rendering error cannot trigger a new connection', async () => {
@@ -94,14 +111,22 @@ test('read options reach the worker and a screenshot is returned as image conten
     calls.map(c => c.params),
     [
       { url: 'https://site.test/form', format: 'aria', wait_for: 'Total', wait_ms: 12000 },
-      { format: 'text' },
+      { format: 'text', site: 'https://site.test' },
     ]
   );
   const shot = await call('browser_screenshot', { full_page: true });
   assert.equal(calls.at(-1)?.operation, 'screenshot');
-  assert.deepEqual(calls.at(-1)?.params, { full_page: true, section: undefined });
+  assert.deepEqual(calls.at(-1)?.params, {
+    full_page: true,
+    section: undefined,
+    site: 'https://site.test',
+  });
   await call('browser_screenshot', { full_page: true, section: 3 });
-  assert.deepEqual(calls.at(-1)?.params, { full_page: true, section: 3 });
+  assert.deepEqual(calls.at(-1)?.params, {
+    full_page: true,
+    section: 3,
+    site: 'https://site.test',
+  });
   assert.deepEqual(shot.content[0], { type: 'image', data: 'aGk=', mimeType: 'image/jpeg' });
   const page = JSON.parse(shot.content[1].text);
   assert.equal(page.url, 'https://site.test/feed');
@@ -127,7 +152,7 @@ test('a PDF is attached to the agent current task only, never without one', asyn
   };
   calls.length = 0;
   const result = JSON.parse((await save({ media: 'print' })).content[0].text);
-  assert.deepEqual(calls.at(-1)?.params, { media: 'print' });
+  assert.deepEqual(calls.at(-1)?.params, { media: 'print', site: 'https://site.test' });
   assert.equal(attached[0].taskId, 'task-7');
   assert.equal(attached[0].filename, 'Invoice 42.pdf');
   assert.equal(attached[0].data.toString(), '%PDF-1.4');
@@ -149,4 +174,18 @@ test('a PDF is attached to the agent current task only, never without one', asyn
   assert.equal(calls.length, 0, 'no PDF is rendered without a task to hold it');
   const noAgent = await call('browser_save_pdf');
   assert.equal(noAgent.isError, true);
+});
+
+test('the site an agent names (or the navigated URL) picks the website session', async () => {
+  targets.length = 0;
+  await call('browser_read', { site: 'https://other.test/' });
+  await call('browser_scroll', { site: 'https://other.test/', delta: 300 });
+  await call('browser_navigate', { url: 'https://third.test/inbox' });
+  await call('browser_read');
+  assert.deepEqual(targets, [
+    'https://other.test/',
+    'https://other.test/',
+    'https://third.test/inbox',
+    undefined,
+  ]);
 });

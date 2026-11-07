@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type AuthBrowserControl } from '../../api';
+import { api, type AuthBrowserControl, type AuthBrowserSession } from '../../api';
 import { useConnectStatus, type ConnectWidgetProps } from '../connect/useConnectStatus';
 import { errorMessage } from '../../utils/errors';
+import { browserSessions, pendingTransfer, sessionLabel } from './authBrowserSessions';
+
+// One plugin instance shares SEVERAL websites: each has its own server browser
+// session (worker key `<scope>@<host>`). Only one transfer waits at a time,
+// because the extension pairs with exactly one request element on this page.
 
 export default function AuthBrowserConnect({
   agentId,
@@ -25,17 +30,21 @@ export default function AuthBrowserConnect({
     boardId,
     onStatusChange
   );
+  const sessions = browserSessions(status.sessions);
+  const { mine: pending, blocked, canAdd } = pendingTransfer(sessions);
+  const pendingId = pending?.sessionId;
+  const pendingSite = pending?.site;
 
   useEffect(() => {
     setError('');
   }, [agentId, boardId]);
   useEffect(() => {
     const node = bridge.current;
-    if (!node || status.phase !== 'pending' || !status.canControl) return;
+    if (!node || !pendingId) return;
     // API independently checks user, edit permission, scope and one-use nonce.
     const receive = (event: Event) => {
       const detail = (event as CustomEvent).detail;
-      if (!detail || detail.requestId !== status.sessionId || importing.current) return;
+      if (!detail || detail.requestId !== pendingId || importing.current) return;
       importing.current = true;
       setBusy(true);
       setError('');
@@ -45,7 +54,8 @@ export default function AuthBrowserConnect({
             operation: 'import',
             agentId,
             boardId,
-            sessionId: status.sessionId,
+            site: pendingSite,
+            sessionId: pendingId,
             url: detail.url,
             storage: detail.storage,
           });
@@ -64,9 +74,9 @@ export default function AuthBrowserConnect({
     };
     node.addEventListener('pulsar:browser-import', receive);
     return () => node.removeEventListener('pulsar:browser-import', receive);
-  }, [agentId, boardId, status.phase, status.canControl, status.sessionId, fetchStatus]);
+  }, [agentId, boardId, pendingId, pendingSite, fetchStatus]);
 
-  async function action(operation: AuthBrowserControl['operation']) {
+  async function action(operation: AuthBrowserControl['operation'], session?: AuthBrowserSession) {
     setBusy(true);
     setError('');
     try {
@@ -87,9 +97,10 @@ export default function AuthBrowserConnect({
         operation,
         agentId,
         boardId,
-        sessionId: status.sessionId,
+        ...(session ? { site: session.site, sessionId: session.sessionId } : {}),
         ...(operation === 'prepare_import' ? { url } : {}),
       });
+      if (operation === 'prepare_import') setUrl('');
       await fetchStatus();
     } catch (e) {
       setError(errorMessage(e));
@@ -97,17 +108,21 @@ export default function AuthBrowserConnect({
       setBusy(false);
     }
   }
-  const pending = status.phase === 'pending' && status.canControl;
+  async function refresh() {
+    setError('');
+    await fetchStatus();
+  }
   const button =
     'px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs disabled:opacity-50';
   return (
     <div className="space-y-2 border-t border-dark-700 pt-3 text-xs">
       <p className="text-dark-300">
-        Sign in locally and transfer the session once. All subsequent agent navigation runs in the
-        server browser, independently of your local tabs.
+        Sign in locally and transfer each website session once. All subsequent agent navigation runs
+        in the server browser, independently of your local tabs.
       </p>
       <p className="text-dark-400">
-        Session for {agentId ? 'this agent' : 'this board and its agents'}.
+        Sessions for {agentId ? 'this agent' : 'this board and its agents'}. You can share several
+        websites, one transfer at a time.
       </p>
       {!loading && !statusError && status.configured === false && (
         <p className="text-amber-300">An administrator must configure the browser service.</p>
@@ -118,10 +133,81 @@ export default function AuthBrowserConnect({
           Retry service connection
         </button>
       )}
-      {!status.exists ? (
+      {sessions.length > 0 && (
+        <ul className="space-y-2" aria-label="Shared websites">
+          {sessions.map(s => (
+            <li
+              key={s.sessionId || s.site}
+              className="rounded border border-dark-700 p-2 space-y-1"
+            >
+              <p className="text-dark-300 break-all">
+                {s.site} — {sessionLabel(s)}
+              </p>
+              {s.expiresAt && (
+                <p className="text-dark-400">
+                  Expires no later than: {new Date(s.expiresAt).toLocaleString('en-GB')}.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {s.canControl && s.phase && ['login', 'ready'].includes(s.phase) && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className={button}
+                    onClick={() => void action(s.connected ? 'takeover' : 'activate', s)}
+                  >
+                    {s.connected ? 'Pause sharing' : 'Resume sharing'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  className={button}
+                  aria-label={`${s.phase === 'pending' ? 'Cancel' : 'Disconnect'} ${s.site}`}
+                  onClick={() => void action('disconnect', s)}
+                >
+                  {s.phase === 'pending' ? 'Cancel' : 'Disconnect'}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {pending && (
+        <div
+          ref={bridge}
+          data-pulsar-browser-request={JSON.stringify({
+            version: 1,
+            requestId: pending.sessionId,
+            site: pending.site,
+            expiresAt: pending.expiresAt,
+            scope: agentId ? `agent:${agentId}` : `board:${boardId}`,
+          })}
+        >
+          <ol className="list-decimal ml-4 space-y-1 text-dark-200">
+            <li>Open the PulsarTeam extension from this tab, then click “Open website”.</li>
+            <li>
+              Sign in to {pending.site}, check the account shown and open the page you want to
+              share.
+            </li>
+            <li>From the website tab, open the extension and click “Transfer session”.</li>
+          </ol>
+          <p className="text-amber-300 mt-2">
+            Transferring copies your session cookies to the cluster and gives the selected agents
+            access to this account. Keep this PulsarTeam tab and connection panel open. Once the
+            transfer succeeds, you may close both local tabs.
+          </p>
+        </div>
+      )}
+      {blocked && (
+        <p className="text-dark-400">
+          Another transfer is waiting. Add a website once it is done or cancelled.
+        </p>
+      )}
+      {canAdd && (
         <>
           <label className="block">
-            Website address
+            {sessions.length ? 'Add another website' : 'Website address'}
             <input
               aria-label="Website address"
               placeholder="https://www.example.com/"
@@ -140,78 +226,13 @@ export default function AuthBrowserConnect({
             {busy ? 'Preparing…' : 'Connect in my browser'}
           </button>
         </>
-      ) : (
-        <>
-          <p className="text-dark-300 break-all">
-            {status.site} —{' '}
-            {status.connected
-              ? 'Session shared on the cluster'
-              : status.phase === 'pending'
-                ? 'Waiting for session transfer'
-                : status.phase === 'reauth_required'
-                  ? 'The website requires a new session transfer'
-                  : 'Agent access paused'}
-          </p>
-          {status.expiresAt && (
-            <p className="text-dark-400">
-              Expires no later than: {new Date(status.expiresAt).toLocaleString('en-GB')}.
-            </p>
-          )}
-          {pending && (
-            <div
-              ref={bridge}
-              data-pulsar-browser-request={JSON.stringify({
-                version: 1,
-                requestId: status.sessionId,
-                site: status.site,
-                expiresAt: status.expiresAt,
-                scope: agentId ? `agent:${agentId}` : `board:${boardId}`,
-              })}
-            >
-              <ol className="list-decimal ml-4 space-y-1 text-dark-200">
-                <li>Open the PulsarTeam extension from this tab, then click “Open website”.</li>
-                <li>
-                  Sign in to the website, check the account shown and open the page you want to
-                  share.
-                </li>
-                <li>From the website tab, open the extension and click “Transfer session”.</li>
-              </ol>
-              <p className="text-amber-300 mt-2">
-                Transferring copies your session cookies to the cluster and gives the selected
-                agents access to this account. Keep this PulsarTeam tab and connection panel open.
-                Once the transfer succeeds, you may close both local tabs.
-              </p>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2">
-            {status.canControl && ['login', 'ready'].includes(status.phase) && (
-              <button
-                type="button"
-                disabled={busy}
-                className={button}
-                onClick={() => void action(status.connected ? 'takeover' : 'activate')}
-              >
-                {status.connected ? 'Pause sharing' : 'Resume sharing'}
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={busy}
-              className={button}
-              onClick={() => void action('disconnect')}
-            >
-              {status.phase === 'pending' ? 'Cancel' : 'Disconnect'}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              className={button}
-              onClick={() => void fetchStatus()}
-            >
-              Refresh
-            </button>
-          </div>
-        </>
+      )}
+      {sessions.length > 0 && (
+        <div>
+          <button type="button" disabled={busy} className={button} onClick={() => void refresh()}>
+            Refresh
+          </button>
+        </div>
       )}
       <details className="text-dark-400">
         <summary className="cursor-pointer">Install the Chrome / Edge extension</summary>

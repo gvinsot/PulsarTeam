@@ -13,26 +13,89 @@ mock.module('../../lib/agentAccess.js', {
     checkBoardIdAccess: async (id: string) => ({ ok: permitted.includes(id), status: 403 }),
   },
 });
-const { resolveBrowserScope, browserCommand } = await import('../authBrowser.js');
+const { resolveBrowserTarget, sharedBrowserSites, browserCommand } =
+  await import('../authBrowser.js');
 const { authBrowserRoutes } = await import('../../routes/authBrowser.js');
+
+type Listed = { site: string; connected: boolean; phase?: 'pending' | 'ready' };
+const lister = (byScope: Record<string, Listed[]>) => async (s: { type: string; id: string }) =>
+  (byScope[`${s.type}:${s.id}`] || []).map(e => ({ ...e, exists: true, configured: true }));
 
 test('scope resolution never adopts a claimed board or another user session', async () => {
   const getAgent = async () => ({ id: 'a', boardId: 'actual-board' }) as Agent;
-  const status = async () => ({ exists: false, connected: false, configured: true });
-  assert.deepEqual(await resolveBrowserScope('a', 'claimed-board', { getAgent, status }), {
-    type: 'board',
-    id: 'actual-board',
+  const list = lister({
+    'board:actual-board': [{ site: 'https://board.test', connected: true }],
+    'board:claimed-board': [{ site: 'https://victim.test', connected: true }],
   });
   assert.deepEqual(
-    await resolveBrowserScope('a', 'claimed-board', {
-      getAgent,
-      status: async () => ({ exists: true, connected: false, configured: true }),
-    }),
+    await resolveBrowserTarget('a', 'claimed-board', undefined, { getAgent, list }),
+    {
+      scope: { type: 'board', id: 'actual-board' },
+      site: 'https://board.test',
+    }
+  );
+  await assert.rejects(
+    resolveBrowserTarget('a', 'claimed-board', 'https://victim.test/x', { getAgent, list }),
+    /No session is shared for https:\/\/victim\.test/
+  );
+  await assert.rejects(resolveBrowserTarget(null, null, undefined, { getAgent, list }));
+  await assert.rejects(
+    resolveBrowserTarget('missing', 'claimed-board', undefined, {
+      getAgent: async () => null,
+      list,
+    })
+  );
+});
+
+test('several websites: agent sessions win per site, and an ambiguous command must name one', async () => {
+  const getAgent = async () => ({ id: 'a', boardId: 'b' }) as Agent;
+  const list = lister({
+    // The agent's own pending login on board.test must not fall through to
+    // the board's account for that same website.
+    'agent:a': [
+      { site: 'https://own.test', connected: true },
+      { site: 'https://board.test', connected: false, phase: 'pending' },
+    ],
+    'board:b': [
+      { site: 'https://board.test', connected: true },
+      { site: 'https://shared.test', connected: true },
+    ],
+  });
+  const sites = await sharedBrowserSites('a', null, { getAgent, list });
+  assert.deepEqual(
+    sites.map(s => [s.status.site, s.scope.type]),
+    [
+      ['https://own.test', 'agent'],
+      ['https://board.test', 'agent'],
+      ['https://shared.test', 'board'],
+    ]
+  );
+  assert.deepEqual(
+    await resolveBrowserTarget('a', null, 'https://shared.test/inbox?x=1', { getAgent, list }),
+    { scope: { type: 'board', id: 'b' }, site: 'https://shared.test' }
+  );
+  assert.deepEqual(
+    (await resolveBrowserTarget('a', null, 'https://board.test/', { getAgent, list })).scope,
     { type: 'agent', id: 'a' }
   );
-  await assert.rejects(resolveBrowserScope(null, null, { getAgent, status }));
   await assert.rejects(
-    resolveBrowserScope('missing', 'claimed-board', { getAgent: async () => null, status })
+    resolveBrowserTarget('a', null, undefined, { getAgent, list }),
+    /Several websites are shared: .*own\.test.*shared\.test.*Pass site/
+  );
+  // One connected site among others still pending: it is the default.
+  const single = lister({
+    'agent:a': [
+      { site: 'https://own.test', connected: true },
+      { site: 'https://new.test', connected: false, phase: 'pending' },
+    ],
+  });
+  assert.equal(
+    (await resolveBrowserTarget('a', null, undefined, { getAgent, list: single })).site,
+    'https://own.test'
+  );
+  await assert.rejects(
+    resolveBrowserTarget('a', null, undefined, { getAgent, list: lister({}) }),
+    /No browser session is shared/
   );
 });
 
@@ -208,6 +271,60 @@ test('session import forwards only the authenticated controller and authorized s
     assert.equal(forwarded.session_id, '00000000-0000-4000-8000-000000000000');
     assert.equal(forwarded.storage.cookies[0].httpOnly, true);
     assert.ok(!(await result.text()).includes('synthetic-secret'));
+  } finally {
+    stub.mock.restore();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test('status lists every website of the scope; session commands name their website', async () => {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = { userId: 'alice', username: 'alice', role: 'admin' } as any;
+    next();
+  });
+  app.use(authBrowserRoutes());
+  permitted.push('multi-board');
+  const server = createServer(app);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const request = globalThis.fetch;
+  const forwarded: any[] = [];
+  const stub = mock.method(globalThis, 'fetch', async (_url: unknown, options: RequestInit) => {
+    const body = JSON.parse(String(options.body));
+    forwarded.push(body);
+    const sessions = [
+      { exists: true, connected: true, phase: 'ready', site: 'https://a.test' },
+      { exists: true, connected: false, phase: 'pending', site: 'https://b.test' },
+    ];
+    return new Response(JSON.stringify(body.operation === 'list' ? { sessions } : {}), {
+      status: 200,
+    });
+  });
+  const control = (body: object) =>
+    request(`http://127.0.0.1:${(server.address() as AddressInfo).port}/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ boardId: 'multi-board', ...body }),
+    });
+  try {
+    const status = await (await control({ operation: 'status' })).json();
+    assert.equal(forwarded.at(-1).operation, 'list');
+    assert.equal(forwarded.at(-1).controller, 'alice');
+    assert.equal(status.connected, true);
+    assert.deepEqual(
+      status.sessions.map((s: { site: string }) => s.site),
+      ['https://a.test', 'https://b.test']
+    );
+    const res = await control({
+      operation: 'disconnect',
+      site: 'https://b.test',
+      sessionId: '00000000-0000-4000-8000-000000000000',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(forwarded.at(-1).operation, 'disconnect');
+    assert.equal(forwarded.at(-1).site, 'https://b.test');
+    assert.equal(forwarded.at(-1).scope, 'board:multi-board');
   } finally {
     stub.mock.restore();
     await new Promise<void>(resolve => server.close(() => resolve()));

@@ -1,7 +1,9 @@
 """Private, ephemeral browser worker. The public MCP lives in the PulsarTeam API.
 
-One Chromium process per scope. Interactive login is a HUMAN-only API; MCP can
-only read, navigate or scroll a session explicitly released by that human.
+One Chromium process per (scope, website): an agent or board can share several
+sites, each its own session keyed ``<scope>@<host>``. Interactive login is a
+HUMAN-only API; MCP can only read, navigate or scroll a session explicitly
+released by that human.
 """
 import asyncio
 import base64
@@ -78,7 +80,10 @@ class Command(BaseModel):
     scope: str = Field(pattern=r"^(agent|board):[a-zA-Z0-9_-]{1,200}$")
     operation: Literal["status", "start", "frame", "click", "text", "key", "wheel", "back", "home",
                        "activate", "takeover", "disconnect", "read", "navigate", "scroll", "pdf",
-                       "screenshot", "clearance", "prepare_import", "import"]
+                       "screenshot", "clearance", "prepare_import", "import", "list"]
+    # Which shared website of the scope (any URL on it). Optional while the
+    # scope holds a single session or pending transfer.
+    site: str = Field(default="", max_length=4000)
     session_id: str | None = Field(default=None, max_length=100)
     controller: str | None = Field(default=None, max_length=200)
     url: str = Field(default="", max_length=4000)
@@ -338,6 +343,24 @@ def pending_status(pending, controller):
             "canControl": controller == pending["controller"]}
 
 
+def site_key(scope, url):
+    return f"{scope}@{urlsplit(https_origin(url)).hostname}"
+
+
+def scope_keys(scope, *stores):
+    return sorted({k for store in stores for k in store if k == scope or k.startswith(scope + "@")})
+
+
+def resolve_key(cmd):
+    """The session key a command targets: its site, else the scope's only one."""
+    if cmd.site:
+        return site_key(cmd.scope, cmd.site)
+    keys = scope_keys(cmd.scope, sessions, pending_imports)
+    if len(keys) > 1:
+        raise HTTPException(409, "Several websites are shared here: choose the website.")
+    return keys[0] if keys else cmd.scope
+
+
 def expire_imports():
     for scope, pending in list(pending_imports.items()):
         if pending["expires"] <= time.time():
@@ -402,6 +425,14 @@ async def snapshot(session, cmd=None):
 
 async def execute(cmd: Command):
     expire_imports()
+    if cmd.operation == "list":
+        entries = []
+        for key in scope_keys(cmd.scope, sessions, pending_imports):
+            if key in pending_imports:
+                entries.append(pending_status(pending_imports[key], cmd.controller))
+            elif not sessions[key].expired():
+                entries.append({**sessions[key].status(), "canControl": cmd.controller == sessions[key].controller})
+        return {"sessions": entries}
     if cmd.operation == "prepare_import":
         if not cmd.controller:
             raise HTTPException(403, "Connexion utilisateur requise")
@@ -411,18 +442,26 @@ async def execute(cmd: Command):
         if origin == "https://linkedin.com":
             origin = "https://www.linkedin.com"
         await public_addresses(urlsplit(origin).hostname)
+        key = site_key(cmd.scope, origin)
         async with creation_lock:
-            if cmd.scope in sessions or cmd.scope in pending_imports:
+            if key in sessions or cmd.scope in sessions:
                 raise HTTPException(409, "Déconnectez la session existante.")
+            # The extension pairs with exactly one request on the app page.
+            if scope_keys(cmd.scope, pending_imports):
+                raise HTTPException(409, "Terminez ou annulez le transfert en attente.")
             if len(pending_imports) >= 100:
                 raise HTTPException(429, "Trop de connexions en attente.")
             pending = {"id": str(uuid.uuid4()), "origin": origin, "controller": cmd.controller,
                        "expires": time.time() + 600}
-            pending_imports[cmd.scope] = pending
+            pending_imports[key] = pending
             return pending_status(pending, cmd.controller)
+    if cmd.operation == "start":
+        key = site_key(cmd.scope, cmd.url)
+    else:
+        key = resolve_key(cmd)
     if cmd.operation == "import":
         async with creation_lock:
-            pending = pending_imports.get(cmd.scope)
+            pending = pending_imports.get(key)
             if not pending or pending["expires"] <= time.time() or pending.get("consumed"):
                 raise HTTPException(409, "Connexion expirée")
             if cmd.controller != pending["controller"] or cmd.session_id != pending["id"]:
@@ -431,7 +470,7 @@ async def execute(cmd: Command):
                 raise HTTPException(400, "Update the extension and transfer from the signed-in page")
             start_url = shared_url(cmd.url, pending["origin"])
             state = import_storage(cmd.storage, pending["origin"])
-            if cmd.scope in sessions:
+            if key in sessions:
                 raise HTTPException(409, "Une session existe déjà")
             if len(sessions) >= MAX_SESSIONS:
                 raise HTTPException(429, "Capacité atteinte")
@@ -445,23 +484,23 @@ async def execute(cmd: Command):
                 if cloudflare_challenge(response):
                     raise HTTPException(412, "The server browser encountered a website challenge")
                 await snapshot(session)
-                if pending_imports.get(cmd.scope) is not pending or pending["expires"] <= time.time():
+                if pending_imports.get(key) is not pending or pending["expires"] <= time.time():
                     raise HTTPException(409, "Transfert annulé ou expiré")
                 session.phase = "ready"
-                sessions[cmd.scope] = session
+                sessions[key] = session
                 return {**session.status(), "canControl": True}
             except BaseException:
                 await session.close()
                 raise
             finally:
-                if pending_imports.get(cmd.scope) is pending:
-                    pending_imports.pop(cmd.scope)
-    pending = pending_imports.get(cmd.scope)
+                if pending_imports.get(key) is pending:
+                    pending_imports.pop(key)
+    pending = pending_imports.get(key)
     if pending:
         if cmd.operation == "status":
             return pending_status(pending, cmd.controller)
         if cmd.operation == "disconnect" and cmd.controller and cmd.session_id == pending["id"]:
-            pending_imports.pop(cmd.scope)
+            pending_imports.pop(key)
             return {"exists": False, "connected": False, "canRead": False, "browserLocation": "server"}
         raise HTTPException(409, "Transfert de session en attente")
     if cmd.operation == "start":
@@ -471,28 +510,28 @@ async def execute(cmd: Command):
         login_origins = [https_origin(u) for u in cmd.login_origins]
         await public_addresses(urlsplit(cmd.url).hostname)
         async with creation_lock:
-            if cmd.scope in sessions:
+            if key in sessions:
                 raise HTTPException(409, "Une session existe déjà. Déconnectez-la avant de la remplacer.")
             if len(sessions) >= MAX_SESSIONS:
                 raise HTTPException(429, "Capacité de navigateurs atteinte. Fermez une session.")
             session = Session(cmd.controller, origin, login_origins)
             try:
                 await session.open(app.state.playwright, cmd.url)
-                sessions[cmd.scope] = session
+                sessions[key] = session
                 return session.status()
             except BaseException:
                 await session.close()
                 raise
 
-    session = sessions.get(cmd.scope)
+    session = sessions.get(key)
     if not session:
         if cmd.operation == "status":
             return {"exists": False, "connected": False, "canRead": False, "browserLocation": "server"}
         raise HTTPException(409, "Aucune session. Connectez le navigateur dans les plugins.")
     async with session.lock:
-        if sessions.get(cmd.scope) is not session or session.expired():
-            if sessions.get(cmd.scope) is session:
-                sessions.pop(cmd.scope)
+        if sessions.get(key) is not session or session.expired():
+            if sessions.get(key) is session:
+                sessions.pop(key)
                 await session.close()
             if cmd.operation == "status":
                 return {"exists": False, "connected": False, "canRead": False, "browserLocation": "server"}
@@ -505,7 +544,7 @@ async def execute(cmd: Command):
             if cmd.operation == "disconnect":
                 if not cmd.controller or cmd.session_id != session.id:
                     raise HTTPException(403, "Session incorrecte")
-                sessions.pop(cmd.scope)
+                sessions.pop(key)
                 await session.close()
                 return {"exists": False, "connected": False}
             session.require_human(cmd)

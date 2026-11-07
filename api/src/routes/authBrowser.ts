@@ -8,7 +8,12 @@ import {
 } from '../lib/agentAccess.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { BrowserCommandError } from '../services/authBrowser.js';
-import { browserCommand, browserConfigured, type BrowserScope } from '../services/authBrowser.js';
+import {
+  browserCommand,
+  browserConfigured,
+  listBrowserSessions,
+  type BrowserScope,
+} from '../services/authBrowser.js';
 
 // Never accept cookie domains, alternate storage origins or arbitrary browser state.
 const storageSchema = z
@@ -52,6 +57,8 @@ const schema = z
       .optional(),
     operation: z.enum(['status', 'prepare_import', 'import', 'activate', 'takeover', 'disconnect']),
     sessionId: z.string().uuid().optional(),
+    // Which of the scope's websites a session command targets (its origin).
+    site: z.string().url().max(300).optional(),
     url: z.string().url().max(4000).optional(),
     storage: storageSchema.optional(),
   })
@@ -112,6 +119,17 @@ export function authBrowserRoutes() {
       }
       const { operation, sessionId, agentId: _agent, boardId: _board, ...params } = input;
       try {
+        if (operation === 'status') {
+          // One entry per website shared with this agent or board.
+          const sessions = await listBrowserSessions(scope, user.userId);
+          res.json({
+            configured: true,
+            exists: sessions.length > 0,
+            connected: sessions.some(s => s.connected),
+            sessions,
+          });
+          return;
+        }
         const result = await browserCommand(scope, operation, {
           ...params,
           session_id: sessionId,

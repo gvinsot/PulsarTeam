@@ -121,7 +121,7 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
         result = await server.execute(server.Command(scope='board:a', operation='read'))
         self.assertEqual(result['title'], 'Private feed')
         self.assertIn('Chosen identity', result['text'])
-        session = server.sessions['board:a']
+        session = server.sessions['board:a@site.test']
         page = session.active_page()
         await page.evaluate("() => { window.open('about:blank'); window.open('https://accounts.google.com/'); }")
         await page.wait_for_timeout(300)
@@ -206,7 +206,7 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(base64.b64decode(doc['pdf']).startswith(b'%PDF'))
             self.assertEqual(doc['title'], 'Statement')
         # Media emulation is restored: later reads see the screen layout again.
-        page = server.sessions['board:a'].active_page()
+        page = server.sessions['board:a@site.test'].active_page()
         self.assertTrue(await page.evaluate("() => matchMedia('screen').matches"))
 
     async def test_empty_import_is_never_ready(self):

@@ -56,6 +56,22 @@ creator can import or resume it; authorized editors can revoke it. Users who can
 run the board's agents can access the shared account through those agents.
 Disconnecting here neither signs out your local browser nor revokes provider access.
 
+### Several websites
+
+One plugin instance shares several websites. Each website has its own server
+Chromium session and account (worker key `<agent|board scope>@<host>`), listed in
+the connection panel with its own **Pause sharing**, **Resume sharing** and
+**Disconnect** buttons. Add another one with **Add another website** once the
+current transfer is done: only one transfer waits at a time per agent or board,
+because the extension pairs with exactly one request on the PulsarTeam page.
+
+For an agent, its own sessions come first; its board's sessions add the other
+websites. Per website, an agent session in any phase (even a pending transfer)
+wins, so it never falls through to the board's account for that same website.
+`browser_navigate` uses the session of the URL's website. The other tools take an
+optional `site`; it is required only when several websites are connected.
+Every session counts towards the worker's capacity (`MAX_SESSIONS`).
+
 ## Update or troubleshoot the extension
 
 Version **1.0.4** explains when the website tab is on a different origin and offers
@@ -94,11 +110,13 @@ replace the server-owned page, including while sharing is paused.
 
 ## Tools and limitations
 
-- `browser_status`: check session availability, sharing status and expiration.
+- `browser_status`: list the shared websites, each with its availability
+  (`canRead`), sharing status and expiration.
 - `browser_read`: read the page: visible text (including open shadow DOM), same-origin
   links, the accessibility tree (`aria`: roles, checked boxes, field values, selected
   options) and same-origin iframes. `format` picks `text`, `aria` or `both` (default).
-- `browser_navigate`: open an HTTPS page on the exact shared origin and read it.
+- `browser_navigate`: open an HTTPS page on the exact origin of a shared website
+  (whose session is used) and read it.
 - `browser_scroll`: scroll the page and read more content.
 - `browser_screenshot`: JPEG of the viewport, or with `full_page` of the whole page in
   4000 px sections (`section` 1, 2, …; the result reports `section` and `sections`).

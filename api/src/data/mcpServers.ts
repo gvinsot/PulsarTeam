@@ -47,7 +47,7 @@ export const BUILTIN_MCP_SERVERS = [
     name: 'Authenticated Browser',
     url: '__internal__auth_browser',
     description:
-      'Browse a site using an isolated cluster browser session explicitly shared by the user. Interactive login, including supported OAuth/SSO flows.',
+      'Browse websites using isolated cluster browser sessions explicitly shared by the user, one per website. Interactive login, including supported OAuth/SSO flows.',
     icon: '🔐',
     apiKey: '',
     builtin: true,

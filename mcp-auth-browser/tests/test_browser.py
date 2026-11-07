@@ -46,7 +46,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 state = await server.execute(server.Command(scope="agent:e2e", operation="start",
                     controller="alice", url="https://site.test/", login_origins=["https://identity.test"]))
             sid = state["sessionId"]
-            s = server.sessions["agent:e2e"]
+            s = server.sessions["agent:e2e@site.test"]
             human = dict(scope="agent:e2e", controller="alice", session_id=sid)
             try:
                 with self.assertRaises(HTTPException):
