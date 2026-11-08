@@ -269,6 +269,9 @@ export const toolsMethods = {
     const results: any[] = [];
     for (const call of toolCalls) {
       const resultStart = results.length;
+      // Wall time of this call, stamped on its result(s) for the loop metrics
+      // (loopMetrics.ts). Not sent to the model.
+      const callStartedAt = Date.now();
       try {
         if (call.error) {
           results.push({ tool: call.tool, args: call.args, success: false, error: call.error });
@@ -482,8 +485,10 @@ export const toolsMethods = {
           }
         }
       } finally {
+        const durationMs = Date.now() - callStartedAt;
         for (const result of results.slice(resultStart)) {
           result.toolCallId = call.id;
+          result.durationMs = durationMs;
         }
       }
     }

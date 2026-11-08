@@ -70,6 +70,7 @@ import type {
   TaskAttachment,
   TaskComment,
   TaskCostSummary,
+  TaskLoopMetrics,
   TaskCreatedEvent,
   TaskExecutionStatus,
   TaskHistoryEntry,
@@ -1496,6 +1497,9 @@ export const deleteTaskComment = (taskId: string, commentId: string) =>
 
 /* ── Task costs (tokens, spend and agent time attributed to the task) ────── */
 export const getTaskCosts = (taskId: string) => get<TaskCostSummary>(`/tasks/${taskId}/costs`);
+/** Native agentic loop indicators (sandbox agents): turns, tool calls, tokens. */
+export const getTaskLoopMetrics = (taskId: string) =>
+  get<TaskLoopMetrics>(`/tasks/${taskId}/loop-metrics`);
 
 /* ── Task attachments (real files, copied onto the runner before each run) ── */
 export const getTaskAttachments = (taskId: string) =>

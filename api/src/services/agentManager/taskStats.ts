@@ -1,5 +1,6 @@
 // ─── Task Statistics & Time Series ──────────────────────────────────────────
 import { getAllTasks } from '../database.js';
+import { aggregateLoopMetrics, LOOP_METRICS_TYPE } from './loopMetrics.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const taskStatsMethods = {
@@ -60,11 +61,14 @@ export const taskStatsMethods = {
         }
       }
 
-      if (t.history?.length > 1) {
-        for (let i = 0; i < t.history.length - 1; i++) {
-          const state = t.history[i].status || t.history[i].to;
-          const enterTime = new Date(t.history[i].at).getTime();
-          const exitTime = new Date(t.history[i + 1].at).getTime();
+      // Native-loop metrics entries (one per agent turn) are not transitions:
+      // pairing on them would cut every state's duration at the next turn.
+      const transitions = (t.history || []).filter((h: any) => h?.type !== LOOP_METRICS_TYPE);
+      if (transitions.length > 1) {
+        for (let i = 0; i < transitions.length - 1; i++) {
+          const state = transitions[i].status || transitions[i].to;
+          const enterTime = new Date(transitions[i].at).getTime();
+          const exitTime = new Date(transitions[i + 1].at).getTime();
           const dur = exitTime - enterTime;
           if (dur > 0 && state) {
             if (!stateDurations[state]) stateDurations[state] = [];
@@ -111,6 +115,9 @@ export const taskStatsMethods = {
       },
       resolutionByType: resolutionByTypeStats,
       avgStateDurations,
+      // Sandbox/native agentic loop indicators (ADR lot 4 §14), split by the
+      // loop lots enabled when recorded — null until a native turn ran.
+      loopMetrics: aggregateLoopMetrics(tasks.map((t: any) => t.history)),
     };
   },
 
@@ -229,7 +236,7 @@ export const taskStatsMethods = {
       const events: Array<{ at: number; status: string | null }> = [];
       if (t.history?.length) {
         for (const h of t.history) {
-          if (h.at) {
+          if (h.at && h.type !== LOOP_METRICS_TYPE) {
             events.push({ at: new Date(h.at).getTime(), status: h.status || h.to || null });
           }
         }

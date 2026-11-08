@@ -16,6 +16,20 @@ List tasks the caller can see. Scoped to boards the user owns or has been shared
 Modification history of a task (each entry shows previous → next values, author, timestamp).
 - **Auth**: JWT + access to the task's board.
 
+### GET `/api/tasks/:id/loop-metrics`
+Indicators of the native agentic loop (sandbox / non-CLI agents) for this task,
+folded from the `type: "loop-metrics"` history entries written once per agent turn.
+- **Auth**: JWT + access to the task's board.
+- **Response 200**: `{ turns, reminders, llmCalls, toolRounds, toolCalls, failedToolCalls,
+  truncatedToolCalls, inputTokens, outputTokens, durationMs, avgToolContextShare,
+  peakToolContextShare, toolBudgetHits, errorTurns, byTool[], lots[][], firstAt, lastAt,
+  turnsDetail[] }`. Each turn lists its calls (`name, durationMs, success, exitCode,
+  outputChars, sentChars, truncated`). A failed call is `success: false` **or** a non-zero
+  `exitCode`. `lots` holds the `AGENT_LOOP_V2_LOT{n}` flags active when recorded
+  (`[]` = baseline), so runs before and after a lot can be compared.
+- `GET /api/agents/tasks/stats` returns the board-wide aggregate as `loopMetrics`
+  (`byLots.baseline` vs `byLots["lots:1+2"]`…), or `null` when no native turn ran.
+
 ### GET `/api/tasks/:id/commits/:hash/diff`
 Fetch the diff of a commit linked to the task, via the board's GitHub plugin OAuth.
 - **Response 200**: `{ commit, files: [{ filename, additions, deletions, patch }] }`.

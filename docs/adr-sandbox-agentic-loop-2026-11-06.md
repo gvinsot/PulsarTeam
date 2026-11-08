@@ -147,3 +147,21 @@ concernés : `isCliRunner(agent)` continue de court-circuiter la boucle native.
   test, commiter et clôturer.
 - Indicateurs avant/après : tours par tâche, tokens par tâche, taux de tâches
   terminées sans rappel.
+### Mesure (lot 4 §14, livré en avance pour la base de comparaison)
+
+Chaque tour natif servi pour une tâche ajoute une entrée `type: "loop-metrics"`
+à `task.history` (`api/src/services/agentManager/loopMetrics.ts`, écrite par
+`chat.ts`) : appels d'outils (nom, durée, succès, `exit_code`, taille, troncature),
+appels LLM, tours d'outils, tokens d'entrée et de sortie, rappel ou non, et part
+estimée du contexte occupée par les résultats d'outils. Chaque entrée porte
+`lots` (flags `AGENT_LOOP_V2_LOT{n}` actifs, via `activeLoopLots()`). `[]`
+correspond à la **base** : toutes les mesures prises avant l'activation des
+lots 1 et 2 y sont rangées.
+
+- Par tâche : `GET /api/tasks/:id/loop-metrics` (onglet Costs → « Agent loop »).
+- Agrégé : `GET /api/agents/tasks/stats` → `loopMetrics.byLots.baseline` comparé à
+  `loopMetrics.byLots["lots:1+2"]`.
+- Un appel est en échec si `success: false` **ou** si `exit_code ≠ 0`. On voit
+  donc les faux succès de `run_command` (P2) dès la base.
+- Les lots 1 à 3 doivent lire leur flag avec `activeLoopLots()`, pour que les
+  entrées restent bien étiquetées.

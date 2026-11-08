@@ -44,12 +44,20 @@ export default function TaskTimeline({
   const displayName = useUserDisplayName();
   // `as const` on the two discriminants: without it both widen to `string` and
   // the `item.kind === 'commit'` test below stops narrowing the merged array.
-  const historyItems = (history || []).map((h, i) => ({
-    kind: 'history' as const,
-    at: h.at,
-    h,
-    key: `h-${i}`,
-  }));
+  // Loop-metrics entries (one per agent turn) are measurements, not events:
+  // the Costs tab shows them (TaskLoopMetrics.tsx).
+  const historyItems = (history || []).flatMap((h, i) =>
+    h.type === 'loop-metrics'
+      ? []
+      : [
+          {
+            kind: 'history' as const,
+            at: h.at,
+            h,
+            key: `h-${i}`,
+          },
+        ]
+  );
   const commitItems = (commits || []).map((c, i) => ({
     kind: 'commit' as const,
     at: c.date,

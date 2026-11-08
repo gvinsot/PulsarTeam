@@ -111,7 +111,11 @@ export type TaskHistoryEntryType =
   | 'trust_approved'
   // A comment was added to the thread (api/src/services/taskMutations.ts
   // recordTaskComment). `newValue` carries a preview, `commentId` the comment.
-  | 'comment';
+  | 'comment'
+  // One native (sandbox) agent turn's indicators, written by
+  // api/src/services/agentManager/chat.ts. Not shown in the timeline: the Costs
+  // tab reads them through GET /tasks/:id/loop-metrics (TaskLoopMetrics).
+  | 'loop-metrics';
 
 /**
  * One git commit linked to a task, as pushed into task.commits.
@@ -222,6 +226,79 @@ export interface TaskCostSummary {
   byAgent: TaskCostAgent[];
   /** An action is running: its time is not counted until the run ends. */
   running: boolean;
+}
+
+/** Totals for one tool name in the native agentic loop. */
+export interface TaskLoopToolStats {
+  name: string;
+  calls: number;
+  /** `success: false` or a non-zero exit code. */
+  failures: number;
+  totalMs: number;
+  maxMs: number;
+  avgMs: number;
+  /** 0..1 */
+  errorRate: number;
+  outputChars: number;
+  truncated: number;
+}
+
+/** One measured tool call of a native turn. */
+export interface TaskLoopToolCall {
+  name: string;
+  durationMs: number;
+  success: boolean;
+  exitCode: number | null;
+  outputChars: number;
+  sentChars: number;
+  truncated: boolean;
+}
+
+/** One native agent turn (a `loop-metrics` history entry). */
+export interface TaskLoopTurn {
+  at: string;
+  by: string;
+  agentId: string;
+  reminder: boolean;
+  outcome: 'ok' | 'tool-budget' | 'error';
+  durationMs: number;
+  llmCalls: number;
+  toolRounds: number;
+  inputTokens: number;
+  outputTokens: number;
+  toolCallCount: number;
+  calls: TaskLoopToolCall[];
+  callsOmitted: number;
+  toolContextShare: number;
+  peakToolContextShare: number;
+  /** AGENT_LOOP_V2_LOT{n} flags active when recorded; [] = baseline. */
+  lots: number[];
+}
+
+/**
+ * Native agentic loop indicators for a task — GET /tasks/:id/loop-metrics.
+ * Produced by api/src/services/agentManager/loopMetrics.ts summarizeLoopMetrics.
+ */
+export interface TaskLoopMetrics {
+  turns: number;
+  reminders: number;
+  llmCalls: number;
+  toolRounds: number;
+  toolCalls: number;
+  failedToolCalls: number;
+  truncatedToolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  avgToolContextShare: number;
+  peakToolContextShare: number;
+  toolBudgetHits: number;
+  errorTurns: number;
+  byTool: TaskLoopToolStats[];
+  lots: number[][];
+  firstAt: string | null;
+  lastAt: string | null;
+  turnsDetail: TaskLoopTurn[];
 }
 
 /**

@@ -40,6 +40,7 @@ import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
 import TaskComments from './TaskComments';
 import TaskCosts from './TaskCosts';
+import TaskLoopMetrics from './TaskLoopMetrics';
 import TaskModifications from './TaskModifications';
 import ExternalTaskPanel from './ExternalTaskPanel';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
@@ -879,10 +880,16 @@ export default function TaskDetailModal({
 
             {/* Tokens, spend and agent time attributed to the task */}
             {activeTab === 'costs' && task.id && (
-              <TaskCosts
-                taskId={task.id}
-                refreshKey={`${task.updatedAt ?? ''}|${task.history?.length ?? 0}`}
-              />
+              <div className="space-y-5">
+                <TaskCosts
+                  taskId={task.id}
+                  refreshKey={`${task.updatedAt ?? ''}|${task.history?.length ?? 0}`}
+                />
+                <TaskLoopMetrics
+                  taskId={task.id}
+                  refreshKey={`${task.updatedAt ?? ''}|${task.history?.length ?? 0}`}
+                />
+              </div>
             )}
 
             {/* Metadata */}

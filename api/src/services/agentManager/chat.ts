@@ -26,6 +26,7 @@ import {
 } from '../database.js';
 import { getAgentRunningTaskId } from '../workflow/agentSelector.js';
 import { NATIVE_TOOL_DEFINITIONS, type NativeToolCall } from '../nativeTools.js';
+import { LoopMetricsRecorder, toolCallMetric, type LoopTurnMetrics } from './loopMetrics.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
@@ -304,6 +305,13 @@ export const chatMethods = {
     // ran — it gates the stream retry so we never re-send a turn whose
     // assistant message is already in history.
     let postProcessingStarted = false;
+    // Native-loop observability (loopMetrics.ts): one history entry per turn
+    // served for a task, written in `finally` so failed turns count too.
+    const loopMetrics =
+      activeTaskId && !isCliRunner(agent)
+        ? new LoopMetricsRecorder(agent, /^\s*\[SYSTEM REMINDER\]/.test(userMessage || ''))
+        : null;
+    let loopOutcome: LoopTurnMetrics['outcome'] = 'error';
 
     try {
       const llmConfig = this.resolveLlmConfig(agent);
@@ -316,6 +324,7 @@ export const chatMethods = {
         abortController,
         activeTaskId
       );
+      loopMetrics?.recordModelCall(streamResult, messages);
       fullResponse = streamResult.fullResponse;
       thinking = streamResult.thinkingBuffer;
 
@@ -330,6 +339,7 @@ export const chatMethods = {
       let toolBudgetReached = false;
       while (!isCliRunner(agent) && streamResult.toolCalls.length > 0) {
         nativeToolRound++;
+        loopMetrics?.recordToolRound();
         postProcessingStarted = true;
 
         messages.push({
@@ -361,21 +371,28 @@ export const chatMethods = {
           }))
         );
 
-        const hasTerminal = toolResults.some((result: any) => result.isTerminal);
-        if (hasTerminal) break;
-
         const maxResultChars = toolResultMaxChars(
           llmConfig.contextLength || DEFAULT_CONTEXT_TOKENS,
           streamResult.toolCalls.length
         );
-        const resultSizes: string[] = [];
-        for (const call of streamResult.toolCalls) {
+        const roundResults = streamResult.toolCalls.map((call: NativeToolCall) => {
           const result = resultsByCallId.get(call.id) || {
             success: false,
             error: `No result returned for native tool call ${call.name}.`,
           };
           const content = toolResultContent(result, Infinity);
           const bounded = capToolResultContent(content, maxResultChars);
+          loopMetrics?.recordToolCall(
+            toolCallMetric(call.name, result, bounded.length, bounded.length < content.length)
+          );
+          return { call, result, content, bounded };
+        });
+
+        const hasTerminal = toolResults.some((result: any) => result.isTerminal);
+        if (hasTerminal) break;
+
+        const resultSizes: string[] = [];
+        for (const { call, result, content, bounded } of roundResults) {
           resultSizes.push(
             `${call.name}=${content.length}${bounded.length < content.length ? `→${bounded.length}` : ''}`
           );
@@ -441,6 +458,7 @@ export const chatMethods = {
               activeTaskId,
               { toolsEnabled: false, maxTokens: 4096 }
             );
+            loopMetrics?.recordModelCall(streamResult, messages);
             fullResponse += streamResult.fullResponse;
             thinking += streamResult.thinkingBuffer;
             if (!streamResult.fullResponse.trim()) throw new Error('Empty final summary');
@@ -466,6 +484,7 @@ export const chatMethods = {
           abortController,
           activeTaskId
         );
+        loopMetrics?.recordModelCall(streamResult, messages);
         fullResponse += streamResult.fullResponse;
         thinking += streamResult.thinkingBuffer;
       }
@@ -494,6 +513,7 @@ export const chatMethods = {
       if (streamResult.durationMs > 0) assistantEntry.durationMs = streamResult.durationMs;
       if (streamResult.outputTokens > 0) assistantEntry.outputTokens = streamResult.outputTokens;
       agent.conversationHistory.push(assistantEntry);
+      loopOutcome = toolBudgetReached ? 'tool-budget' : 'ok';
 
       // Prune old messages: keep max 30 messages, but always preserve messages
       // from the current active task (to avoid losing context mid-execution).
@@ -797,6 +817,10 @@ export const chatMethods = {
 
       this._failChat(agent, id, isTopLevel, err.message, isUserStop ? 'idle' : 'error');
       throw err;
+    } finally {
+      if (loopMetrics && activeTaskId && !loopMetrics.isEmpty) {
+        this._recordLoopMetrics(activeTaskId, loopMetrics.entry(loopOutcome));
+      }
     }
   },
 
@@ -1413,6 +1437,7 @@ export const chatMethods = {
     text: string;
     thinking: string;
     finishReason: string | null;
+    inputTokens: number;
     outputTokens: number;
     toolCalls: NativeToolCall[];
   }> {
@@ -1434,6 +1459,7 @@ export const chatMethods = {
     let text = '';
     let thinking = '';
     let finishReason: string | null = null;
+    let inputTokens = 0;
     let outputTokens = 0;
     let toolCalls: NativeToolCall[] = [];
 
@@ -1480,6 +1506,7 @@ export const chatMethods = {
           const cost = chunk.usage.costUsd ?? null;
           agent.metrics.totalTokensIn += inTok;
           agent.metrics.totalTokensOut += outTok;
+          inputTokens += inTok;
           outputTokens += outTok;
           if (cost != null && cost > 0) {
             this._recordUsageDirect(agent, inTok, outTok, cost, contextTokens);
@@ -1506,7 +1533,7 @@ export const chatMethods = {
       }
     }
 
-    return { text, thinking, finishReason, outputTokens, toolCalls };
+    return { text, thinking, finishReason, inputTokens, outputTokens, toolCalls };
   },
 
   /** Stream one turn to completion, auto-continuing while the provider stops on
@@ -1526,8 +1553,11 @@ export const chatMethods = {
     fullResponse: string;
     thinkingBuffer: string;
     finishReason: string | null;
+    inputTokens: number;
     outputTokens: number;
     durationMs: number;
+    /** Provider requests made (1 + length continuations). */
+    llmCalls: number;
     toolCalls: NativeToolCall[];
   }> {
     // When the agent is bound to a CLI runner (opencode, openclaw, hermes,
@@ -1564,6 +1594,7 @@ export const chatMethods = {
     let fullResponse = '';
     let thinkingBuffer = '';
     let finishReason: string | null = null;
+    let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let toolCalls: NativeToolCall[] = [];
     // CLI runners have a real terminal surface. Their upstream "thinking"
@@ -1636,6 +1667,7 @@ export const chatMethods = {
     });
     fullResponse += first.text;
     thinkingBuffer += first.thinking;
+    totalInputTokens += first.inputTokens;
     totalOutputTokens += first.outputTokens;
     finishReason = first.finishReason;
     toolCalls = first.toolCalls;
@@ -1699,6 +1731,7 @@ export const chatMethods = {
       });
       fullResponse += cont.text;
       thinkingBuffer += cont.thinking;
+      totalInputTokens += cont.inputTokens;
       totalOutputTokens += cont.outputTokens;
       finishReason = cont.finishReason;
       toolCalls = cont.toolCalls;
@@ -1715,10 +1748,26 @@ export const chatMethods = {
       fullResponse,
       thinkingBuffer,
       finishReason,
+      inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
       durationMs: Date.now() - responseStartedAt,
+      llmCalls: 1 + continuationCount,
       toolCalls,
     };
+  },
+
+  /** Append one native turn's metrics to the task history. Fire-and-forget: a
+   * metrics write must never fail or delay the turn it describes. */
+  _recordLoopMetrics(this: any, taskId: string, entry: LoopTurnMetrics): void {
+    updateTaskFields(taskId, { historyAppend: [entry] }).then(
+      updated => {
+        if (!updated) console.warn(`⚠️ [LoopMetrics] Not recorded for task ${taskId}`);
+      },
+      (err: unknown) =>
+        console.warn(
+          `⚠️ [LoopMetrics] Write failed for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`
+        )
+    );
   },
 
   async _processPostResponseActions(

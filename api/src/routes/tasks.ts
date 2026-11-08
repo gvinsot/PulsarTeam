@@ -18,6 +18,7 @@ import {
   getTaskTokenUsage,
 } from '../services/database.js';
 import { executionWindows, buildTaskCostSummary } from '../services/taskCosts.js';
+import { summarizeLoopMetrics } from '../services/agentManager/loopMetrics.js';
 import { buildRecurrenceConfig, nextRunAt } from '../services/taskRecurrence.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
@@ -1148,6 +1149,24 @@ router.get(
     const windows = executionWindows(task.history);
     const usage = await getTaskTokenUsage(task.id, windows);
     res.json(buildTaskCostSummary(windows, usage, !!task.actionRunning));
+  })
+);
+
+// ── GET /tasks/:id/loop-metrics — native agentic loop indicators ────────────
+// Per task: turns, model calls, tool calls (duration, failures, exit codes,
+// truncation), tokens, reminders and the share of context used by tool
+// results — folded from the `loop-metrics` history entries chat.ts writes for
+// sandbox (non-CLI) agents. See agentManager/loopMetrics.ts.
+router.get(
+  '/:id/loop-metrics',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(summarizeLoopMetrics(task.history));
   })
 );
 

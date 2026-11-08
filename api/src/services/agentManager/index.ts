@@ -11,6 +11,7 @@ import type { Task, TaskWriteInput } from '../database/tasks.js';
 import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
 import type { Agent } from '../database/agents.js';
 import type { NativeToolCall } from '../nativeTools.js';
+import type { LoopTurnMetrics } from './loopMetrics.js';
 import type { SessionClaims } from '../../middleware/session.js';
 import type { SecurityFlag, TaskTrustLevel } from '../../lib/taskTrust.js';
 
@@ -272,6 +273,7 @@ export interface AgentManager {
     text: string;
     thinking: string;
     finishReason: string | null;
+    inputTokens: number;
     outputTokens: number;
     toolCalls: NativeToolCall[];
   }>;
@@ -288,10 +290,13 @@ export interface AgentManager {
     fullResponse: string;
     thinkingBuffer: string;
     finishReason: string | null;
+    inputTokens: number;
     outputTokens: number;
     durationMs: number;
+    llmCalls: number;
     toolCalls: NativeToolCall[];
   }>;
+  _recordLoopMetrics(taskId: string, entry: LoopTurnMetrics): void;
   _processPostResponseActions(
     agent: any,
     id: string,
