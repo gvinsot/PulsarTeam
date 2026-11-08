@@ -1,5 +1,6 @@
 import { errorMessage } from '../lib/errors.js';
 import type { ExecutionProvider } from './execution/executionProvider.js';
+import { formatReadFile } from './readFileFormat.js';
 
 // Tool definitions that will be injected into agent prompts
 // Sanitize a tool argument: only strip a matching pair of surrounding quotes.
@@ -295,41 +296,29 @@ async function toolReadFile(
     }
 
     const content = await provider.readFile(agentId, filePath);
-    const allLines = content.split('\n');
-
-    // Parse optional line range: (path, startLine[, endLine])
-    const startLine = parseInt(startLineArg, 10);
-    const endLine = parseInt(endLineArg, 10);
-
-    if (!isNaN(startLine) && startLine > 0) {
-      const start = Math.max(0, startLine - 1);
-      const end =
-        !isNaN(endLine) && endLine >= startLine
-          ? Math.min(endLine, allLines.length)
-          : allLines.length;
-      const sliced = allLines.slice(start, end);
+    // Numbered `cat -n` style for the model; see readFileFormat.ts.
+    const formatted = formatReadFile(content, startLineArg, endLineArg);
+    if (parseInt(startLineArg, 10) > 0) {
       return {
         success: true,
-        result: sliced.join('\n'),
-        meta: { path: filePath, startLine, endLine: end, totalLines: allLines.length },
+        result: formatted.text,
+        meta: {
+          path: filePath,
+          startLine: formatted.startLine,
+          endLine: formatted.endLine,
+          totalLines: formatted.totalLines,
+        },
       };
     }
-
-    // Auto-truncate large files and hint the agent to use line ranges
-    const MAX_LINES = 500;
-    if (allLines.length > MAX_LINES) {
-      const truncated = allLines.slice(0, MAX_LINES).join('\n');
-      return {
-        success: true,
-        result: `${truncated}\n\n--- TRUNCATED: showing ${MAX_LINES}/${allLines.length} lines. Use read_file with path, start_line, and end_line to read specific sections. ---`,
-        meta: { path: filePath, size: content.length, lines: allLines.length, truncated: true },
-      };
-    }
-
     return {
       success: true,
-      result: content,
-      meta: { path: filePath, size: content.length, lines: allLines.length },
+      result: formatted.text,
+      meta: {
+        path: filePath,
+        size: content.length,
+        lines: formatted.totalLines,
+        ...(formatted.truncated ? { truncated: true } : {}),
+      },
     };
   } catch (err) {
     if (errorMessage(err).includes('No such file')) {

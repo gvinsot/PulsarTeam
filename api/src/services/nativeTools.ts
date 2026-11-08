@@ -49,7 +49,10 @@ const tool = (name: string, description: string, parameters: JsonSchema): Native
 export const NATIVE_TOOL_DEFINITIONS: NativeToolDefinition[] = [
   tool(
     'read_file',
-    'Read a text file from the current project. Paths are relative to the project root.',
+    'Read a text file from the current project. Paths are relative to the project root. ' +
+      'Output is numbered like `cat -n`: each line is prefixed with its line number and a tab. ' +
+      'These numbers are NOT part of the file: never include them in write_file content. ' +
+      'Files over 500 lines are truncated; the marker tells you the start_line to read next.',
     object(
       {
         path: string('Relative file path.'),
