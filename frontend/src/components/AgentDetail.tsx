@@ -55,6 +55,7 @@ import ContextTab from './agentDetail/ContextTab';
 import ActionLogsTab from './agentDetail/ActionLogsTab';
 import SettingsTab from './agentDetail/SettingsTab';
 import PermissionsTab from './agentDetail/PermissionsTab';
+import { agentSwitcherOptions } from './agentSwitcher';
 
 // Re-export cleanToolSyntax so existing imports (e.g. BroadcastPanel) keep working
 export { cleanToolSyntax } from './agentDetail/cleanToolSyntax';
@@ -465,13 +466,14 @@ export default function AgentDetail({
               className="min-w-0 flex-1 px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-sm font-bold text-dark-100 focus:outline-none focus:border-indigo-500 truncate appearance-none"
               title="Active agent"
             >
-              {agents
-                .filter(a => a.enabled !== false)
-                .map(a => (
-                  <option key={a.id} value={a.id}>
-                    {a.icon} {a.name}
-                  </option>
-                ))}
+              {/* Always keep the displayed agent in the list: if it is disabled or
+                  missing from `agents`, a <select> whose value matches no
+                  option silently shows the first one (wrong agent name). */}
+              {agentSwitcherOptions(agents, agent).map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.icon} {a.name}
+                </option>
+              ))}
             </select>
             <div className="flex items-center gap-1.5 min-w-0 flex-1">
               <FolderCode className="w-3.5 h-3.5 text-dark-500 flex-shrink-0" />
