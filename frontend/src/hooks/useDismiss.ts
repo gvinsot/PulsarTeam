@@ -12,7 +12,7 @@ import { useEffect, useRef, RefObject } from 'react';
 
 /** Fire `onOutside` on a mousedown outside `ref`. No-op while ref is unattached. */
 export function useClickOutside(
-  ref: RefObject<HTMLElement>,
+  ref: RefObject<HTMLElement | null>,
   onOutside: () => void,
   enabled = true
 ) {

@@ -105,7 +105,7 @@ export default function ChatTab({
   onClear: () => void;
   onReload?: () => void | Promise<void>;
   onTruncate?: (index: number) => void;
-  chatEndRef: RefObject<HTMLDivElement>;
+  chatEndRef: RefObject<HTMLDivElement | null>;
   /** Agent.name is optional on the wire — see types/agent.ts. */
   agentName?: string;
   autoScroll: boolean;

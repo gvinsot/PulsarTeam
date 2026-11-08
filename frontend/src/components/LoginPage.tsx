@@ -90,7 +90,7 @@ function ScreenshotCarousel() {
 
   const [active, setActive] = useState(0);
   const [lightbox, setLightbox] = useState<number | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>();
+  const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   useEffect(() => {
     intervalRef.current = setInterval(() => setActive(p => (p + 1) % screenshots.length), 5000);
