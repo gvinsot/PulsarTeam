@@ -38,13 +38,26 @@ export function capToolResultContent(content: string, maxChars: number): string 
 
 /** The role:'tool' message body for one result, bounded to maxChars. */
 export function toolResultContent(
-  result: { success?: boolean; result?: unknown; error?: unknown } | undefined,
+  result:
+    | {
+        success?: boolean;
+        result?: unknown;
+        error?: unknown;
+        meta?: { exitCode?: unknown; truncated?: unknown } | null;
+      }
+    | undefined,
   maxChars: number
 ): string {
   const success = Boolean(result?.success);
+  // run_command reports a non-zero exit with success:true (its output is still
+  // useful), so the exit status and truncation must reach the model explicitly.
+  const exitCode = result?.meta?.exitCode;
+  const truncated = result?.meta?.truncated;
   return capToolResultContent(
     JSON.stringify({
       success,
+      ...(typeof exitCode === 'number' ? { exit_code: exitCode } : {}),
+      ...(typeof truncated === 'boolean' ? { truncated } : {}),
       result: result?.result ?? null,
       error: success ? null : result?.error || 'Tool execution failed.',
     }),
@@ -59,7 +72,12 @@ interface HistoryMessage {
     id: string;
     name: string;
     arguments?: Record<string, unknown>;
-    result?: { success?: boolean; result?: unknown; error?: unknown };
+    result?: {
+      success?: boolean;
+      result?: unknown;
+      error?: unknown;
+      meta?: { exitCode?: unknown; truncated?: unknown } | null;
+    };
   }>;
   [key: string]: unknown;
 }

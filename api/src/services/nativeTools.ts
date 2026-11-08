@@ -92,7 +92,7 @@ export const NATIVE_TOOL_DEFINITIONS: NativeToolDefinition[] = [
   ),
   tool(
     'run_command',
-    'Run a shell command in the current project directory.',
+    'Run a shell command in the current project directory. The result starts with `exit_code=N` (0 = success, non-zero = the command failed, even when it printed output) and the JSON carries `exit_code` and `truncated` (output capped at 10,000 chars). Always check exit_code before assuming a build or test passed.',
     object({ command: string('Shell command to run.') }, ['command'])
   ),
   tool('list_my_tasks', "List this agent's current tasks and their statuses.", object({})),

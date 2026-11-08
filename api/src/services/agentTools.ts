@@ -454,7 +454,71 @@ function execFailure(err: unknown): {
   return { stdout: '', stderr: '', code: undefined };
 }
 
-async function toolRunCommand(provider: ExecutionProvider, agentId: string, command: string) {
+/** Size budget for one run_command result, `exit_code=N` header included. */
+const RUN_COMMAND_MAX_OUTPUT = 10000;
+
+/**
+ * Exit status of a failed exec. A local child process rejects with a numeric
+ * `code`; the runner's /exec-shell only reports it as text ("Command failed
+ * with exit code N" in the message, "[exit code: N]" in the output). Anything
+ * unreadable (timeout, transport error) counts as 1.
+ */
+export function execExitCode(err: unknown, output = ''): number {
+  const { code } = execFailure(err);
+  if (typeof code === 'number' && Number.isInteger(code) && code !== 0) return code;
+  const fromMessage = /exit code[:\s]+(\d+)/i.exec(`${errorMessage(err)}\n${output}`);
+  const parsed = fromMessage ? Number(fromMessage[1]) : NaN;
+  return Number.isInteger(parsed) && parsed !== 0 ? parsed : 1;
+}
+
+/**
+ * Shape one run_command outcome. The output always starts with `exit_code=N`
+ * so the model sees a failed build/test even when the result is otherwise
+ * `success: true` (a non-zero command that printed output is still a usable
+ * result); `meta.exitCode` / `meta.truncated` are also serialized to the model
+ * by `toolResultContent`.
+ */
+export function runCommandResult(
+  command: string,
+  exitCode: number,
+  rawOutput: string,
+  extraMeta: Record<string, unknown> = {},
+  error?: string
+): ToolResult {
+  const body = rawOutput.trim() ? rawOutput : '(no output)';
+  // Keep head and tail: the failing assertion / error summary is usually last.
+  const header = `exit_code=${exitCode}\n`;
+  const kept = truncateMiddle(body, RUN_COMMAND_MAX_OUTPUT - header.length);
+  const truncated = kept !== body;
+  const result = header + kept;
+  const meta = { command, exitCode, truncated, ...extraMeta };
+  if (error !== undefined) {
+    return { success: false, error: `exit_code=${exitCode}: ${error}`, result, meta };
+  }
+  return { success: true, result, meta };
+}
+
+const joinStreams = (stdout: string, stderr: string) => [stdout, stderr].filter(Boolean).join('\n');
+
+/** A rejected exec: keep its output as a result, or report the error if it printed nothing. */
+function runCommandFailure(command: string, err: unknown, extraMeta: Record<string, unknown>) {
+  const failure = execFailure(err);
+  // The runner copies the combined output into both streams; do not double it.
+  const output =
+    failure.stdout && failure.stdout === failure.stderr
+      ? failure.stdout
+      : joinStreams(failure.stdout, failure.stderr);
+  const exitCode = execExitCode(err, output);
+  return output.trim()
+    ? runCommandResult(command, exitCode, output, extraMeta)
+    : runCommandResult(command, exitCode, '', extraMeta, errorMessage(err));
+}
+
+async function toolRunCommand(
+  provider: ExecutionProvider,
+  agentId: string,
+  command: string
+): Promise<ToolResult> {
   // Accident guardrail, not a boundary — the runner's UID/capability isolation is
   // what actually contains this command. See BLOCKED_COMMAND_PATTERNS above.
   const blockReason = validateCommand(command);
@@ -478,65 +542,22 @@ async function toolRunCommand(provider: ExecutionProvider, agentId: string, comm
     const { stdout, stderr } = await provider.exec(agentId, effectiveCommand, {
       timeout: COMMAND_TIMEOUT,
     });
-    const output = [stdout, stderr].filter(Boolean).join('\n') || '(no output)';
-    const result = truncateMiddle(output);
-    return {
-      success: true,
-      result,
-      meta: { command, rtk: useRtk, truncated: result !== output },
-    };
+    return runCommandResult(command, 0, joinStreams(stdout, stderr), { rtk: useRtk });
   } catch (err) {
+    if (!useRtk) return runCommandFailure(command, err, { rtk: false });
     // If RTK command failed, retry with original command
-    if (useRtk) {
-      console.log(
-        `⚡ [RTK] Rewritten command failed, falling back to original: "${command.slice(0, 80)}"`
-      );
-      try {
-        const { stdout, stderr } = await provider.exec(agentId, command, {
-          timeout: COMMAND_TIMEOUT,
-        });
-        const output = [stdout, stderr].filter(Boolean).join('\n') || '(no output)';
-        const result = truncateMiddle(output);
-        return {
-          success: true,
-          result,
-          meta: {
-            command,
-            rtk: false,
-            rtkFallback: true,
-            truncated: result !== output,
-          },
-        };
-      } catch (fallbackErr) {
-        const fallbackFailure = execFailure(fallbackErr);
-        const output = fallbackFailure.stdout + fallbackFailure.stderr;
-        if (output.trim()) {
-          const result = truncateMiddle(output);
-          return {
-            success: true,
-            result,
-            meta: { command, exitCode: fallbackFailure.code || 1, truncated: result !== output },
-          };
-        }
-        return { success: false, error: errorMessage(fallbackErr), result: '' };
-      }
+    console.log(
+      `⚡ [RTK] Rewritten command failed, falling back to original: "${command.slice(0, 80)}"`
+    );
+    const fallbackMeta = { rtk: false, rtkFallback: true };
+    try {
+      const { stdout, stderr } = await provider.exec(agentId, command, {
+        timeout: COMMAND_TIMEOUT,
+      });
+      return runCommandResult(command, 0, joinStreams(stdout, stderr), fallbackMeta);
+    } catch (fallbackErr) {
+      return runCommandFailure(command, fallbackErr, fallbackMeta);
     }
-    // Original command error handling (non-RTK path)
-    const failure = execFailure(err);
-    const output = failure.stdout + failure.stderr;
-    if (output.trim()) {
-      const result = truncateMiddle(output);
-      return {
-        success: true,
-        result,
-        meta: { command, exitCode: failure.code || 1, truncated: result !== output },
-      };
-    }
-    return {
-      success: false,
-      error: errorMessage(err),
-      result: '',
-    };
   }
 }
 
