@@ -1,6 +1,7 @@
 // ─── Compaction: thresholds, token helpers, history compaction, context switch ─
 import { createProvider } from '../llmProviders.js';
 import { saveAgent } from '../database.js';
+import { truncateMiddle } from '../../lib/truncateMiddle.js';
 
 /** A provider SDK error: HTTP status when the request reached the server. */
 export type LlmRequestError = Error & { status?: number; cause?: unknown };
@@ -176,8 +177,10 @@ export const compactionMethods = {
       const newLen = Math.max(MIN_CONTENT, content.length - excessChars);
       if (newLen < content.length) {
         msg.content =
-          content.slice(0, newLen) +
-          `\n\n... [truncated from ${content.length} to ${newLen} chars to fit context window]`;
+          msg.role === 'tool'
+            ? truncateMiddle(content, newLen, Math.floor(newLen * 0.3))
+            : content.slice(0, newLen) +
+              `\n\n... [truncated from ${content.length} to ${newLen} chars to fit context window]`;
         estimated = this._estimateTokens(messages);
         truncated = true;
       }

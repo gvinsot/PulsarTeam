@@ -1,4 +1,5 @@
 import { errorMessage } from '../lib/errors.js';
+import { truncateMiddle } from '../lib/truncateMiddle.js';
 import type { ExecutionProvider } from './execution/executionProvider.js';
 import { formatReadFile } from './readFileFormat.js';
 
@@ -471,11 +472,12 @@ async function toolRunCommand(provider: ExecutionProvider, agentId: string, comm
     const { stdout, stderr } = await provider.exec(agentId, effectiveCommand, {
       timeout: COMMAND_TIMEOUT,
     });
-    const output = ([stdout, stderr].filter(Boolean).join('\n') || '(no output)').slice(0, 10000);
+    const output = [stdout, stderr].filter(Boolean).join('\n') || '(no output)';
+    const result = truncateMiddle(output);
     return {
       success: true,
-      result: output,
-      meta: { command, rtk: useRtk, truncated: (stdout || '').length > 10000 },
+      result,
+      meta: { command, rtk: useRtk, truncated: result !== output },
     };
   } catch (err) {
     // If RTK command failed, retry with original command
@@ -487,28 +489,27 @@ async function toolRunCommand(provider: ExecutionProvider, agentId: string, comm
         const { stdout, stderr } = await provider.exec(agentId, command, {
           timeout: COMMAND_TIMEOUT,
         });
-        const output = ([stdout, stderr].filter(Boolean).join('\n') || '(no output)').slice(
-          0,
-          10000
-        );
+        const output = [stdout, stderr].filter(Boolean).join('\n') || '(no output)';
+        const result = truncateMiddle(output);
         return {
           success: true,
-          result: output,
+          result,
           meta: {
             command,
             rtk: false,
             rtkFallback: true,
-            truncated: (stdout || '').length > 10000,
+            truncated: result !== output,
           },
         };
       } catch (fallbackErr) {
         const fallbackFailure = execFailure(fallbackErr);
         const output = fallbackFailure.stdout + fallbackFailure.stderr;
         if (output.trim()) {
+          const result = truncateMiddle(output);
           return {
             success: true,
-            result: output.slice(0, 10000),
-            meta: { command, exitCode: fallbackFailure.code || 1 },
+            result,
+            meta: { command, exitCode: fallbackFailure.code || 1, truncated: result !== output },
           };
         }
         return { success: false, error: errorMessage(fallbackErr), result: '' };
@@ -518,10 +519,11 @@ async function toolRunCommand(provider: ExecutionProvider, agentId: string, comm
     const failure = execFailure(err);
     const output = failure.stdout + failure.stderr;
     if (output.trim()) {
+      const result = truncateMiddle(output);
       return {
         success: true,
-        result: output.slice(0, 10000),
-        meta: { command, exitCode: failure.code || 1 },
+        result,
+        meta: { command, exitCode: failure.code || 1, truncated: result !== output },
       };
     }
     return {
