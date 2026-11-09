@@ -16,7 +16,7 @@ const execLocal = promisify(execCb);
 /** Provider whose exec() runs a real shell, like the local provider. */
 function shellProvider(
   exec: (command: string) => Promise<{ stdout: string; stderr: string }> = command =>
-    execLocal(command, { shell: '/bin/bash' })
+    execLocal(command, { shell: '/bin/sh' })
 ): ExecutionProvider {
   return {
     hasEnvironment: () => true,
