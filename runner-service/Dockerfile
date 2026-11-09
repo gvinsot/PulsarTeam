@@ -234,11 +234,25 @@ RUN echo "=== Python ===" && python --version && \
     echo "=== Go ===" && go version
 
 # RTK (Rust Token Killer)
-# GitHub's API and release CDN return transient 5xx (a 504 here failed the
-# 1.0.1301 build), so both downloads retry on any error.
-RUN RTK_ARCH=$(uname -m | sed 's/x86_64/x86_64/' | sed 's/aarch64/aarch64/') && \
-    RTK_VERSION=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 https://api.github.com/repos/rtk-ai/rtk/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4) && \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk-${RTK_ARCH}-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin/ && \
+# Pinned instead of resolving releases/latest at build time: the v1.2.0
+# x86_64 musl asset answers 504 on every download (it broke the 1.0.1301 and
+# 1.0.1302 builds), and api.github.com rate-limits/504s the build host. A
+# pinned version plus a checksum keeps builds reproducible. To upgrade, bump
+# RTK_VERSION and RTK_SHA256_X86_64 (from the release's asset list).
+# The image is amd64-only (see devops/docker-compose.swarm.yml); the aarch64
+# branch exists for local builds and is not checksum-pinned.
+ARG RTK_VERSION=v1.1.0
+ARG RTK_SHA256_X86_64=9454ad1b9489daa57ab0a9f4ebe2faaf4dc82b8a0f26c9e5135151abd7c9378d
+RUN case "$(uname -m)" in \
+      x86_64)  RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz ;; \
+      aarch64) RTK_ASSET=rtk-aarch64-unknown-linux-gnu.tar.gz ;; \
+      *) echo "rtk: unsupported arch $(uname -m)" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/rtk.tar.gz \
+      "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/${RTK_ASSET}" && \
+    if [ "$(uname -m)" = x86_64 ]; then echo "${RTK_SHA256_X86_64}  /tmp/rtk.tar.gz" | sha256sum -c -; fi && \
+    tar -xzf /tmp/rtk.tar.gz -C /usr/local/bin/ rtk && \
+    rm /tmp/rtk.tar.gz && \
     chmod +x /usr/local/bin/rtk && \
     rtk --version
 
