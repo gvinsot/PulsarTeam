@@ -234,9 +234,11 @@ RUN echo "=== Python ===" && python --version && \
     echo "=== Go ===" && go version
 
 # RTK (Rust Token Killer)
+# GitHub's API and release CDN return transient 5xx (a 504 here failed the
+# 1.0.1301 build), so both downloads retry on any error.
 RUN RTK_ARCH=$(uname -m | sed 's/x86_64/x86_64/' | sed 's/aarch64/aarch64/') && \
-    RTK_VERSION=$(curl -fsSL https://api.github.com/repos/rtk-ai/rtk/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4) && \
-    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk-${RTK_ARCH}-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin/ && \
+    RTK_VERSION=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 https://api.github.com/repos/rtk-ai/rtk/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4) && \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk-${RTK_ARCH}-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/rtk && \
     rtk --version
 
