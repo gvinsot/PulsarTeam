@@ -48,6 +48,7 @@ Update top-level board fields (name, filters, project link).
 ### PUT `/api/boards/:id/workflow`
 Replace the workflow (columns + transitions). Increments `workflowVersion`.
 - **Auth**: board edit. Default board read-only.
+- **Column auto-retry**: a column may carry `autoRetry: { intervalMinutes?, maxRetries?, escalateAfterMinutes?, escalationInstructions? }` (integers ≥ 0, each part off when absent/0; `escalateAfterMinutes` requires a non-empty `escalationInstructions`; unknown keys are rejected with 400). Semantics in `specs/ui/workflows.md` § "Column auto-retry".
 
 ### DELETE `/api/boards/:id`
 Delete a board. Owner or admin only. Default board cannot be deleted.

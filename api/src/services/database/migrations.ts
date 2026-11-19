@@ -381,6 +381,26 @@ const MIGRATIONS: Migration[] = [
   sqlMigration('202610250002_task_storage_changes', 'cloud storage changes made by a task', [
     "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS storage_changes JSONB DEFAULT '[]'",
   ]),
+  // Column auto-retry (workflow/columnAutoRetry.ts): when the task entered its
+  // current column, and the re-run timer of that column. A trigger resets both on
+  // every status change, so none of the many code paths that move a task has to.
+  sqlMigration('202611190001_task_column_timer', 'column entry time and auto-retry timer', [
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS column_entered_at TIMESTAMPTZ',
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS column_timer JSONB',
+    'UPDATE tasks SET column_entered_at = COALESCE(updated_at, created_at, NOW()) WHERE column_entered_at IS NULL',
+    `CREATE OR REPLACE FUNCTION reset_task_column_timer() RETURNS trigger LANGUAGE plpgsql AS $$
+     BEGIN
+       IF TG_OP = 'INSERT' THEN
+         NEW.column_entered_at := COALESCE(NEW.column_entered_at, NOW());
+       ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
+         NEW.column_entered_at := NOW();
+         NEW.column_timer := NULL;
+       END IF;
+       RETURN NEW;
+     END; $$`,
+    'DROP TRIGGER IF EXISTS reset_task_column_timer ON tasks',
+    'CREATE TRIGGER reset_task_column_timer BEFORE INSERT OR UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION reset_task_column_timer()',
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

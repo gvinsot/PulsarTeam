@@ -149,6 +149,7 @@ export type {
   ReservedTaskStatus,
   TaskStatus,
   BoardWorkflowColumn,
+  ColumnAutoRetry,
   WorkflowCondition,
   WorkflowActionAssignAgent,
   WorkflowActionAssignAgentIndividual,

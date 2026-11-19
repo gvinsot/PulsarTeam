@@ -105,9 +105,16 @@ export function makeTaskDbFake() {
         }
       }
       const { historyAppend, ...columns } = fields || {};
+      const prevStatus = t.status;
       for (const [key, value] of Object.entries(columns)) {
         // rowToTask reads an empty pending_on_enter back as undefined.
         t[fieldKey(key)] = key === 'pendingOnEnter' && value == null ? undefined : value;
+      }
+      // Mirrors the reset_task_column_timer trigger: a move restarts the
+      // column's auto-retry clock.
+      if ('status' in columns && t.status !== prevStatus) {
+        t.columnEnteredAt = now();
+        t.columnTimer = null;
       }
       if (Array.isArray(historyAppend) && historyAppend.length && !('history' in columns)) {
         t.history = [...(Array.isArray(t.history) ? t.history : []), ...historyAppend];

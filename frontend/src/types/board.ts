@@ -134,6 +134,24 @@ export interface BoardWorkflowColumn {
   showCreator?: boolean;
   showProject?: boolean;
   showTaskType?: boolean;
+  /** Column auto-retry, validated by columnAutoRetrySchema
+   *  (api/src/schemas/boards.ts) and run by api/src/services/workflow/columnAutoRetry.ts. */
+  autoRetry?: ColumnAutoRetry | null;
+}
+
+/**
+ * Re-run the column's flow while a task stays in it. Each part is off when its
+ * number is absent / null / 0; the escalation also needs an instruction.
+ */
+export interface ColumnAutoRetry {
+  /** Re-run the column flow from its entry every N minutes (idle tasks only). */
+  intervalMinutes?: number | null;
+  /** Cap on the periodic re-runs; absent / 0 = no cap. */
+  maxRetries?: number | null;
+  /** After N minutes in the column, re-run once with `escalationInstructions`
+   *  appended to every run_agent action (kept for later re-runs in the column). */
+  escalateAfterMinutes?: number | null;
+  escalationInstructions?: string | null;
 }
 
 /**

@@ -128,6 +128,10 @@ function renderEntryTitle(entry: TaskHistoryEntry) {
   if (entry.type === 'restored') return <span className="text-teal-300">Task restored</span>;
   if (entry.type === 'trust_approved')
     return <span className="text-sky-300">External task approved for agents</span>;
+  if (entry.type === 'auto_retry')
+    return <span className="text-emerald-300">Column flow re-run automatically</span>;
+  if (entry.type === 'auto_retry_escalation')
+    return <span className="text-emerald-300">Column flow re-run with escalation instruction</span>;
   return <span className="text-dark-200">Status change</span>;
 }
 

@@ -129,7 +129,23 @@ A modal that lets a user with edit permission rebuild the board's workflow.
 - Per-column configuration:
   - **On-entry action** — pick an agent (by name or role) and supply instructions; on transition, a task is automatically queued on that agent.
   - **Display options** — color, icon.
+  - **Auto-retry** — see below.
 - Save → PUT `/api/boards/:id/workflow` (increments the workflow version).
+
+### Column auto-retry
+
+Each column card has a collapsible **Auto-retry** panel (summary shown when collapsed, e.g. "every 30 min · instruction after 120 min"):
+
+- **Re-run every (min)** — while a task stays in the column and is idle, the column's flow (its on-enter / conditional transitions) is re-run **from the entry**, every N minutes. The clock starts when the task enters the column, then restarts at each re-run.
+- **Max re-runs** — optional cap on those periodic re-runs (0 = no limit).
+- **Extra instruction after (min in column)** + instruction text — once the task has been in the column that long, the flow is re-run once with the instruction appended to every run-agent action of the column. The instruction stays appended for later re-runs while the task remains in the column.
+
+Rules (engine: `api/src/services/workflow/columnAutoRetry.ts`, driven by the periodic recheck):
+- Leaving the column resets everything (a DB trigger resets `tasks.column_entered_at` and `tasks.column_timer` on every status change).
+- Never fires for a running, watching, stopped, manual, error or unapproved external task. A periodic re-run is also skipped while the chain already waits for an agent; the escalation is not.
+- A column without any on-enter / conditional transition has nothing to re-run; the panel warns about it.
+- Each re-run is recorded in the task history (`auto_retry` with its number, or `auto_retry_escalation`) and shown in the timeline.
+- Saving is refused when an escalation delay has no instruction.
 
 The default board's workflow is read-only.
 

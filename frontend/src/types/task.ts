@@ -115,7 +115,12 @@ export type TaskHistoryEntryType =
   // One native (sandbox) agent turn's indicators, written by
   // api/src/services/agentManager/chat.ts. Not shown in the timeline: the Costs
   // tab reads them through GET /tasks/:id/loop-metrics (TaskLoopMetrics).
-  | 'loop-metrics';
+  | 'loop-metrics'
+  // Column auto-retry (api/src/services/workflow/columnAutoRetry.ts): the column's
+  // flow was re-run automatically (`retry` = its 1-based number), or re-run with
+  // the column's escalation instruction.
+  | 'auto_retry'
+  | 'auto_retry_escalation';
 
 /**
  * One git commit linked to a task, as pushed into task.commits.

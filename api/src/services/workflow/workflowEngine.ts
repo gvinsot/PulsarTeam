@@ -41,6 +41,14 @@ import { executeAction } from './actionExecutor.js';
 import type { ActionContext, ActionResult } from './actionExecutor.js';
 import { refreshClaimedAgents } from './runClaims.js';
 import {
+  autoRetryForColumn,
+  escalationInstructionsFor,
+  nextColumnTimer,
+  planAutoRetry,
+  withEscalationInstructions,
+} from './columnAutoRetry.js';
+import type { AutoRetryKind } from './columnAutoRetry.js';
+import {
   recoverPersistedCommitRun,
   sweepOrphanCommitRuns,
 } from '../agentManager/tools/gitReconcile.js';
@@ -307,8 +315,13 @@ export async function processColumnEntry(
       );
 
       const startIdx = resuming && resume ? resume.completedActionIdx + 1 : 0;
+      // Column auto-retry: once escalated, every run_agent of this column also
+      // gets the column's escalation instruction (workflow/columnAutoRetry.ts).
       const chainResult = await _executeActionChain(
-        actions,
+        withEscalationInstructions(
+          actions,
+          escalationInstructionsFor(workflow, originalStatus, current.columnTimer)
+        ),
         current,
         { agentManager, io, ownerId, workflow, originalStatus, onRunClaimed },
         { transitionIdx: ti, startIdx }
@@ -558,6 +571,10 @@ function _recheckTask(
   }
 
   const wf = boardWorkflowMap.get(task.boardId) || null;
+
+  // Column auto-retry: re-run the column's flow from its entry when it is due.
+  if (_maybeAutoRetry(task, agentId, wf, agentManager)) return;
+
   const columnTransitions = getMatchingTransitions(wf, task.status);
   const resume = _resumePointFor(task, task.status);
 
@@ -658,7 +675,10 @@ function _recheckTask(
     _dispatchUnderLock(task.id, onRunClaimed => {
       ran = true;
       return _executeActionChain(
-        transition.actions || [],
+        withEscalationInstructions(
+          transition.actions || [],
+          escalationInstructionsFor(wf, task.status, task.columnTimer)
+        ),
         { ...task, agentId },
         {
           agentManager,
@@ -686,6 +706,81 @@ function _recheckTask(
 
     return; // only process the first matching transition per task
   }
+}
+
+/**
+ * Fire the column's automatic re-run when its config says one is due (see
+ * workflow/columnAutoRetry.ts). SYNCHRONOUS like its caller: the work runs in a
+ * detached promise under the cross-replica lock, where the FRESH row is read and
+ * the plan recomputed — a sibling replica that fired it meanwhile has already
+ * advanced the timer, so the re-run happens once.
+ *
+ * Returns true when a re-run was dispatched (the caller skips the rest of the
+ * tick for this task).
+ */
+function _maybeAutoRetry(
+  task: Task,
+  agentId: string | null,
+  wf: WorkflowConfig | null,
+  agentManager: AgentManager
+): boolean {
+  const config = autoRetryForColumn(wf, task.status);
+  const planState = (row: Task) => ({
+    columnEnteredAt: row.columnEnteredAt,
+    updatedAt: row.updatedAt,
+    columnTimer: row.columnTimer,
+    pendingOnEnter: row._pendingOnEnter === row.status,
+  });
+  if (!planAutoRetry(config, planState(task))) return false;
+  if (_processingTasks.has(task.id)) return false;
+
+  const lockKey = `${agentId}:${task.id}`;
+  if (!agentManager._conditionProcessing) agentManager._conditionProcessing = new Map();
+  if (agentManager._conditionProcessing.has(lockKey)) return false;
+  agentManager._conditionProcessing.set(lockKey, Date.now());
+
+  const status = task.status;
+  _dispatchUnderLock(task.id, async onRunClaimed => {
+    const fresh = await getTaskById(task.id);
+    if (!fresh || fresh.status !== status || fresh.actionRunning || isTaskRunning(task.id)) return;
+    if (fresh.isManual || needsApproval(fresh) || fresh.executionStatus === 'stopped') return;
+    if (fresh.executionStatus === 'watching') return;
+    const kind: AutoRetryKind | null = planAutoRetry(config, planState(fresh));
+    if (!kind) return;
+    const timer = nextColumnTimer(fresh.columnTimer, kind);
+    // The re-run starts the column's flow from its entry: drop the resume point.
+    const updated = await updateTaskFields(
+      task.id,
+      {
+        columnTimer: timer,
+        pendingOnEnter: null,
+        completedActionIdx: null,
+        resumeTransitionIdx: null,
+        historyAppend: [
+          {
+            status,
+            at: timer.lastRetryAt,
+            by: 'workflow',
+            type: kind === 'escalate' ? 'auto_retry_escalation' : 'auto_retry',
+            ...(kind === 'retry' ? { retry: timer.retries } : {}),
+          },
+        ],
+      },
+      { expect: { status } }
+    );
+    if (!updated) return;
+    console.log(
+      `[WorkflowEngine] Column auto-${kind === 'escalate' ? 'retry escalation' : `retry #${timer.retries}`} for task="${task.id}" in status="${status}"`
+    );
+    emitTaskUpdated(agentManager, { ...updated }, { emitAgent: false });
+    await processColumnEntry({ ...updated, agentId: updated.agentId ?? agentId }, agentManager, {
+      by: kind === 'escalate' ? 'auto-retry-escalation' : 'auto-retry',
+      onRunClaimed,
+    });
+  })
+    .catch(err => console.error(`[WorkflowEngine] auto-retry error:`, errorMessage(err)))
+    .finally(() => agentManager._conditionProcessing?.delete(lockKey));
+  return true;
 }
 
 // ── Stale run-claim healer ──────────────────────────────────────────────────

@@ -24,6 +24,8 @@ import {
 } from './taskConstants';
 import RoleSelect from './RoleSelect';
 import DecisionActionEditor from './DecisionActionEditor';
+import ColumnAutoRetryEditor from './ColumnAutoRetryEditor';
+import { autoRetryMissingInstructions, cleanAutoRetry } from './columnAutoRetry';
 import { validDecisionAction } from './decisionAction';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { errorMessage } from '../../utils/errors';
@@ -274,10 +276,20 @@ export default function WorkflowEditor({
       setSaveError(translate('decision.invalidAction'));
       return;
     }
+    if (cols.some(col => autoRetryMissingInstructions(col.autoRetry))) {
+      setSaveError(translate('autoRetry.needsInstructions'));
+      return;
+    }
+    // An all-off auto-retry config is dropped rather than saved as an empty object.
+    const columns = cols.map(col => {
+      const { autoRetry, ...rest } = col;
+      const cleaned = cleanAutoRetry(autoRetry);
+      return cleaned ? { ...rest, autoRetry: cleaned } : rest;
+    });
     setSaving(true);
     setSaveError(null);
     try {
-      await onSave({ columns: cols, transitions, version: workflow.version });
+      await onSave({ columns, transitions, version: workflow.version });
       onClose();
     } catch (err) {
       setSaveError(errorMessage(err) || 'Failed to save workflow');
@@ -511,6 +523,11 @@ export default function WorkflowEditor({
                         <Layers className="w-3 h-3" />
                       </label>
                     </div>
+                    <ColumnAutoRetryEditor
+                      value={col.autoRetry}
+                      onChange={autoRetry => updateCol(idx, { autoRetry })}
+                      hasFlow={colTransitions.length > 0}
+                    />
                   </div>
 
                   {/* Transitions for this column */}

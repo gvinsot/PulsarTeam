@@ -2,6 +2,40 @@ export type Lang = 'en' | 'fr';
 
 const translations = {
   'decision.choice': { en: 'Model choice', fr: 'Choix du modèle' },
+  'autoRetry.title': { en: 'Auto-retry', fr: 'Relance automatique' },
+  'autoRetry.help': {
+    en: 'While a task stays idle in this column, re-run the column flow from its entry.',
+    fr: 'Tant qu’une tâche reste inactive dans cette colonne, relancer le flux de la colonne depuis son entrée.',
+  },
+  'autoRetry.every': { en: 'Re-run every (min)', fr: 'Relancer toutes les (min)' },
+  'autoRetry.maxRetries': { en: 'Max re-runs (0 = no limit)', fr: 'Relances max (0 = illimité)' },
+  'autoRetry.escalateAfter': {
+    en: 'Extra instruction after (min in column)',
+    fr: 'Instruction supplémentaire après (min dans la colonne)',
+  },
+  'autoRetry.instructions': {
+    en: 'Instruction added to the agents of this column from then on…',
+    fr: 'Instruction ajoutée aux agents de cette colonne à partir de ce moment…',
+  },
+  'autoRetry.needsInstructions': {
+    en: 'Enter the instruction to send after this delay.',
+    fr: 'Saisir l’instruction à envoyer après ce délai.',
+  },
+  'autoRetry.needsTransition': {
+    en: 'Add an on-enter or conditional action to this column: that is the flow that is re-run.',
+    fr: 'Ajouter une action à l’entrée ou conditionnelle à cette colonne : c’est le flux qui est relancé.',
+  },
+  'autoRetry.summary': { en: 'every {n} min', fr: 'toutes les {n} min' },
+  'autoRetry.summaryEscalation': {
+    en: 'instruction after {n} min',
+    fr: 'instruction après {n} min',
+  },
+  'autoRetry.off': { en: 'off', fr: 'désactivée' },
+  'autoRetry.historyRetry': { en: 'auto-retry', fr: 'relance auto' },
+  'autoRetry.historyEscalation': {
+    en: 'auto-retry with instruction',
+    fr: 'relance auto avec instruction',
+  },
   'decision.fallbackUsed': { en: 'low confidence', fr: 'confiance insuffisante' },
   'decision.provider': {
     en: 'Decision model (Jev / System One)',

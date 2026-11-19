@@ -9,6 +9,7 @@ import {
   Pause,
   ArrowRight,
   ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { MODE_LABELS, timeAgo, formatDate } from './taskConstants';
 import type { TaskCommit, TaskHistoryEntry } from '../../types';
@@ -247,6 +248,18 @@ export default function TaskTimeline({
                           <span className="text-dark-500 truncate">
                             by {displayName(item.h.by)}
                           </span>
+                        )}
+                      </>
+                    ) : item.h.type === 'auto_retry' || item.h.type === 'auto_retry_escalation' ? (
+                      <>
+                        <RefreshCw className="w-2.5 h-2.5 text-emerald-400 flex-shrink-0" />
+                        <span className="text-emerald-300 font-medium">
+                          {item.h.type === 'auto_retry_escalation'
+                            ? t('autoRetry.historyEscalation')
+                            : t('autoRetry.historyRetry')}
+                        </span>
+                        {item.h.status && (
+                          <span className="text-dark-500 truncate">in {item.h.status}</span>
                         )}
                       </>
                     ) : item.h.type === 'stopped' ? (

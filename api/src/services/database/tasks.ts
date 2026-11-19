@@ -4,6 +4,7 @@ import type { normalizeSecondaryRepos } from '../taskRepos.js';
 import type { SecurityFlag, TaskTrustLevel } from '../../lib/taskTrust.js';
 import { normalizeComments, type TaskComment } from '../../lib/taskComments.js';
 import type { MaterializedAttachment } from '../../lib/taskAttachments.js';
+import type { ColumnTimer } from '../workflow/columnAutoRetry.js';
 
 // SELECT clause + joins shared by every task read query.
 // Hydrates `project` (name, derived from board.project_id) so `rowToTask`
@@ -48,6 +49,9 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
   actionHeartbeatAt: 'action_heartbeat_at',
   errorFromStatus: 'error_from_status',
   pendingOnEnter: 'pending_on_enter',
+  // Auto-retry timer of the current column (workflow/columnAutoRetry.ts); reset
+  // by a DB trigger on every status change, together with column_entered_at.
+  columnTimer: 'column_timer',
   // Index (among the column's matching transitions) of the transition a
   // deferred chain resumes in — completedActionIdx is relative to it.
   resumeTransitionIdx: 'resume_transition_idx',
@@ -211,6 +215,10 @@ export interface TaskRow {
   action_heartbeat_at: Date | null;
   pending_on_enter: string | null;
   resume_transition_idx: number | null;
+  /** Set by a DB trigger whenever `status` changes (column auto-retry). */
+  column_entered_at?: Date | null;
+  /** workflow/columnAutoRetry.ts ColumnTimer; NULL after every move. */
+  column_timer?: ColumnTimer | null;
   commit_run: TaskCommitRunRecord | null;
   is_manual: boolean | null;
   /** lib/taskTrust.ts: NULL (tenant), 'untrusted' (external, unapproved), 'approved'. */
@@ -298,6 +306,8 @@ export function rowToTask(row: TaskRow) {
     _pendingOnEnter: row.pending_on_enter || undefined,
     resumeTransitionIdx: row.resume_transition_idx != null ? row.resume_transition_idx : undefined,
     commitRun: row.commit_run || undefined,
+    columnEnteredAt: toIso(row.column_entered_at ?? null),
+    columnTimer: row.column_timer || null,
     actionRunning: row.action_running || false,
     actionRunningAgentId: row.action_running_agent_id || undefined,
     actionRunningMode: row.action_running_mode || undefined,

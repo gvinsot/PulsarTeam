@@ -1,13 +1,35 @@
 import { z } from 'zod';
 import { decisionActionSchema } from './decision.js';
+import { AUTO_RETRY_LIMITS } from '../services/workflow/columnAutoRetry.js';
 
 const PERMISSIONS = ['read', 'edit', 'admin'] as const;
+
+// Column auto-retry (services/workflow/columnAutoRetry.ts). Each part is off when
+// its number is absent / null / 0; escalation also needs a non-empty instruction.
+const optionalMinutes = (max: number) => z.number().int().min(0).max(max).nullable().optional();
+const columnAutoRetrySchema = z
+  .object({
+    intervalMinutes: optionalMinutes(AUTO_RETRY_LIMITS.MAX_INTERVAL_MINUTES),
+    maxRetries: z.number().int().min(0).max(AUTO_RETRY_LIMITS.MAX_RETRIES).nullable().optional(),
+    escalateAfterMinutes: optionalMinutes(AUTO_RETRY_LIMITS.MAX_ESCALATE_AFTER_MINUTES),
+    escalationInstructions: z
+      .string()
+      .max(AUTO_RETRY_LIMITS.MAX_INSTRUCTIONS_LENGTH)
+      .nullable()
+      .optional(),
+  })
+  .strict()
+  .refine(v => !v.escalateAfterMinutes || !!v.escalationInstructions?.trim(), {
+    message: 'An escalation delay needs an instruction',
+    path: ['escalationInstructions'],
+  });
 
 const workflowColumnSchema = z
   .object({
     id: z.string().min(1).max(100),
     label: z.string().min(1).max(100),
     color: z.string().max(50).optional(),
+    autoRetry: columnAutoRetrySchema.nullable().optional(),
   })
   .passthrough();
 
