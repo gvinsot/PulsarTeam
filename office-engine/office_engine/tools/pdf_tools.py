@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF (the bare `fitz` alias is deprecated)
 from pypdf import PdfReader, PdfWriter
 
 from ..util import ToolError, check_size, default_output, resolve_output, resolve_path

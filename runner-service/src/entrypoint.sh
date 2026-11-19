@@ -28,15 +28,39 @@ umask 0077
 # then governs. Failures are logged, never fatal (`set -e` is suspended).
 if [ -d /run/secrets ]; then
     set +e
-    chmod 0700 /run/secrets 2>/dev/null || echo "WARNING: could not chmod /run/secrets (read-only mount?)"
+    # Swarm mounts the secret FILES on a read-only tmpfs, so their chmod
+    # always fails there, while the directory chmod succeeds. A 0700 dir
+    # already denies non-root UIDs any path to the files, so a file chmod
+    # failure is only a real exposure when the directory lock failed too.
+    # Warn in that case only. (QA logged one bogus WARNING per secret on every
+    # start before this.)
+    _dir_locked=0
+    if chmod 0700 /run/secrets 2>/dev/null; then
+        _dir_locked=1
+    else
+        echo "WARNING: could not chmod /run/secrets (read-only mount?)"
+    fi
+    _files_ro=0
     for _secret in /run/secrets/*; do
         [ -f "$_secret" ] || continue
         chown root:root "$_secret" 2>/dev/null
-        chmod 0400 "$_secret" 2>/dev/null || echo "WARNING: could not chmod $_secret"
+        if ! chmod 0400 "$_secret" 2>/dev/null; then
+            if [ "$_dir_locked" = 1 ]; then
+                _files_ro=$((_files_ro + 1))
+            else
+                echo "WARNING: could not chmod $_secret and /run/secrets is not locked: readable by agent UIDs"
+            fi
+        fi
     done
-    unset _secret
+    if [ "$_dir_locked" = 1 ]; then
+        if [ "$_files_ro" -gt 0 ]; then
+            echo "Secrets: /run/secrets locked to root-only (0700 dir; $_files_ro read-only secret file(s) left as mounted)"
+        else
+            echo "Secrets: /run/secrets locked to root-only (0700 dir / 0400 files)"
+        fi
+    fi
+    unset _secret _dir_locked _files_ro
     set -e
-    echo "Secrets: /run/secrets locked to root-only (0700 dir / 0400 files)"
 fi
 
 # ─── Filesystem prep (server runs as root, agents get dedicated UIDs at runtime) ─

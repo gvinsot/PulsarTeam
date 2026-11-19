@@ -16,7 +16,7 @@ from urllib.parse import quote_plus, urlparse
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from crawl4ai import (
     AsyncWebCrawler,
@@ -340,12 +340,19 @@ class GetLinksRequest(BaseModel):
 
 
 class ExtractRequest(BaseModel):
+    # The wire name stays ``schema_json`` (api/src/services/browserMcp.ts sends
+    # it), but the attribute is renamed: a field literally called
+    # ``schema_json`` shadows the deprecated ``BaseModel.schema_json()`` and
+    # pydantic emits a UserWarning at every service start.
+    model_config = ConfigDict(populate_by_name=True)
+
     url: str = Field(description="The URL to extract data from.")
     instruction: str = Field(
         description="Natural-language description of what to extract."
     )
-    schema_json: str = Field(
+    extraction_schema: str = Field(
         default="",
+        alias="schema_json",
         description="Optional JSON-schema string for structured output. "
         "When provided, the LLM returns JSON matching this schema.",
     )
@@ -469,9 +476,9 @@ async def extract(req: ExtractRequest):
         "extra_args": {"temperature": 0.0},
     }
 
-    if req.schema_json:
+    if req.extraction_schema:
         try:
-            extraction_kwargs["schema"] = json.loads(req.schema_json)
+            extraction_kwargs["schema"] = json.loads(req.extraction_schema)
         except json.JSONDecodeError as e:
             return {"error": f"invalid schema_json: {e}"}
         extraction_kwargs["extraction_type"] = "schema"

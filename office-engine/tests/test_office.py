@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF (the bare `fitz` alias is deprecated)
 import pytest
 
 from office_engine.tools import docx_tools, pdf_tools, pptx_tools, xlsx_tools
