@@ -188,6 +188,34 @@ function summarizeSearchResults(results: RenderedSearchHit[]) {
     .join('\n');
 }
 
+/** The parts of a CodeIndexService.searchFulltext result rendered as text. */
+interface RenderedFulltext {
+  totalMatches: number;
+  filesMatched: number;
+  filesSearched: number;
+  truncated: boolean;
+  unreadableFiles: string[];
+  matches: {
+    filePath: string;
+    line: number;
+    preview: string;
+    enclosingSymbol: { qualifiedName: string } | null;
+  }[];
+}
+
+function summarizeFulltext(result: RenderedFulltext) {
+  const header = `${result.totalMatches} matching line(s) in ${result.filesMatched} of ${result.filesSearched} file(s)${result.truncated ? ` (showing ${result.matches.length})` : ''}`;
+  const unreadable = result.unreadableFiles.length
+    ? `\n${result.unreadableFiles.length} indexed file(s) could not be read (deleted? run sync)`
+    : '';
+  if (!result.matches.length) return `${header}${unreadable}`;
+  const lines = result.matches.map(match => {
+    const where = match.enclosingSymbol ? ` [in ${match.enclosingSymbol.qualifiedName}]` : '';
+    return `${match.filePath}:${match.line}${where}: ${match.preview}`;
+  });
+  return `${header}${unreadable}\n${lines.join('\n')}`;
+}
+
 function listChangedPaths(changed: IndexFreshness['changedFiles'], truncated: boolean) {
   const parts = (['modified', 'added', 'deleted'] as const)
     .filter(key => changed[key].length > 0)
@@ -553,6 +581,13 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
     }
   );
 
+  const pathPrefixSchema = z
+    .string()
+    .optional()
+    .describe(
+      'Only search files under this path: a plain prefix ("api/src/") or a glob ("packages/*/src", "**/*.test.ts"). A glob also matches the files under a matching directory.'
+    );
+
   server.tool(
     'search_symbols',
     'Perform lexical symbol search by name/signature/summary. The response starts with the index freshness (age, git commit, files changed since indexing); when it says STALE, run sync first.',
@@ -564,11 +599,12 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
         .optional()
         .describe('Optional symbol kind filter'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
+      pathPrefix: pathPrefixSchema,
     },
-    async ({ repoId: repoIdArg, repoName, query, kind, topK = 10 }) => {
+    async ({ repoId: repoIdArg, repoName, query, kind, topK = 10, pathPrefix }) => {
       const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const [results, freshness] = await Promise.all([
-        codeIndexService.searchSymbols(repoId, { query, kind, topK }),
+        codeIndexService.searchSymbols(repoId, { query, kind, topK, pathPrefix }),
         codeIndexService.getFreshness(repoId),
       ]);
       return {
@@ -589,11 +625,12 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
       ...REPO_SELECTOR,
       query: z.string().describe('Semantic search query'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
+      pathPrefix: pathPrefixSchema,
     },
-    async ({ repoId: repoIdArg, repoName, query, topK = 10 }) => {
+    async ({ repoId: repoIdArg, repoName, query, topK = 10, pathPrefix }) => {
       const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const [results, freshness] = await Promise.all([
-        codeIndexService.searchSemantic(repoId, { query, topK }),
+        codeIndexService.searchSemantic(repoId, { query, topK, pathPrefix }),
         codeIndexService.getFreshness(repoId),
       ]);
       return {
@@ -609,16 +646,17 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
 
   server.tool(
     'search_text',
-    'Perform exact text-style search over indexed symbol bodies and summaries. The response starts with the index freshness (age, git commit, files changed since indexing); when it says STALE, run sync first.',
+    'Perform exact text-style search over indexed symbol bodies and summaries (symbols only, source capped at 16 KB each; use search_fulltext for literals, error messages or code outside symbols). The response starts with the index freshness (age, git commit, files changed since indexing); when it says STALE, run sync first.',
     {
       ...REPO_SELECTOR,
       query: z.string().describe('Text search query'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
+      pathPrefix: pathPrefixSchema,
     },
-    async ({ repoId: repoIdArg, repoName, query, topK = 10 }) => {
+    async ({ repoId: repoIdArg, repoName, query, topK = 10, pathPrefix }) => {
       const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
       const [results, freshness] = await Promise.all([
-        codeIndexService.searchText(repoId, { query, topK }),
+        codeIndexService.searchText(repoId, { query, topK, pathPrefix }),
         codeIndexService.getFreshness(repoId),
       ]);
       return {
@@ -626,6 +664,101 @@ export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
           {
             type: 'text',
             text: `${summarizeFreshness(freshness)}\n\n${summarizeSearchResults(results)}\n\nJSON:\n${formatJson({ freshness, results })}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'search_fulltext',
+    'Grep-like full-text search over the raw content of every indexed file, read live from disk: string literals, error messages, variable names, comments, config, code outside symbols. Literal by default, or a JavaScript regex with regex: true; matches are per line. Each hit has file, line, column, the line preview and the enclosing symbol. The response starts with the index freshness; files added since indexing are not searched until sync.',
+    {
+      ...REPO_SELECTOR,
+      query: z
+        .string()
+        .min(1)
+        .max(500)
+        .describe('Text to find (literal unless regex is true); matched within one line'),
+      regex: z
+        .boolean()
+        .optional()
+        .describe('Treat query as a JavaScript regular expression (default false)'),
+      caseSensitive: z.boolean().optional().describe('Case-sensitive match (default false)'),
+      wholeWord: z
+        .boolean()
+        .optional()
+        .describe('Only match whole identifiers/words (default false)'),
+      pathPrefix: pathPrefixSchema,
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe(
+          'Maximum number of matching lines returned (default 50); totalMatches stays exact'
+        ),
+      maxMatchesPerFile: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe('Maximum matching lines returned per file (default 20)'),
+      contextLines: z
+        .number()
+        .int()
+        .min(0)
+        .max(10)
+        .optional()
+        .describe('Lines of context before/after each match (default 0)'),
+    },
+    async ({ repoId: repoIdArg, repoName, ...options }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const [result, freshness] = await Promise.all([
+        codeIndexService.searchFulltext(repoId, options),
+        codeIndexService.getFreshness(repoId),
+      ]);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeFreshness(freshness)}\n\n${summarizeFulltext(result)}\n\nJSON:\n${formatJson({ freshness, ...result, results: result.matches })}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    'find_files',
+    'Find indexed files by name or glob. A plain string is a case-insensitive substring of the path ("authService"); a glob without "/" is matched against the file name ("*.test.ts", "use*.tsx"); a glob with "/" against the whole path ("api/**/routes/*.ts"). Exact file-name matches come first.',
+    {
+      ...REPO_SELECTOR,
+      pattern: z.string().min(1).describe('File name, path fragment or glob'),
+      pathPrefix: pathPrefixSchema,
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe('Maximum number of files returned (default 50)'),
+    },
+    async ({ repoId: repoIdArg, repoName, pattern, pathPrefix, limit }) => {
+      const repoId = await codeIndexService.resolveRepoId({ repoId: repoIdArg, repoName });
+      const result = await codeIndexService.findFiles(repoId, { pattern, pathPrefix, limit });
+      const list = result.files.length
+        ? result.files
+            .map(file => `- ${file.path} (${file.language}, ${file.symbolCount} symbols)`)
+            .join('\n')
+        : 'No indexed file matches.';
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${result.total} file(s) match "${pattern}"${result.truncated ? ` (showing ${result.files.length})` : ''}\n${list}\n\nJSON:\n${formatJson(result)}`,
           },
         ],
       };

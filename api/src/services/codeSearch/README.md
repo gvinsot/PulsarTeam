@@ -10,6 +10,7 @@ Built-in MCP server (`ALL /api/code-index/mcp`, defined in `../codeIndexMcp.ts`)
 | `referenceExtractor.ts` | Imports and identifier occurrences per file — the reference graph |
 | `embedding.ts`          | Hashed embeddings for semantic search                             |
 | `vectorStore.ts`        | ZVEC vector store with an in-memory fallback                      |
+| `pathFilter.ts`         | `pathPrefix` filters and `find_files` globs                       |
 
 ## Tools
 
@@ -27,9 +28,11 @@ Built-in MCP server (`ALL /api/code-index/mcp`, defined in `../codeIndexMcp.ts`)
 | `get_file_outline`      | `repoId`/`repoName`, `filePath`                                                | Symbols of one file                                 |
 | `get_symbol`            | `repoId`/`repoName`, `symbolId`, `verify?`, `contextLines?`                    | Source + metadata of a symbol, optional drift check |
 | `read_file_range`       | `repoId`/`repoName`, `filePath`, `startLine`, `endLine?`                       | Lines of an indexed file, always drift-checked      |
-| `search_symbols`        | `repoId`/`repoName`, `query`, `kind?`, `topK?`                                 | Lexical search on names/signatures/summaries        |
-| `search_semantic`       | `repoId`/`repoName`, `query`, `topK?`                                          | Embedding search                                    |
-| `search_text`           | `repoId`/`repoName`, `query`, `topK?`                                          | Exact text search in symbol bodies                  |
+| `search_symbols`        | `repoId`/`repoName`, `query`, `kind?`, `topK?`, `pathPrefix?`                  | Lexical search on names/signatures/summaries        |
+| `search_semantic`       | `repoId`/`repoName`, `query`, `topK?`, `pathPrefix?`                           | Embedding search                                    |
+| `search_text`           | `repoId`/`repoName`, `query`, `topK?`, `pathPrefix?`                           | Exact text search in symbol bodies (16 KB each)     |
+| `search_fulltext`       | `repoId`/`repoName`, `query`, `regex?`, `caseSensitive?`, `wholeWord?`, …      | Grep over the raw content of every indexed file     |
+| `find_files`            | `repoId`/`repoName`, `pattern`, `pathPrefix?`, `limit?`                        | Indexed files by name, path fragment or glob        |
 | `find_references`       | `repoId`/`repoName`, `symbolId`, `limit?`, `minConfidence?`, `includeImports?` | Every place referencing a symbol                    |
 | `find_callers`          | `repoId`/`repoName`, `symbolId`, `limit?`, `minConfidence?`                    | The symbols calling a function/method/constructor   |
 | `update_files`          | `repoId`/`repoName`, `files[{ path, content? }]`                               | Incremental re-index (symbols, vectors and graph)   |
@@ -45,6 +48,47 @@ current project is indexed before searching.
 
 Symbol IDs look like `src/auth.js::AuthService.login#method`; get them from
 `get_file_outline` or the `search_*` tools.
+
+## Path filters, full-text search and finding files
+
+**`pathPrefix`** (on `search_symbols`, `search_semantic`, `search_text`, `search_fulltext`,
+`find_files`) restricts results to some files of the repo — handy in a monorepo:
+
+- a plain string is a path prefix: `"api/src/"`;
+- a string with `*`, `?`, `[…]` or `{a,b}` is a glob: `**` spans directories, `*` and `?` stay
+  within one segment. A glob matches the whole path **or a leading directory** of it, so
+  `"packages/*/src"` keeps everything under each package's `src`, `"**/*.test.ts"` the tests,
+  `"{api,frontend}/src"` both apps.
+
+`search_semantic` over-fetches from the vector store in proportion to what the filter drops,
+then filters, so a narrow filter still returns up to `topK` hits.
+
+**`search_fulltext`** is a grep over the raw content of every indexed file, read live from disk.
+Unlike `search_text` (symbol bodies only, each capped at 16 KB), it finds string literals, error
+messages, variable names, comments and module-level code anywhere in a file.
+
+| Argument            | Default | Meaning                                                           |
+| ------------------- | ------- | ----------------------------------------------------------------- |
+| `query`             | —       | Literal text (≤ 500 chars), matched within one line               |
+| `regex`             | `false` | Treat `query` as a JavaScript regular expression                  |
+| `caseSensitive`     | `false` |                                                                   |
+| `wholeWord`         | `false` | Match only whole identifiers (`token` skips `verifyToken`)        |
+| `pathPrefix`        | —       | See above                                                         |
+| `limit`             | 50      | Matching lines returned (max 500); `totalMatches` stays exact     |
+| `maxMatchesPerFile` | 20      | Matching lines returned per file (`perFileTruncated` when capped) |
+| `contextLines`      | 0       | Lines of context (`before` / `after`, max 10)                     |
+
+Each match has `filePath`, `line`, `column` (1-based), the matched text, a `preview` of the line
+(long lines clipped to 300 chars around the match) and the innermost `enclosingSymbol` (null at
+module level). Only files in the index are searched — files added since indexing need a `sync`
+first; indexed files deleted from disk are listed in `unreadableFiles`. The response starts with
+the index freshness, like the other searches.
+
+**`find_files(pattern)`** looks a file up in the index by name: a plain string is a
+case-insensitive substring of the path (`"authService"`), a glob without `/` is matched against
+the file name (`"*.test.ts"`, `"use*.tsx"`), a glob with `/` against the whole path
+(`"api/**/routes/*.ts"`). Exact file-name matches come first, then shallower paths. Each file has
+its `language`, `size` and `symbolCount`; use `get_file_outline` / `read_file_range` next.
 
 ## Freshness and sync
 

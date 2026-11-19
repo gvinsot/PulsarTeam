@@ -22,6 +22,7 @@ import {
   type ImportRecord,
 } from './codeSearch/referenceExtractor.js';
 import { errorMessage } from '../lib/errors.js';
+import { compileFilePattern, compilePathFilter } from './codeSearch/pathFilter.js';
 
 function parsePositiveInt(rawValue: string | undefined, fallback: number): number {
   if (rawValue == null || rawValue === '') return fallback;
@@ -278,6 +279,102 @@ function toSymbolRef(symbol: SymbolRecord): SymbolRef {
     filePath: symbol.filePath,
     startLine: symbol.startLine,
   };
+}
+
+/** findFiles / searchFulltext defaults and caps (the MCP schemas enforce the same caps). */
+const DEFAULT_FIND_FILES_LIMIT = 50;
+const DEFAULT_FULLTEXT_LIMIT = 50;
+const DEFAULT_FULLTEXT_PER_FILE = 20;
+const MAX_FULLTEXT_QUERY_LENGTH = 500;
+/** Longer lines are cut around the match in previews (minified bundles, data blobs). */
+const MAX_PREVIEW_LINE_LENGTH = 300;
+
+interface FulltextSearchOptions {
+  query: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  pathPrefix?: string | null;
+  limit?: number;
+  contextLines?: number;
+  maxMatchesPerFile?: number;
+}
+
+/** One line matching a searchFulltext query. Lines and columns are 1-based. */
+interface FulltextMatch {
+  filePath: string;
+  line: number;
+  column: number;
+  /** The matched text itself (useful with regex queries). */
+  match: string;
+  preview: string;
+  before?: string[];
+  after?: string[];
+  /** Innermost indexed symbol containing the line; null at module level. */
+  enclosingSymbol: SymbolRef | null;
+}
+
+interface FulltextFileResult {
+  filePath: string;
+  unreadable: boolean;
+  /** Matching lines in the file, including those past maxMatchesPerFile. */
+  count: number;
+  matches: FulltextMatch[];
+}
+
+function clipLine(line: string, column = 0): string {
+  if (line.length <= MAX_PREVIEW_LINE_LENGTH) return line;
+  const start = Math.max(0, Math.min(column - 100, line.length - MAX_PREVIEW_LINE_LENGTH));
+  const clipped = line.slice(start, start + MAX_PREVIEW_LINE_LENGTH);
+  return `${start > 0 ? '…' : ''}${clipped}${start + MAX_PREVIEW_LINE_LENGTH < line.length ? '…' : ''}`;
+}
+
+function innermostSymbol(symbols: SymbolRecord[], line: number): SymbolRef | null {
+  let best: SymbolRecord | null = null;
+  for (const symbol of symbols) {
+    if (symbol.startLine > line || symbol.endLine < line) continue;
+    if (!best || symbol.endLine - symbol.startLine < best.endLine - best.startLine) best = symbol;
+  }
+  return best ? toSymbolRef(best) : null;
+}
+
+/** Scan one file's content line by line; `matcher` must carry the `g` flag. */
+function scanFileForMatches(
+  file: FileRecord,
+  content: string | null,
+  matcher: RegExp,
+  {
+    contextLines,
+    maxMatchesPerFile,
+    symbols,
+  }: { contextLines: number; maxMatchesPerFile: number; symbols: SymbolRecord[] }
+): FulltextFileResult {
+  if (content === null) return { filePath: file.path, unreadable: true, count: 0, matches: [] };
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const matches: FulltextMatch[] = [];
+  let count = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    matcher.lastIndex = 0;
+    const found = matcher.exec(line);
+    if (!found) continue;
+    count += 1;
+    if (matches.length >= maxMatchesPerFile) continue;
+    const hit: FulltextMatch = {
+      filePath: file.path,
+      line: index + 1,
+      column: found.index + 1,
+      match: found[0].slice(0, MAX_PREVIEW_LINE_LENGTH),
+      preview: clipLine(line, found.index).trim(),
+      enclosingSymbol: innermostSymbol(symbols, index + 1),
+    };
+    if (contextLines > 0) {
+      hit.before = lines.slice(Math.max(0, index - contextLines), index).map(l => clipLine(l));
+      hit.after = lines.slice(index + 1, index + 1 + contextLines).map(l => clipLine(l));
+    }
+    matches.push(hit);
+  }
+  return { filePath: file.path, unreadable: false, count, matches };
 }
 
 /** One file to re-index incrementally; `content` short-circuits the disk read. */
@@ -1174,14 +1271,21 @@ export class CodeIndexService {
 
   async searchSymbols(
     repoId: string,
-    { query, kind = null, topK = 10 }: { query: string; kind?: string | null; topK?: number } = {
+    {
+      query,
+      kind = null,
+      topK = 10,
+      pathPrefix = null,
+    }: { query: string; kind?: string | null; topK?: number; pathPrefix?: string | null } = {
       query: '',
     }
   ) {
     const repoIndex = await this.loadIndex(repoId);
+    const inPath = compilePathFilter(pathPrefix);
     const scored: ScoredSymbol[] = [];
     for (const symbol of repoIndex.symbols) {
       if (kind && symbol.kind !== kind) continue;
+      if (inPath && !inPath(symbol.filePath)) continue;
       const score = scoreTextMatch(query, symbol);
       if (score > 0) scored.push({ symbol, score });
     }
@@ -1196,14 +1300,20 @@ export class CodeIndexService {
 
   async searchText(
     repoId: string,
-    { query, topK = 10 }: { query: string; topK?: number } = { query: '' }
+    {
+      query,
+      topK = 10,
+      pathPrefix = null,
+    }: { query: string; topK?: number; pathPrefix?: string | null } = { query: '' }
   ) {
     const repoIndex = await this.loadIndex(repoId);
     const normalizedQuery = normalizeText(query);
     if (!normalizedQuery) return [];
+    const inPath = compilePathFilter(pathPrefix);
 
     const scored: ScoredSymbol[] = [];
     for (const symbol of repoIndex.symbols) {
+      if (inPath && !inPath(symbol.filePath)) continue;
       const haystack = normalizeText(`${symbol.signature}\n${symbol.summary}\n${symbol.source}`);
       const occurrences = haystack.split(normalizedQuery).length - 1;
       if (occurrences > 0) {
@@ -1216,6 +1326,154 @@ export class CodeIndexService {
     return scored
       .slice(0, topK)
       .map(({ symbol, score }) => toSearchHit(symbol, query, { score }, { withDoc: false }));
+  }
+
+  /**
+   * Find indexed files by name or glob (see compileFilePattern): a plain string is a
+   * case-insensitive substring of the path, a glob without `/` is matched against
+   * the file name, a glob with `/` against the whole path. Exact file-name matches
+   * come first, then shorter (shallower) paths.
+   */
+  async findFiles(
+    repoId: string,
+    {
+      pattern,
+      pathPrefix = null,
+      limit = DEFAULT_FIND_FILES_LIMIT,
+    }: { pattern: string; pathPrefix?: string | null; limit?: number }
+  ) {
+    const repoIndex = await this.loadIndex(repoId);
+    const matches = compileFilePattern(pattern);
+    const inPath = compilePathFilter(pathPrefix);
+    const wanted = pattern.trim().toLowerCase();
+    const baseName = (filePath: string) => filePath.slice(filePath.lastIndexOf('/') + 1);
+
+    const hits = repoIndex.files.filter(
+      file => (!inPath || inPath(file.path)) && matches(file.path)
+    );
+    hits.sort((left, right) => {
+      const exactLeft = baseName(left.path).toLowerCase() === wanted ? 0 : 1;
+      const exactRight = baseName(right.path).toLowerCase() === wanted ? 0 : 1;
+      return (
+        exactLeft - exactRight ||
+        left.path.split('/').length - right.path.split('/').length ||
+        left.path.localeCompare(right.path)
+      );
+    });
+
+    return {
+      pattern,
+      pathPrefix,
+      total: hits.length,
+      truncated: hits.length > limit,
+      files: hits.slice(0, limit).map(file => ({
+        path: file.path,
+        language: file.language,
+        size: file.size,
+        symbolCount: file.symbolIds.length,
+      })),
+    };
+  }
+
+  /**
+   * Full-text search over the raw content of every indexed file, read live from
+   * disk — not limited to symbol bodies nor to their stored 16 KB source, so it
+   * finds string literals, error messages, comments, config and module-level code.
+   * Matches are per line (a query cannot span lines). `regex: true` treats the
+   * query as a JavaScript regular expression; otherwise it is a literal string.
+   * Every match is counted (`totalMatches`), only the first `limit` are returned.
+   */
+  async searchFulltext(repoId: string, options: FulltextSearchOptions) {
+    const {
+      query,
+      regex = false,
+      caseSensitive = false,
+      wholeWord = false,
+      pathPrefix = null,
+      limit = DEFAULT_FULLTEXT_LIMIT,
+      contextLines = 0,
+      maxMatchesPerFile = DEFAULT_FULLTEXT_PER_FILE,
+    } = options;
+    if (!query) throw new Error('search_fulltext: query must not be empty');
+    if (query.length > MAX_FULLTEXT_QUERY_LENGTH) {
+      throw new Error(
+        `search_fulltext: query is ${query.length} characters long; at most ${MAX_FULLTEXT_QUERY_LENGTH} are allowed`
+      );
+    }
+
+    let source = regex ? query : escapeRegExp(query);
+    if (wholeWord) source = `(?<![\\w$])(?:${source})(?![\\w$])`;
+    let matcher: RegExp;
+    try {
+      matcher = new RegExp(source, caseSensitive ? 'g' : 'gi');
+    } catch (error) {
+      throw new Error(`search_fulltext: invalid regular expression: ${errorMessage(error)}`);
+    }
+
+    const repoIndex = await this.loadIndex(repoId);
+    const inPath = compilePathFilter(pathPrefix);
+    const files = repoIndex.files.filter(file => !inPath || inPath(file.path));
+    const symbolsByFile = new Map<string, SymbolRecord[]>();
+    for (const symbol of repoIndex.symbols) {
+      const list = symbolsByFile.get(symbol.filePath);
+      if (list) list.push(symbol);
+      else symbolsByFile.set(symbol.filePath, [symbol]);
+    }
+
+    // Read in batches, but scan in index order so results are deterministic.
+    const perFile: FulltextFileResult[] = [];
+    for (let i = 0; i < files.length; i += FILE_IO_CONCURRENCY) {
+      const batch = files.slice(i, i + FILE_IO_CONCURRENCY);
+      const contents = await Promise.all(
+        batch.map(file =>
+          fs.readFile(path.resolve(repoIndex.repo.rootPath, file.path), 'utf8').catch(() => null)
+        )
+      );
+      batch.forEach((file, index) => {
+        perFile.push(
+          scanFileForMatches(file, contents[index], matcher, {
+            contextLines,
+            maxMatchesPerFile,
+            symbols: symbolsByFile.get(file.path) || [],
+          })
+        );
+      });
+    }
+
+    const matches: FulltextMatch[] = [];
+    let totalMatches = 0;
+    let filesMatched = 0;
+    let perFileTruncated = false;
+    const unreadableFiles: string[] = [];
+    for (const result of perFile) {
+      if (result.unreadable) {
+        unreadableFiles.push(result.filePath);
+        continue;
+      }
+      if (result.count === 0) continue;
+      filesMatched += 1;
+      totalMatches += result.count;
+      if (result.count > result.matches.length) perFileTruncated = true;
+      for (const match of result.matches) {
+        if (matches.length < limit) matches.push(match);
+      }
+    }
+
+    return {
+      query,
+      regex,
+      caseSensitive,
+      wholeWord,
+      pathPrefix,
+      filesSearched: files.length,
+      filesMatched,
+      totalMatches,
+      returned: matches.length,
+      truncated: matches.length < totalMatches,
+      perFileTruncated,
+      unreadableFiles,
+      matches,
+    };
   }
 
   // The in-memory vector backend loses its collections on restart while index.json
@@ -1244,21 +1502,37 @@ export class CodeIndexService {
 
   async searchSemantic(
     repoId: string,
-    { query, topK = 10 }: { query: string; topK?: number } = { query: '' }
+    {
+      query,
+      topK = 10,
+      pathPrefix = null,
+    }: { query: string; topK?: number; pathPrefix?: string | null } = { query: '' }
   ) {
     const [repoIndex, vectorStore] = await Promise.all([
       this.loadIndex(repoId),
       this.getVectorStore(),
     ]);
     await this._ensureMemoryVectors(repoId, repoIndex, vectorStore);
+    const inPath = compilePathFilter(pathPrefix);
     const queryVector = createHashedEmbedding(query, this.embeddingDimension);
-    const vectorMatches = await vectorStore.query(repoId, queryVector, topK * 3);
+    // The vector store cannot filter by path, so a path-filtered query over-fetches
+    // in proportion to how many symbols the filter drops, then filters here.
+    let fetchCount = topK * 3;
+    if (inPath) {
+      const kept = repoIndex.symbols.filter(symbol => inPath(symbol.filePath)).length;
+      if (kept === 0) return [];
+      const ratio = repoIndex.symbols.length / kept;
+      fetchCount = Math.min(repoIndex.symbols.length, Math.ceil(topK * 3 * ratio));
+    }
+    const vectorMatches = await vectorStore.query(repoId, queryVector, fetchCount);
 
     // Build symbol lookup only for matched IDs
     const matchedIds = new Set(vectorMatches.map(m => m.id));
-    const symbolById = new Map();
+    const symbolById = new Map<string, SymbolRecord>();
     for (const symbol of repoIndex.symbols) {
-      if (matchedIds.has(symbol.id)) symbolById.set(symbol.id, symbol);
+      if (!matchedIds.has(symbol.id)) continue;
+      if (inPath && !inPath(symbol.filePath)) continue;
+      symbolById.set(symbol.id, symbol);
     }
 
     // toSearchHit folds an open `scores` object into its result, so its shape is not fixed here.
