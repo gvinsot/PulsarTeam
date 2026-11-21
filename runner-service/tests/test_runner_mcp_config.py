@@ -13,6 +13,7 @@ from pathlib import Path
 os.environ.setdefault("RUNNER_TYPE", "opencode")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import pytest  # noqa: E402
 import yaml  # noqa: E402
 import backends.runner_mcp_config as rmc  # noqa: E402
 from backends.runner_mcp_config import (  # noqa: E402
@@ -319,8 +320,59 @@ def test_codex_permissions_idempotent_and_reversible():
     once = apply_codex_permissions(user, True)
     assert apply_codex_permissions(once, True) == once
     assert once.count(_CODEX_PERMS_MARK_START) == 1
-    # Toggle OFF: block gone, user config back as it was.
-    assert apply_codex_permissions(once, False) == user
+    # Toggle OFF: the policy keys go, the user's config is back as it was, and
+    # only the update-check switch stays in the block.
+    off = apply_codex_permissions(once, False)
+    assert apply_codex_permissions(off, False) == off
+    data = _toml(off)
+    assert "default_permissions" not in data and "approval_policy" not in data
+    assert data == {"check_for_update_on_startup": False, "model": "gpt-6"}
+    assert strip_codex_managed_block(off).strip() == user.strip()
+
+
+# ── codex startup update check ──────────────────────────────────────────────
+# Prod incident 2026-11-21: codex's "Update available" dialog defaults to
+# "1. Update now", which runs `npm install -g` as the per-agent UID, fails with
+# EACCES and exits codex with status 1 — on every spawn of the agent.
+
+
+@pytest.mark.parametrize("full_access", [True, False])
+def test_codex_update_check_is_off_whatever_the_permissions(full_access):
+    data = _toml(apply_codex_permissions('model = "gpt-6"\n[projects."/w"]\ntrust_level = "trusted"\n', full_access))
+    assert data["check_for_update_on_startup"] is False
+    assert data["model"] == "gpt-6"
+    assert data["projects"]["/w"] == {"trust_level": "trusted"}
+
+
+@pytest.mark.parametrize("full_access", [True, False])
+def test_codex_update_check_replaces_a_user_copy(full_access):
+    # A duplicate root key is a TOML parse error, and codex would not start.
+    user = 'check_for_update_on_startup = true\nmodel = "gpt-6"\n[tui]\nnotifications = true\n'
+    text = apply_codex_permissions(user, full_access)
+    data = _toml(text)
+    assert data["check_for_update_on_startup"] is False
+    assert text.count("check_for_update_on_startup") == 1
+    assert data["tui"] == {"notifications": True}
+
+
+def test_codex_update_check_is_written_without_full_access(tmp_path):
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('model = "gpt-6"\n')
+
+    configure_codex_permissions(_agent(tmp_path), "a", full_access=False)
+
+    data = _toml(cfg.read_text())
+    assert data == {"check_for_update_on_startup": False, "model": "gpt-6"}
+
+
+def test_codex_update_check_creates_the_config_when_missing(tmp_path):
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+
+    configure_codex_permissions(_agent(tmp_path), "a", full_access=True)
+
+    assert _toml(cfg.read_text())["check_for_update_on_startup"] is False
 
 
 def test_codex_permissions_and_mcp_blocks_coexist(tmp_path, monkeypatch):

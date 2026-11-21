@@ -186,6 +186,23 @@ def test_codex_persists_config_without_the_managed_mcp_block():
     assert "pulsarteam-managed-mcp" not in saved
 
 
+def test_codex_persists_config_without_the_managed_update_check():
+    """The update-check switch is rewritten each spawn like the permissions
+    keys around it; the saved copy keeps only what codex wrote."""
+    raw = (
+        "# >>> pulsarteam-managed-permissions (do not edit) >>>\n"
+        'default_permissions = ":danger-full-access"\n'
+        'approval_policy = "never"\n'
+        "check_for_update_on_startup = false\n"
+        'model = "gpt-6"\n'
+        "# <<< pulsarteam-managed-permissions <<<\n"
+    )
+
+    saved = CodexBackend()._sanitize_persisted_config("config.toml", raw)
+
+    assert saved == 'model = "gpt-6"\n'
+
+
 def test_codex_skips_a_config_that_was_only_our_block():
     raw = (
         "# >>> pulsarteam-managed-mcp (do not edit) >>>\n"

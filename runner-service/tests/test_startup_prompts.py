@@ -1,9 +1,11 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from startup_prompts import PAUSE, STARTUP_PROMPTS, codex_update_answer_keys, trust_answer_keys  # noqa: E402
+from startup_prompts import STARTUP_PROMPTS, codex_update_answer_keys, trust_answer_keys  # noqa: E402
 
 ENTER = b"\r"
 
@@ -71,36 +73,47 @@ def _prompt(key):
     return next(p for p in STARTUP_PROMPTS if p.key == key)
 
 
-DOWN = b"\x1b[B"
+ESC = b"\x1b"
 
 
-def test_codex_update_prompt_answers_skip_with_down_enter():
+def test_codex_update_prompt_is_dismissed_with_esc():
     prompt = _prompt("codex_update")
     assert prompt.pattern.search(CODEX_UPDATE_SCREEN)
-    assert prompt.keys(CODEX_UPDATE_SCREEN) == (DOWN, PAUSE, ENTER)
+    assert prompt.keys(CODEX_UPDATE_SCREEN) == (ESC,)
 
 
-def test_codex_update_prompt_0_166_layout():
+def test_codex_update_prompt_0_167_layout():
+    # Captured from the prod runner (codex-cli 0.167.0, 2026-11-21).
     screen = """\
-Update available · 0.165.0 → 0.166.0
+  Update available · 0.167.0 → 0.171.0
   Release notes: https://github.com/openai/codex/releases/latest
 
 › 1. Update now (runs `npm install -g @openai/codex`)
   2. Skip
   3. Skip until next version
+
+  enter continue · esc skip
 """
     assert _prompt("codex_update").pattern.search(screen)
-    assert codex_update_answer_keys(screen) == (DOWN, PAUSE, ENTER)
+    assert codex_update_answer_keys(screen) == (ESC,)
 
 
-def test_codex_update_prompt_confirms_when_skip_already_selected():
-    screen = CODEX_UPDATE_SCREEN.replace("  › 1. Update now", "    1. Update now").replace(
-        "    2. Skip\n", "  › 2. Skip\n"
+@pytest.mark.parametrize("selected", ["1. Update now", "2. Skip", "3. Skip until next version"])
+def test_codex_update_prompt_never_sends_enter(selected):
+    """The default row runs `npm install -g` as the agent UID: EACCES, exit 1.
+    A recipe that can confirm anything kills codex whenever a move before it is
+    swallowed, so whatever the selection, only Esc goes out."""
+    rows = ["1. Update now (runs `npm install -g @openai/codex`)", "2. Skip", "3. Skip until next version"]
+    screen = "Update available · 0.167.0 → 0.171.0\n" + "\n".join(
+        ("› " if row.startswith(selected) else "  ") + row for row in rows
     )
-    assert codex_update_answer_keys(screen) == (ENTER,)
+    keys = codex_update_answer_keys(screen)
+    assert keys == (ESC,)
+    assert ENTER not in keys
 
 
 def test_codex_update_prompt_sends_nothing_once_dialog_is_gone():
+    # A stray Esc on the chat screen would interrupt a running turn.
     assert codex_update_answer_keys("› Ask Codex to do anything") == ()
 
 

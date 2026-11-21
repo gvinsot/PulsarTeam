@@ -151,21 +151,23 @@ CODEX_UPDATE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# The numbered "Skip" row (option 2) — NOT "Skip until next version" and NOT
-# the "Esc skip" footer hint.
-_CODEX_SKIP_ROW_RE = re.compile(r"\d\.\s*skip(?!\s*until)", re.IGNORECASE)
-
 
 def codex_update_answer_keys(screen: str) -> tuple:
-    """Keystrokes that select "2. Skip" on Codex's update prompt and confirm it
-    (Down+Enter from the default "Update now" row).
+    """Keystroke that dismisses Codex's update prompt: Esc ("esc skip").
 
-    The previous recipe sent a bare "3" once; when the dialog painted before
-    Codex read stdin the digit was swallowed and the prompt stayed up. Deriving
-    the move from the screen makes the recipe retryable: once the dialog is
-    gone no Skip row is found and nothing is sent.
+    Runners normally never see this dialog (configure_codex_permissions writes
+    `check_for_update_on_startup = false`); this is the safety net for a config
+    that didn't take. It must not contain Enter. The dialog's DEFAULT row is
+    "1. Update now", which runs `npm install -g` as the per-agent UID, fails
+    with EACCES and exits codex with status 1. The former Down+Enter recipe
+    killed the CLI that way in prod: the dialog paints before codex reads
+    stdin, the Down was swallowed and the Enter that followed 120 ms later
+    landed on "Update now". A swallowed Esc does nothing, so it can be retried.
+
+    Derived from the screen, so it is sent only while the dialog is still
+    painted. A stray Esc on the chat screen would interrupt a running turn.
     """
-    return _walk_to_option_keys(screen, _CODEX_SKIP_ROW_RE, 2)
+    return (b"\x1b",) if CODEX_UPDATE_RE.search(screen) else ()
 
 
 OPENCODE_UPDATE_RE = re.compile(
@@ -193,14 +195,15 @@ class StartupPrompt:
 
 # Table order is match priority (checked first to last).
 STARTUP_PROMPTS: tuple[StartupPrompt, ...] = (
-    # Codex's update prompt: pick option 2 "Skip" (Down+Enter from the
-    # highlighted "Update now"), derived from the screen so it can be retried.
+    # Codex's update prompt: Esc ("esc skip"), never Enter — the default row
+    # is the destructive "Update now". Derived from the screen so it can be
+    # retried while the dialog stays up.
     StartupPrompt(
         key="codex_update",
         pattern=CODEX_UPDATE_RE,
         keys=codex_update_answer_keys,
         description="codex update",
-        keys_label="move to Skip+Enter",
+        keys_label="Esc (skip)",
     ),
     # OpenCode's update prompt: move Left to "No", confirm after a render tick.
     StartupPrompt(

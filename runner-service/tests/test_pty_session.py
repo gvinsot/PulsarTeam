@@ -257,7 +257,8 @@ async def test_auto_answers_codex_update_prompt(monkeypatch):
     )
     await asyncio.sleep(0.2)
 
-    assert written == [b"\x1b[B", b"\r"]
+    # Esc only: an Enter landing on the default "Update now" exits codex.
+    assert written == [b"\x1b"]
 
 
 @pytest.mark.asyncio
@@ -282,7 +283,33 @@ async def test_auto_answers_codex_update_prompt_once(monkeypatch):
     session._maybe_auto_answer_startup_prompt(b"\xe2\x80\xba Ask Codex to do anything\r\n")
     await asyncio.sleep(0.2)
 
-    assert written == [b"\x1b[B", b"\r"]
+    assert written == [b"\x1b"]
+
+
+@pytest.mark.asyncio
+async def test_resends_esc_while_codex_update_prompt_stays_up(monkeypatch):
+    """The dialog paints before codex reads stdin, so the first keystroke is
+    regularly swallowed. Esc is retried while the dialog is still on screen,
+    and no attempt ever carries an Enter."""
+    session = PtySession(agent_id="agent-a", cmd=["codex"], cwd="/tmp", env={})
+    session.master_fd = 1
+    written = []
+
+    monkeypatch.setattr(session, "_write_keystroke", lambda data: written.append(data))
+
+    session._maybe_auto_answer_startup_prompt(
+        b"\xe2\x80\xba 1. Update now (runs `npm install -g @openai/codex`)\r\n"
+        b"  2. Skip\r\n"
+        b"  3. Skip until next version\r\n"
+    )
+    await asyncio.sleep(0.2)
+    # Swallowed: the next pass still finds the dialog.
+    session._last_auto_answer_at = time.monotonic() - 10
+    session._maybe_auto_answer_startup_prompt(b"")
+    await asyncio.sleep(0.2)
+
+    assert written == [b"\x1b", b"\x1b"]
+    assert "codex_update" not in session._auto_answered
 
 
 def test_auto_answers_codex_trust_directory_prompt(monkeypatch):

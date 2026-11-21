@@ -253,7 +253,7 @@ _CODEX_PERMS_MARK_END = "# <<< pulsarteam-managed-permissions <<<"
 
 def strip_codex_managed_block(text: str) -> str:
     """Return `~/.codex/config.toml` without our managed blocks (MCP and
-    permissions).
+    permissions + update check).
 
     Used before persisting the file across restarts: both blocks are rewritten
     at every spawn — the MCP one carries a short-lived gateway token, the
@@ -288,7 +288,7 @@ def _strip_codex_perms_block(text: str) -> str:
             if stripped == _CODEX_PERMS_MARK_END:
                 inside = False
                 continue
-            if not stripped or _CODEX_POLICY_KEY.match(line):
+            if not stripped or _is_managed_root_key(line):
                 continue
         out.append(line)
     return "\n".join(out)
@@ -823,36 +823,54 @@ def configure_codex_mcp(agent_user: Optional[dict], agent_id: Optional[str]) -> 
 # that re-derivation land on the policy the flag started with.
 _CODEX_FULL_ACCESS_TOML = 'default_permissions = ":danger-full-access"\napproval_policy = "never"'
 _CODEX_POLICY_KEY = re.compile(r"^\s*(default_permissions|approval_policy|sandbox_mode)\s*=")
+# The same block also switches off codex's startup update check, whatever the
+# permissions toggle. When npm has a newer release than the image, codex opens a
+# modal "Update available" dialog whose DEFAULT row is "1. Update now (runs
+# `npm install -g @openai/codex`)". The per-agent UID cannot write the global npm
+# prefix, so confirming it fails with EACCES and codex exits with status 1. One
+# stray Enter (a user's, or a broker auto-answer whose Down was swallowed while
+# the TUI was not reading stdin yet) killed the CLI on every spawn. Updates ship
+# with the image (Dockerfile follows npm latest), never from inside a runner.
+_CODEX_UPDATE_CHECK_TOML = "check_for_update_on_startup = false"
+_CODEX_UPDATE_CHECK_KEY = re.compile(r"^\s*check_for_update_on_startup\s*=")
 _TOML_TABLE_HEADER = re.compile(r"^\s*\[")
 
 
-def apply_codex_permissions(text: str, full_access: bool) -> str:
-    """Return config.toml with our permissions block reconciled.
+def _is_managed_root_key(line: str) -> bool:
+    """A root line holding one of the keys our block writes (either flavour)."""
+    return bool(_CODEX_POLICY_KEY.match(line) or _CODEX_UPDATE_CHECK_KEY.match(line))
 
-    The keys are top-level, so the block goes FIRST — anything after a
-    `[table]` header would belong to that table. With `full_access`, the user's
-    own top-level policy keys are dropped: a duplicate key is a TOML parse error
-    that would stop codex from starting. Without it, the block is removed and
-    the user's keys are left alone."""
+
+def apply_codex_permissions(text: str, full_access: bool) -> str:
+    """Return config.toml with our managed root block reconciled.
+
+    The block always carries `check_for_update_on_startup = false`, plus the
+    full-access policy keys when `full_access` is set. The keys are top-level,
+    so the block goes FIRST — anything after a `[table]` header would belong to
+    that table. The user's own copies of the keys we write are dropped: a
+    duplicate key is a TOML parse error that would stop codex from starting.
+    Without `full_access` the user's policy keys are left alone."""
     lines = _strip_codex_perms_block(text or "").splitlines()
-    if full_access:
-        kept: list[str] = []
-        in_root = True
-        in_multiline = False
-        for line in lines:
-            if in_root and not in_multiline:
-                if _TOML_TABLE_HEADER.match(line):
-                    in_root = False
-                elif _CODEX_POLICY_KEY.match(line):
-                    continue
-            if in_root and (line.count('"""') + line.count("'''")) % 2:
-                in_multiline = not in_multiline
-            kept.append(line)
-        lines = kept
-    body = "\n".join(lines).strip("\n")
-    if not full_access:
-        return body + "\n" if body.strip() else ""
-    managed = f"{_CODEX_PERMS_MARK_START}\n{_CODEX_FULL_ACCESS_TOML}\n{_CODEX_PERMS_MARK_END}\n"
+    owned = _is_managed_root_key if full_access else _CODEX_UPDATE_CHECK_KEY.match
+    kept: list[str] = []
+    in_root = True
+    in_multiline = False
+    for line in lines:
+        if in_root and not in_multiline:
+            if _TOML_TABLE_HEADER.match(line):
+                in_root = False
+            elif owned(line):
+                continue
+        if in_root and (line.count('"""') + line.count("'''")) % 2:
+            in_multiline = not in_multiline
+        kept.append(line)
+    body = "\n".join(kept).strip("\n")
+    keys = (
+        f"{_CODEX_FULL_ACCESS_TOML}\n{_CODEX_UPDATE_CHECK_TOML}"
+        if full_access
+        else _CODEX_UPDATE_CHECK_TOML
+    )
+    managed = f"{_CODEX_PERMS_MARK_START}\n{keys}\n{_CODEX_PERMS_MARK_END}\n"
     return f"{managed}\n{body}\n" if body.strip() else managed
 
 
@@ -876,8 +894,8 @@ def configure_codex_permissions(agent_user: Optional[dict], agent_id: Optional[s
         _atomic_write(cfg_path, cfg_dir, new_text, uid, gid)
         logger.info(
             f"[Codex Perms] default_permissions "
-            f"{'pinned to :danger-full-access' if full_access else 'left to config'} "
-            f"for agent {(agent_id or '?')[:12]}"
+            f"{'pinned to :danger-full-access' if full_access else 'left to config'}, "
+            f"startup update check off for agent {(agent_id or '?')[:12]}"
         )
     except OSError as e:
         logger.warning(f"[Codex Perms] failed to write {cfg_path}: {e}")
