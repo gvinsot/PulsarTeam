@@ -30,6 +30,7 @@ after your change. Not in CI.
 | MCP / LLM / instructions config sync | `src/backends/runner_*_config.py`                                 |
 | Secret scrubbing                     | `src/secret_filter.py`, `src/log_redaction.py`                    |
 | Image                                | `Dockerfile` (runs as root **on purpose**, so do not add `USER`)  |
+| Agent CLI versions / updates         | `Dockerfile` "Agent CLIs" block; read `../docs/cli-updates.md`    |
 
 ## Conventions
 
@@ -37,4 +38,8 @@ after your change. Not in CI.
   `cli_backend.py`. Do not copy-paste between backends.
 - `tests/_cli_matrix.py` pins each interactive CLI's launch command. When you add
   an interactive CLI, add it there.
+- Every build installs the latest release of every agent CLI (one remote `ADD`
+  of registry metadata per CLI). Never pin a CLI version or add a per-CLI
+  cache-bust argument. A CLI must never update itself inside a runner, so turn
+  its in-app updater off. See `../docs/cli-updates.md`.
 - Never log tokens, OAuth codes, or prompts unredacted.

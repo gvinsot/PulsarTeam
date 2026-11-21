@@ -146,6 +146,12 @@ themselves:
   the port in `frontend/nginx.conf`, the compose mapping, and the Traefik label
   together or not at all.
 
+The runner image installs the latest release of every agent CLI on each build.
+Each CLI layer is keyed on its registry's latest-release metadata, so routine
+CLI updates need no commit, only a pipeline run. Do not pin CLI versions or add
+cache-bust arguments. The mechanism and its rules are in
+[`docs/cli-updates.md`](docs/cli-updates.md).
+
 ## Dependencies
 
 `npm audit --omit=dev` must report zero vulnerabilities in `api` and `frontend`

@@ -1,4 +1,148 @@
-# Runner CLI refresh
+# Runner CLI updates
+
+Read this before you touch how the agent CLIs (Claude Code, Codex, OpenCode,
+OpenClaw, Hermes, Aider, Vibe) are installed in `runner-service/Dockerfile`.
+
+## How updates work
+
+**Every image build installs the latest release of every agent CLI.** Nobody
+bumps a version or a cache key for that. The image is the only update path:
+runners never update a CLI themselves.
+
+### The mechanism
+
+All runner services (`claudecode-service`, `codex-service`, `opencode-service`,
+…) build the same `runner-service/Dockerfile`. Its "Agent CLIs" block gives each
+CLI two instructions:
+
+1. A remote `ADD` of the CLI's "latest release" metadata.
+2. A `RUN` that reads the version from that document and installs exactly that
+   version.
+
+BuildKit downloads the `ADD` document on every build and keys the layer on its
+content. When upstream publishes a release, the document changes, so the layer
+re-runs and installs the new version. Otherwise the cached layer is reused,
+because it already holds the latest release. A build therefore never ships an
+outdated CLI, and it reinstalls nothing that has not changed.
+
+| CLI | Package | Metadata that keys the layer | If the install fails |
+| --- | --- | --- | --- |
+| Aider | PyPI `aider-chat` | `https://pypi.org/pypi/aider-chat/json` | stub |
+| Vibe | PyPI `mistral-vibe` | `https://pypi.org/pypi/mistral-vibe/json` | stub |
+| Hermes | official installer, stable channel | `https://github.com/NousResearch/hermes-agent/releases.atom` | stub |
+| OpenClaw | npm `openclaw` | `https://registry.npmjs.org/openclaw/latest` | stub |
+| OpenCode | npm `opencode-ai` | `https://registry.npmjs.org/opencode-ai/latest` | warning, CLI absent |
+| Codex | npm `@openai/codex` | `https://registry.npmjs.org/@openai/codex/latest` | **build fails** |
+| Claude Code | npm `@anthropic-ai/claude-code` | `https://registry.npmjs.org/@anthropic-ai/claude-code/latest` | **build fails** |
+
+Layer order matters:
+
+- The block comes **after** the stable tooling (Go, Docker CLI, rtk, the
+  runner's Python venv), so a CLI release does not rebuild those.
+- It comes **before** `COPY runner-service/src`, so a code commit does not
+  reinstall the CLIs.
+- Inside the block, the CLIs are ordered from least to most frequently released.
+  A release re-runs its own layer and every CLI layer below it.
+
+If a registry cannot be reached, the build fails at its `ADD`. That is
+deliberate: the alternative is an image with a silently outdated or missing CLI.
+Re-run the build once the registry answers.
+
+### Getting a new CLI release onto the runners
+
+A CLI update reaches the running agents only when the runner images are rebuilt
+and redeployed. Every PulsarTeam pipeline run (build → test → QA → deploy)
+rebuilds them, so:
+
+- any push to `main` picks up every CLI release published since the last build;
+- with no code change, run the PulsarTeam pipeline from PulsarCD
+  (`trigger_pipeline`) to pick them up.
+
+Editing a file in this repository is never needed for a routine CLI update.
+
+### Checking which versions run
+
+- In the build log, every CLI layer prints
+  `Resolved <package> latest to <version>`, and the final verification step
+  prints the full list.
+- On a live runner, the image records what it shipped:
+
+  ```bash
+  docker exec <runner container> cat /opt/runner-cli-versions.txt
+  ```
+
+  A line such as `hermes: hermes-stub 0.0.0 (install failed)` means that CLI's
+  install failed in that build.
+
+### Why runners never update themselves
+
+Each agent runs its CLI under its own UID (20000+), which cannot write the
+global npm/pip prefixes. A CLI's in-app updater fails there, and some exit when
+it does. Codex's "Update available" dialog defaults to **1. Update now**, which
+runs `npm install -g @openai/codex`, fails with `EACCES` and exits codex with
+status 1. That killed a prod agent on every spawn on 2026-11-21. So:
+
+- the runner writes `check_for_update_on_startup = false` into the managed block
+  at the top of each agent's `~/.codex/config.toml`
+  (`configure_codex_permissions`), so the dialog never opens;
+- as a fallback, the PTY broker dismisses the dialog with **Esc** and never with
+  Enter (`startup_prompts.codex_update_answer_keys`). A swallowed Esc is retried,
+  while a swallowed arrow key followed by Enter used to confirm "Update now".
+
+Apply the same rule to any new CLI: turn its self-update off, and never answer
+an update prompt with a key that can confirm its default row.
+
+### Rules
+
+- **Never pin a CLI version, and never add a per-CLI `*_VERSION` or
+  `*_CACHE_BUST` build argument.** Those manual keys are how the runners fell
+  weeks behind before 2026-11-21. Compose files pass no CLI build arguments.
+- To reinstall every CLI at the **same** versions (a corrupted install, not a
+  new release), change `ARG RUNNER_CLI_CACHE_BUST` in the Dockerfile. That
+  argument is the only manual knob.
+- To hold back a broken upstream release, replace the resolved version with a
+  fixed one in a dedicated commit that explains why, and revert it as soon as
+  upstream ships a fix.
+- To add a CLI, copy the pattern: an `ADD` of its latest-release metadata, an
+  exact-version install, then either a stub fallback (optional CLI) or a hard
+  failure (required CLI). Add it to the `/opt/runner-cli-versions.txt` loop and
+  to `runner-service/tests/_cli_matrix.py`.
+
+### Known gap: Hermes ships as a stub
+
+The official Hermes installer (v0.23 layout) fails in the image at its
+"Computer Use" step, and every build since then has shipped
+`hermes-stub 0.0.0`. With `--skip-computer-use --skip-browser` it installs, but
+its Python environment lives under the build user's `HERMES_HOME`. A per-agent
+UID can run `hermes --version` but not `hermes chat`. Making Hermes work needs
+its own change: an install layout readable by the agent UIDs, plus a
+world-reachable launcher. Until then, the failure branch at least deletes the
+~3 GB the failed install used to leave in the image.
+
+## History
+
+The entries below describe the mechanism as it was at the time. The section
+above is the current behaviour.
+
+## Every CLI follows its latest release — 2026-11-21
+
+- Every CLI layer is now keyed on its registry's latest-release metadata, the
+  pattern Codex has used since 2026-09-23. Claude Code, OpenCode, OpenClaw,
+  Hermes, Aider and Vibe used to refresh only when someone bumped
+  `RUNNER_CLI_CACHE_BUST`, `OPENCODE_CLI_CACHE_BUST`, `AIDER_CLI_CACHE_BUST` or
+  `VIBE_CLI_CACHE_BUST`. Prod ran Claude Code 2.1.319 (npm: 2.1.330), Codex
+  0.167.0 (npm: 0.171.0) and Vibe 3.1.0 (PyPI: 3.1.4).
+- The per-CLI version and cache-bust build arguments were removed from the
+  Dockerfile, both Compose files and the `.env.example` files.
+  `RUNNER_CLI_CACHE_BUST` remains, in the Dockerfile only, as a force-reinstall
+  knob.
+- The CLI block moved after the stable tooling and before the runner source.
+  The first build after this change rebuilds every layer once.
+- The image records its CLI versions in `/opt/runner-cli-versions.txt`.
+- Codex's startup update check is disabled in each agent's `config.toml`, and
+  the broker answers its update dialog with Esc instead of Down+Enter (see
+  "Why runners never update themselves").
+- The failed Hermes install no longer leaves `/root/.hermes` (~3 GB) in the image.
 
 ## Claude Code, Codex and OpenCode — 2026-11-02
 

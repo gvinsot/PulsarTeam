@@ -48,108 +48,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
         if (a<24 || (a===24 && (b<22 || (b===22 && c<1)))) { \
           console.error("Node "+process.version+" < 24.22.1 (security release 2026-10-21)"); process.exit(1); }'
 
-# ─── Agent CLIs ────────────────────────────────────────────────────────────
-# Each runner backend invokes its own CLI binary. We install all of them
-# unconditionally so the same image can act as any backend at runtime.
-# Some optional CLI installs tolerate failures. Codex must install successfully
-# so a build cannot silently ship a stub instead of the latest release.
-
-# All CLIs below use upstream latest releases. Bump this shared key to refresh
-# every installer, including Claude/OpenClaw/Hermes, on cached image builds.
-ARG RUNNER_CLI_CACHE_BUST=2026-11-02
-
-# Claude Code CLI (Anthropic)
-RUN echo "Agent CLI refresh key: ${RUNNER_CLI_CACHE_BUST}" \
-    && npm install -g @anthropic-ai/claude-code@latest
-
-# OpenCode CLI (https://opencode.ai)
-# Resolve npm's latest tag during the image build by default. Set
-# OPENCODE_CLI_VERSION to a concrete version to pin a deployment, and bump
-# OPENCODE_CLI_CACHE_BUST (or build with --no-cache) when rebuilding an
-# unchanged Dockerfile so Docker re-runs this layer and re-checks npm.
-ARG OPENCODE_CLI_VERSION=latest
-ARG OPENCODE_CLI_CACHE_BUST=2026-11-02
-RUN (echo "OpenCode CLI refresh key: ${OPENCODE_CLI_CACHE_BUST}" \
-     && if [ "${OPENCODE_CLI_VERSION}" = "latest" ]; then \
-          OPENCODE_RESOLVED_VERSION="$(npm view opencode-ai@latest version)" \
-          && echo "Resolved opencode-ai@latest to ${OPENCODE_RESOLVED_VERSION}" \
-          && npm install -g "opencode-ai@${OPENCODE_RESOLVED_VERSION}"; \
-        else \
-          npm install -g "opencode-ai@${OPENCODE_CLI_VERSION}"; \
-        fi) \
-    || echo "WARN: opencode-ai install failed — backend will be unavailable"
-
-# OpenClaw CLI (https://openclaw.ai)
-RUN npm install -g openclaw@latest \
-    || (echo "WARN: openclaw npm install failed — installing stub" \
-        && printf '#!/bin/sh\necho "openclaw-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/openclaw \
-        && chmod +x /usr/local/bin/openclaw)
-
-# Hermes Agent (https://github.com/NousResearch/hermes-agent)
-# Their installer is interactive in some paths; we run it non-interactively
-# and fall back to a stub if it fails.
-#
-# The installer relies on `uv`, which by default puts its managed Python
-# under $HOME/.local/share/uv/python. Built as root that lands in
-# /root/.local — unreadable by the per-agent UIDs (20000+) the runner
-# drops to before spawning the CLI, which makes /usr/local/bin/hermes
-# fail with "bad interpreter: Permission denied" and leaves the chat
-# terminal empty. Pin uv's install dirs to a world-readable location and
-# chmod the resulting trees a+rX so every UID can exec the shim.
-RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-install.sh \
-    && UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
-       UV_PYTHON_BIN_DIR=/usr/local/share/uv/python-bin \
-       bash /tmp/hermes-install.sh < /dev/null \
-    && chmod -R a+rX /usr/local/share/uv /usr/local/lib/hermes-agent 2>/dev/null \
-    ; [ -x /usr/local/bin/hermes ] && /usr/local/bin/hermes --version >/dev/null 2>&1 \
-    || (echo "WARN: hermes install failed — installing stub" \
-        && printf '#!/bin/sh\necho "hermes-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/hermes \
-        && chmod +x /usr/local/bin/hermes)
-# Make sure hermes is on PATH (installer may put it under ~/.hermes/bin)
+# Hermes may put its launcher under ~/.hermes/bin (installed with the agent
+# CLIs below). Every later `ENV PATH` prepends, so this line must stay ABOVE
+# them: placed after the venv's, its /usr/local/bin would shadow
+# /opt/venv/bin/python and `python server.py` would start without the runner's
+# dependencies.
 ENV PATH="/root/.hermes/bin:/usr/local/bin:${PATH}"
-
-# Aider CLI (https://aider.chat)
-# Installed in its own virtualenv so aider's (large) dependency tree never
-# conflicts with the runner-service venv. The launcher is symlinked onto PATH
-# and the tree is made world-readable so the per-agent UIDs (20000+) the runner
-# drops to can exec it. By default we resolve the latest release at build time;
-# set AIDER_CLI_VERSION to pin a deployment and bump AIDER_CLI_CACHE_BUST (or
-# build with --no-cache) to force this layer to re-run on an unchanged Dockerfile.
-ARG AIDER_CLI_VERSION=latest
-ARG AIDER_CLI_CACHE_BUST=1
-RUN (echo "Aider CLI refresh key: ${AIDER_CLI_CACHE_BUST}" \
-     && python3.12 -m venv /opt/aider \
-     && /opt/aider/bin/pip install --no-cache-dir --upgrade pip \
-     && if [ "${AIDER_CLI_VERSION}" = "latest" ]; then \
-          /opt/aider/bin/pip install --no-cache-dir aider-chat; \
-        else \
-          /opt/aider/bin/pip install --no-cache-dir "aider-chat==${AIDER_CLI_VERSION}"; \
-        fi \
-     && ln -sf /opt/aider/bin/aider /usr/local/bin/aider \
-     && chmod -R a+rX /opt/aider) \
-    || (echo "WARN: aider-chat install failed — installing stub" \
-        && printf '#!/bin/sh\necho "aider-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/aider \
-        && chmod +x /usr/local/bin/aider)
-
-# Mistral Vibe Code CLI (https://github.com/mistralai/mistral-vibe)
-# Same layout as aider: its own virtualenv, launcher symlinked onto PATH, tree
-# world-readable for the per-agent UIDs. Resolves the latest release at build
-# time; set VIBE_CLI_VERSION to pin and bump VIBE_CLI_CACHE_BUST to refresh.
-ARG VIBE_CLI_VERSION=latest
-ARG VIBE_CLI_CACHE_BUST=2026-10-19
-RUN (echo "Vibe CLI refresh key: ${VIBE_CLI_CACHE_BUST}" \
-     && python3.12 -m venv /opt/vibe \
-     && /opt/vibe/bin/pip install --no-cache-dir --upgrade pip \
-     && if [ "${VIBE_CLI_VERSION}" = "latest" ]; then \
-          /opt/vibe/bin/pip install --no-cache-dir mistral-vibe; \
-        else \
-          /opt/vibe/bin/pip install --no-cache-dir "mistral-vibe==${VIBE_CLI_VERSION}"; \
-        fi \
-     && ln -sf /opt/vibe/bin/vibe /usr/local/bin/vibe \
-     && chmod -R a+rX /opt/vibe) \
-    || (echo "WARN: mistral-vibe install failed — installing stub" \
-        && printf '#!/bin/sh\necho "vibe-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/vibe \
-        && chmod +x /usr/local/bin/vibe)
 
 # Install Go (dev tool inside agent workspaces)
 RUN curl -fsSL https://go.dev/dl/go1.24.1.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
@@ -212,27 +116,6 @@ RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 # Make dev tools available globally
 RUN pip install --break-system-packages pytest black
 
-# Copy server code (modular Python files) and entrypoint
-COPY runner-service/src/*.py .
-COPY runner-service/src/backends/*.py ./backends/
-COPY runner-service/src/entrypoint.sh runner-service/src/rust_toolchain.sh runner-service/src/android_toolchain.sh runner-service/src/azure_cli.sh ./
-RUN chmod +x entrypoint.sh rust_toolchain.sh android_toolchain.sh azure_cli.sh
-
-# Verify installations
-RUN echo "=== Python ===" && python --version && \
-    echo "=== tini ===" && /usr/bin/tini --version && \
-    echo "=== Node.js ===" && node --version && \
-    echo "=== Claude Code ===" && claude --version && \
-    echo "=== OpenCode ===" && (opencode --version 2>&1 || echo "not installed") && \
-    echo "=== OpenClaw ===" && openclaw --version && \
-    echo "=== Hermes ===" && hermes --version && \
-    echo "=== Aider ===" && (aider --version 2>&1 || echo "not installed") && \
-    echo "=== Vibe ===" && (vibe --version 2>&1 || echo "not installed") && \
-    echo "=== Git ===" && git --version && \
-    echo "=== Docker ===" && docker --version && \
-    echo "=== Chromium ===" && chromium --version && \
-    echo "=== Go ===" && go version
-
 # RTK (Rust Token Killer)
 # Pinned instead of resolving releases/latest at build time: the v1.2.0
 # x86_64 musl asset answers 504 on every download (it broke the 1.0.1301 and
@@ -259,11 +142,127 @@ RUN case "$(uname -m)" in \
 # gosu for runtime user switching
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
-# OpenAI Codex CLI (https://github.com/openai/codex)
-# Remote ADD revalidates npm's latest metadata on every build. A new release
-# invalidates the install layer without a manual cache-bust argument, including
-# when this Dockerfile is built directly. Keep it last to preserve the other
-# CLIs' build cache. Install the exact version from the downloaded metadata.
+# ─── Agent CLIs: the latest upstream release, on every build ──────────────
+# Each runner backend invokes its own CLI binary. We install all of them
+# unconditionally so the same image can act as any backend at runtime.
+#
+# How a build stays on the latest release WITHOUT a manual bump: every CLI
+# layer starts with a remote `ADD` of its registry's "latest" metadata (npm
+# `<pkg>/latest`, PyPI `<pkg>/json`, GitHub `releases.atom`). BuildKit
+# re-downloads that document on every build and keys the layer on its
+# content, so the layer re-runs exactly when upstream has published a new
+# release and is reused from cache otherwise, when it already holds the latest.
+# The RUN then installs the exact version that document names, so the build
+# log and /opt/runner-cli-versions.txt say what shipped.
+#
+# These layers sit after the stable tooling (so a CLI release does not rebuild
+# Go/Docker/the venv) and before the runner's source (so a code commit does not
+# reinstall every CLI). Least to most frequently released, top to bottom: a
+# release re-runs its own layer and every CLI layer below it.
+#
+# Never pin a version or add a per-CLI cache-bust argument here; that is how the
+# runners used to fall weeks behind (see docs/cli-updates.md). The one knob is
+# RUNNER_CLI_CACHE_BUST: change it to reinstall every CLI at the same versions
+# (a broken install, not a new release).
+#
+# Claude Code and Codex must install, so a build fails instead of shipping a
+# stub. The optional CLIs fall back to a stub that reports "install failed"
+# (`<cli> --version` → "<cli>-stub 0.0.0"), visible in the build log and in
+# /opt/runner-cli-versions.txt. A registry that cannot be reached fails the
+# build at its ADD, which also never ships a stale CLI.
+ARG RUNNER_CLI_CACHE_BUST=2026-11-21
+
+# Aider CLI (https://aider.chat), from PyPI.
+# Installed in its own virtualenv so aider's (large) dependency tree never
+# conflicts with the runner-service venv. The launcher is symlinked onto PATH
+# and the tree is made world-readable so the per-agent UIDs (20000+) the runner
+# drops to can exec it.
+ADD https://pypi.org/pypi/aider-chat/json /tmp/aider-chat-pypi.json
+RUN echo "Agent CLI refresh key: ${RUNNER_CLI_CACHE_BUST}" \
+    && (AIDER_VERSION="$(jq -er '.info.version | select(type == "string" and length > 0)' /tmp/aider-chat-pypi.json)" \
+     && echo "Resolved aider-chat latest to ${AIDER_VERSION}" \
+     && /usr/local/bin/python3.12 -m venv /opt/aider \
+     && /opt/aider/bin/pip install --no-cache-dir --upgrade pip \
+     && /opt/aider/bin/pip install --no-cache-dir "aider-chat==${AIDER_VERSION}" \
+     && ln -sf /opt/aider/bin/aider /usr/local/bin/aider \
+     && chmod -R a+rX /opt/aider) \
+    || (echo "WARN: aider-chat install failed — installing stub" \
+        && printf '#!/bin/sh\necho "aider-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/aider \
+        && chmod +x /usr/local/bin/aider); \
+    rm -f /tmp/aider-chat-pypi.json
+
+# Mistral Vibe Code CLI (https://github.com/mistralai/mistral-vibe), from PyPI.
+# Same layout as aider: its own virtualenv, launcher symlinked onto PATH, tree
+# world-readable for the per-agent UIDs.
+ADD https://pypi.org/pypi/mistral-vibe/json /tmp/mistral-vibe-pypi.json
+RUN (VIBE_VERSION="$(jq -er '.info.version | select(type == "string" and length > 0)' /tmp/mistral-vibe-pypi.json)" \
+     && echo "Resolved mistral-vibe latest to ${VIBE_VERSION}" \
+     && /usr/local/bin/python3.12 -m venv /opt/vibe \
+     && /opt/vibe/bin/pip install --no-cache-dir --upgrade pip \
+     && /opt/vibe/bin/pip install --no-cache-dir "mistral-vibe==${VIBE_VERSION}" \
+     && ln -sf /opt/vibe/bin/vibe /usr/local/bin/vibe \
+     && chmod -R a+rX /opt/vibe) \
+    || (echo "WARN: mistral-vibe install failed — installing stub" \
+        && printf '#!/bin/sh\necho "vibe-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/vibe \
+        && chmod +x /usr/local/bin/vibe); \
+    rm -f /tmp/mistral-vibe-pypi.json
+
+# Hermes Agent (https://github.com/NousResearch/hermes-agent)
+# The official installer resolves the latest published release itself (its
+# default "stable" channel); the releases feed only keys this layer, so it
+# re-runs when Hermes publishes a release.
+# Their installer is interactive in some paths; we run it non-interactively
+# and fall back to a stub if it fails.
+#
+# The installer relies on `uv`, which by default puts its managed Python
+# under $HOME/.local/share/uv/python. Built as root that lands in
+# /root/.local — unreadable by the per-agent UIDs (20000+) the runner
+# drops to before spawning the CLI, which makes /usr/local/bin/hermes
+# fail with "bad interpreter: Permission denied" and leaves the chat
+# terminal empty. Pin uv's install dirs to a world-readable location and
+# chmod the resulting trees a+rX so every UID can exec the shim.
+#
+# A failed install leaves ~3 GB under /root/.hermes (installer v0.23 layout).
+# Nothing runs from there once the stub replaces the launcher, so the failure
+# branch deletes it in the same layer instead of shipping it to every node.
+ADD https://github.com/NousResearch/hermes-agent/releases.atom /tmp/hermes-releases.atom
+RUN rm -f /tmp/hermes-releases.atom \
+    && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-install.sh \
+    && UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
+       UV_PYTHON_BIN_DIR=/usr/local/share/uv/python-bin \
+       bash /tmp/hermes-install.sh < /dev/null \
+    && chmod -R a+rX /usr/local/share/uv /usr/local/lib/hermes-agent 2>/dev/null \
+    ; rm -f /tmp/hermes-install.sh \
+    ; [ -x /usr/local/bin/hermes ] && /usr/local/bin/hermes --version >/dev/null 2>&1 \
+    || (echo "WARN: hermes install failed — installing stub and removing the partial install" \
+        && rm -rf /root/.hermes /root/.local/bin/hermes /usr/local/share/uv \
+        && printf '#!/bin/sh\necho "hermes-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/hermes \
+        && chmod +x /usr/local/bin/hermes)
+
+# OpenClaw CLI (https://openclaw.ai), from npm.
+ADD https://registry.npmjs.org/openclaw/latest /tmp/openclaw-latest.json
+RUN (OPENCLAW_VERSION="$(jq -er '.version | select(type == "string" and length > 0)' /tmp/openclaw-latest.json)" \
+     && echo "Resolved openclaw@latest to ${OPENCLAW_VERSION}" \
+     && npm install -g --prefer-online "openclaw@${OPENCLAW_VERSION}") \
+    || (echo "WARN: openclaw npm install failed — installing stub" \
+        && printf '#!/bin/sh\necho "openclaw-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/openclaw \
+        && chmod +x /usr/local/bin/openclaw); \
+    rm -f /tmp/openclaw-latest.json
+
+# OpenCode CLI (https://opencode.ai), from npm.
+ADD https://registry.npmjs.org/opencode-ai/latest /tmp/opencode-latest.json
+RUN (OPENCODE_VERSION="$(jq -er '.version | select(type == "string" and length > 0)' /tmp/opencode-latest.json)" \
+     && echo "Resolved opencode-ai@latest to ${OPENCODE_VERSION}" \
+     && npm install -g --prefer-online "opencode-ai@${OPENCODE_VERSION}") \
+    || echo "WARN: opencode-ai install failed — backend will be unavailable"; \
+    rm -f /tmp/opencode-latest.json
+
+# OpenAI Codex CLI (https://github.com/openai/codex), from npm. Must install.
+# The chmods let per-agent UIDs (20000+) traverse the install tree and execute
+# the platform-specific native binary, including stripped exec bits. Runners
+# never update Codex themselves: the per-agent UID cannot write the global npm
+# prefix (see configure_codex_permissions, which turns the in-app update check
+# off).
 ADD https://registry.npmjs.org/@openai/codex/latest /tmp/codex-latest.json
 RUN CODEX_RESOLVED_VERSION="$(jq -er '.version | select(type == "string" and length > 0)' /tmp/codex-latest.json)" \
     && echo "Resolved @openai/codex@latest to ${CODEX_RESOLVED_VERSION}" \
@@ -273,8 +272,37 @@ RUN CODEX_RESOLVED_VERSION="$(jq -er '.version | select(type == "string" and len
     && find "${CODEX_NPM_ROOT}/@openai" -type f -path "*/vendor/*" -exec chmod +x {} \; \
     && codex --version \
     && rm /tmp/codex-latest.json
-# The chmods above let per-agent UIDs (20000+) traverse the install tree and
-# execute the platform-specific native binary, including stripped exec bits.
+
+# Claude Code CLI (Anthropic), from npm. Must install. Last: it releases most
+# often, and a release only re-runs this layer.
+ADD https://registry.npmjs.org/@anthropic-ai/claude-code/latest /tmp/claude-code-latest.json
+RUN CLAUDE_CODE_VERSION="$(jq -er '.version | select(type == "string" and length > 0)' /tmp/claude-code-latest.json)" \
+    && echo "Resolved @anthropic-ai/claude-code@latest to ${CLAUDE_CODE_VERSION}" \
+    && npm install -g --prefer-online "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && claude --version \
+    && rm /tmp/claude-code-latest.json
+
+# Copy server code (modular Python files) and entrypoint
+COPY runner-service/src/*.py .
+COPY runner-service/src/backends/*.py ./backends/
+COPY runner-service/src/entrypoint.sh runner-service/src/rust_toolchain.sh runner-service/src/android_toolchain.sh runner-service/src/azure_cli.sh ./
+RUN chmod +x entrypoint.sh rust_toolchain.sh android_toolchain.sh azure_cli.sh
+
+# Verify installations, and record the agent CLI versions this image ships
+# (read it on a live runner: `docker exec <runner> cat /opt/runner-cli-versions.txt`).
+RUN echo "=== Python ===" && python --version && \
+    echo "=== tini ===" && /usr/bin/tini --version && \
+    echo "=== Node.js ===" && node --version && \
+    echo "=== Git ===" && git --version && \
+    echo "=== Docker ===" && docker --version && \
+    echo "=== Chromium ===" && chromium --version && \
+    echo "=== Go ===" && go version && \
+    claude --version >/dev/null && codex --version >/dev/null && \
+    for cli in claude codex opencode openclaw hermes aider vibe; do \
+      v="$("$cli" --version 2>/dev/null | head -n 1)"; \
+      printf '%s: %s\n' "$cli" "${v:-not installed}"; \
+    done > /opt/runner-cli-versions.txt && \
+    echo "=== Agent CLIs ===" && cat /opt/runner-cli-versions.txt
 
 # ─── No USER directive: this is deliberate ────────────────────────────────
 # Every other image in this repo drops to an unprivileged UID. This one cannot,

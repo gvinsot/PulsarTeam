@@ -254,8 +254,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
     image: registry.methodinfo.fr/claudecode-service:latest
     networks:
       backend:
@@ -356,8 +354,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
     networks:
       backend:
         aliases:
@@ -415,8 +411,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
     networks:
       backend:
         aliases:
@@ -496,10 +490,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
-        OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-latest}
-        OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-2026-11-02}
     networks:
       backend:
         aliases:
@@ -577,10 +567,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
-        AIDER_CLI_VERSION: ${AIDER_CLI_VERSION:-latest}
-        AIDER_CLI_CACHE_BUST: ${AIDER_CLI_CACHE_BUST:-1}
     networks:
       backend:
         aliases:
@@ -666,10 +652,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
-        VIBE_CLI_VERSION: ${VIBE_CLI_VERSION:-latest}
-        VIBE_CLI_CACHE_BUST: ${VIBE_CLI_CACHE_BUST:-2026-10-19}
     networks:
       backend:
         aliases:
@@ -754,8 +736,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
     networks:
       backend:
         aliases:
@@ -836,8 +816,6 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
-      args:
-        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-11-02}
     networks:
       backend:
         aliases:
