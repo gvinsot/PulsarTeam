@@ -261,11 +261,30 @@ in its license file. It adds `clone`, `setns`, `unshare` and `chroot` for Chromi
 sandbox with `cap_drop: ALL`; kernel capability checks and the default denial
 remain in place. It adds no host capabilities or global daemon changes.
 
-Browser profiles live in temporary storage, never in a database or persistent
-volume. Limits: eight hours absolute lifetime, thirty minutes idle, six sessions.
-Status polling does not extend a session. A worker restart or update loses all
-sessions. Provider expiration requires manual reconnection; automatic OAuth
-renewal is not promised.
+Live browser profiles remain temporary. Explicitly shared sessions (cookies,
+localStorage and IndexedDB, site/scope, controller, session ID, pause state and
+timestamps) are checkpointed in PostgreSQL through the private service-key
+endpoint `/api/internal/auth-browser-sessions`. The API encrypts each snapshot
+with AES-256-GCM using `ENCRYPTION_KEY`; the worker has no database credentials.
+`APP_ENVIRONMENT` must explicitly name the deployment: QA and production never
+load one another's snapshots. Preserve the database and encryption key when
+moving servers. `AUTH_BROWSER_STATE_API_URL` enables persistence in the worker;
+without it, local development retains the previous in-memory behaviour.
+
+Snapshots are saved on sharing, after commands, every thirty seconds, and on
+graceful shutdown. Startup retries while the API is unavailable and blocks
+commands until restoration completes. Websites reopen lazily on first use;
+pending local transfers and unshared login screens are never saved. Paused
+sessions stay paused, disconnect removes the database entry before confirming,
+and restoration never replays clicks, uploads or publication actions. Temporary
+upload files and unfinished page forms are not restored. Abrupt machine failure
+can lose changes since the last checkpoint.
+
+Existing limits remain: eight hours absolute lifetime, thirty minutes idle,
+six sessions. Redeployment and status polling do not reset these timers.
+Provider expiration/revocation still requires manual reconnection; automatic
+OAuth renewal is not promised. Sessions lost before this upgrade cannot be
+recovered and must be shared once again.
 
 Internal MCP tokens are bound to their agent and board. Headers cannot select a
 different agent. Regenerate MCP configurations or restart runners that still

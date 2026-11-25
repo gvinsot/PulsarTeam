@@ -64,6 +64,7 @@ type RoutePolicy = typeof PUBLIC | readonly string[];
  * `handler` wrapper, the terminal route handlers) is not policy and is ignored.
  */
 const GUARD_PREFIXES = [
+  'authenticateAuthBrowserWorker',
   'authenticateToken', // session JWT / HttpOnly cookie — middleware/auth.ts
   'requireApiKeyScope(', // per-user, per-scope key (/api/mcp/*) — middleware/apiKeyAuth.ts
   'authenticateCoderApiKey', // shared runner key (/api/internal/*) — middleware/coderApiKeyAuth.ts
@@ -94,6 +95,9 @@ function describe(policy: RoutePolicy): string {
  * route registered with `app.all()`.
  */
 const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
+  'GET /api/internal/auth-browser-sessions': ['authenticateAuthBrowserWorker'],
+  'PUT /api/internal/auth-browser-sessions': ['authenticateAuthBrowserWorker'],
+  'DELETE /api/internal/auth-browser-sessions': ['authenticateAuthBrowserWorker'],
   // ── /api/auth ─────────────────────────────────────────────────────
   // Sign-in surface. Reached before a session exists, by definition. /verify
   // and /logout validate for themselves the token they are handed.

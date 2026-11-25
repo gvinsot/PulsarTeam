@@ -129,6 +129,52 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
         return await server.execute(server.Command(scope='board:a', controller='alice',
             operation='import', session_id=pending['sessionId'], storage=STATE, url=ORIGIN + path))
 
+    async def test_restart_restores_cookies_local_storage_and_same_session(self):
+        from test_persistence import MemoryStore
+        store = MemoryStore()
+        with patch.object(server, 'store', store):
+            status = await self.import_page()
+            key = 'board:a@site.test'
+            old = server.sessions[key]
+            await old.page.evaluate("localStorage.setItem('account', 'chosen-local-identity')")
+            await old.page.evaluate("""() => new Promise((resolve, reject) => {
+              const request = indexedDB.open('auth-test', 1);
+              request.onupgradeneeded = () => request.result.createObjectStore('tokens');
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const db = request.result;
+                const tx = db.transaction('tokens', 'readwrite');
+                tx.objectStore('tokens').put('synthetic-idb-token', 'session');
+                tx.oncomplete = () => { db.close(); resolve(); };
+              };
+            })""")
+            await server.checkpoint(key, old)
+            await old.close()
+            server.sessions.clear()
+            await server.restore_sessions()
+            self.assertEqual(self.launches, 1)
+            restored = server.sessions[key]
+            self.assertEqual(restored.id, status['sessionId'])
+            self.assertEqual(restored.created, old.created)
+            read = await server.execute(server.Command(scope='board:a', operation='read'))
+            self.assertIn('Chosen identity feed', read['text'])
+            self.assertEqual(self.launches, 2)
+            self.assertIn('sid=chosen-identity', self.requests[-1][1])
+            self.assertEqual(await restored.page.evaluate("localStorage.getItem('account')"), 'chosen-local-identity')
+            token = await restored.page.evaluate("""() => new Promise(resolve => {
+              const request = indexedDB.open('auth-test', 1);
+              request.onsuccess = () => {
+                const db = request.result;
+                const read = db.transaction('tokens').objectStore('tokens').get('session');
+                read.onsuccess = () => { db.close(); resolve(read.result); };
+              };
+            })""")
+            self.assertEqual(token, 'synthetic-idb-token')
+            await server.execute(server.Command(scope='board:a', operation='disconnect',
+                controller='alice', session_id=status['sessionId']))
+            await server.restore_sessions()
+            self.assertFalse(server.sessions)
+
     async def test_agent_interactions_and_binary_upload(self):
         state = await self.import_page('/editor')
         self.assertTrue(state['canInteract'])

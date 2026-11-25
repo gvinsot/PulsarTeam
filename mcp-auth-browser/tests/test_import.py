@@ -119,6 +119,7 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         server.app.state.playwright = object()
 
         async def open_session(s, playwright, url, storage):
+            s.context = SimpleNamespace()
             s.active_page = lambda: SimpleNamespace(url=url, evaluate=AsyncMock(return_value={'text': 'Private'}))
 
         async def connect(url, start):

@@ -1,4 +1,4 @@
-"""Private, ephemeral browser worker. The public MCP lives in the PulsarTeam API.
+"""Private browser worker. Shared sessions are checkpointed through the API.
 
 One Chromium process per (scope, website): an agent or board can share several
 sites, each its own session keyed ``<scope>@<host>``. Interactive login is a
@@ -27,6 +27,7 @@ from playwright.async_api import async_playwright
 from egress import PublicProxy, https_origin, public_addresses
 from page_state import NetworkTracker, read_page, shared_url
 from interactions import AGENT_ACTIONS, perform_action
+from session_store import SessionStore
 
 MAX_SESSIONS = 6
 SCREENSHOT_MAX_HEIGHT = 4000
@@ -166,6 +167,10 @@ class Session:
         self.imported = False
         self.network = None
         self.uploads = []
+        self.shared = False
+        self.saved_storage = None
+        self.saved_url = origin
+        self.user_agent = ""
 
     def expired(self):
         now = time.time()
@@ -199,7 +204,7 @@ class Session:
             env={k: v for k, v in os.environ.items()
                  if k in {"PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SystemRoot", "LOCALAPPDATA"}},
             args=["--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
-        await self.new_context(storage)
+        await self.new_context(storage, self.user_agent)
         return await self.navigate(url)
 
     async def navigate(self, url):
@@ -230,6 +235,7 @@ class Session:
         """(Re)build the single browsing context. Playwright fixes the user agent
         per context, so adopting a challenge solver's user agent needs a new one."""
         previous = self.context
+        self.user_agent = user_agent or ""
         self.context = await self.browser.new_context(
             viewport={"width": 1280, "height": 800}, accept_downloads=False,
             service_workers="block", permissions=[],
@@ -325,11 +331,109 @@ class Session:
             upload.close()
         self.uploads.clear()
         await self.proxy.close()
+        self.browser = self.context = self.page = None
 
 
 sessions: dict[str, Session] = {}
 pending_imports: dict[str, dict] = {}
 creation_lock = asyncio.Lock()
+store = SessionStore(secret)
+restoration_ready = not store.enabled
+
+
+async def checkpoint(key, session):
+    """Caller holds session.lock (or creation_lock before publishing it).
+
+    Never checkpoint a human's unfinished login or account changes made while
+    paused: only explicitly shared credentials can survive a restart.
+    """
+    if not store.enabled or not session.shared:
+        return
+    if session.phase == "ready" and session.context:
+        url = shared_url(session.active_page().url, session.origin)
+        state = await session.context.storage_state(indexed_db=True)
+        session.saved_storage, session.saved_url = state, url
+    if session.saved_storage is None:
+        raise RuntimeError("No shared browser snapshot")
+    await store.save({"version": 1, "key": key, "id": session.id,
+                      "controller": session.controller, "origin": session.origin,
+                      "phase": session.phase, "created": session.created, "used": session.used,
+                      "url": session.saved_url, "user_agent": session.user_agent,
+                      "storage": session.saved_storage})
+
+
+def restored_session(record):
+    # The API validates its envelope too. Reject the entire restore on corrupt
+    # state; silently dropping an agent session could select a board's account.
+    if (not isinstance(record, dict) or record.get("version") != 1 or
+            record.get("phase") not in {"ready", "login", "reauth_required"}):
+        raise ValueError("Invalid persisted session")
+    origin = https_origin(record["origin"])
+    scope = record["key"].split("@", 1)[0]
+    Command(scope=scope, operation="status")
+    if record["key"] != site_key(scope, origin) or str(uuid.UUID(record["id"])) != record["id"]:
+        raise ValueError("Invalid persisted session identity")
+    if not isinstance(record["controller"], str) or not record["controller"]:
+        raise ValueError("Invalid persisted controller")
+    for field in ("created", "used"):
+        if type(record[field]) not in {int, float} or not 0 < record[field] <= time.time() + 60:
+            raise ValueError("Invalid persisted session time")
+    state = record["storage"]
+    if not isinstance(state, dict) or not isinstance(state.get("cookies"), list) or not isinstance(state.get("origins"), list):
+        raise ValueError("Invalid persisted storage")
+    session = Session(record["controller"], origin, [])
+    session.id, session.phase = record["id"], record["phase"]
+    session.created, session.used = record["created"], record["used"]
+    session.saved_url = shared_url(record["url"], origin)
+    session.saved_storage = state
+    session.user_agent = record["user_agent"]
+    session.shared = session.imported = True
+    session.page_state = "restored"
+    return session
+
+
+async def restore_sessions():
+    global restoration_ready
+    records = await store.load()
+    restored = {}
+    for record in records:
+        session = restored_session(record)
+        if session.expired():
+            await store.delete(record["key"])
+        else:
+            if record["key"] in restored:
+                raise ValueError("Duplicate persisted session")
+            restored[record["key"]] = session
+    if len(restored) > MAX_SESSIONS:
+        raise ValueError("Too many persisted sessions")
+    sessions.update(restored)
+    restoration_ready = True
+
+
+async def restore_until_ready():
+    while not restoration_ready:
+        try:
+            await restore_sessions()
+        except Exception:
+            # API may still be rolling/migrating. Never log snapshots or errors
+            # supplied by a database/HTTP client (they may contain credentials).
+            print("Browser session restoration pending; retrying", flush=True)
+            await asyncio.sleep(5)
+
+
+async def ensure_open(session):
+    if session.context is not None:
+        return
+    if session.saved_storage is None:
+        raise HTTPException(409, "No saved browser session. Reconnect the browser.")
+    try:
+        response = await session.open(app.state.playwright, session.saved_url, session.saved_storage)
+        if cloudflare_challenge(response):
+            raise HTTPException(412, "The restored browser encountered a website challenge")
+        await snapshot(session)
+    except BaseException:
+        await session.close()
+        raise
 
 
 def import_storage(raw, origin):
@@ -420,21 +524,41 @@ async def reap():
         expire_imports()
         for scope, session in list(sessions.items()):
             async with session.lock:
-                if session.expired() and sessions.get(scope) is session:
-                    sessions.pop(scope)
-                    await session.close()
+                if sessions.get(scope) is not session:
+                    continue
+                try:
+                    if session.expired():
+                        await store.delete(scope)
+                        sessions.pop(scope)
+                        await session.close()
+                    else:
+                        await checkpoint(scope, session)
+                except Exception:
+                    print("Browser session checkpoint pending; retrying", flush=True)
 
 
 @asynccontextmanager
 async def lifespan(app):
+    global restoration_ready
     # Disabled until provisioned; health remains available to the orchestrator.
     async with async_playwright() as playwright:
         app.state.playwright = playwright
+        restoration_ready = not store.enabled
+        restore_task = asyncio.create_task(restore_until_ready())
         task = asyncio.create_task(reap())
         yield
+        restore_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await restore_task
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+        for key, session in list(sessions.items()):
+            async with session.lock:
+                try:
+                    await checkpoint(key, session)
+                except Exception:
+                    print("Final browser session checkpoint failed", flush=True)
         await asyncio.gather(*(s.close() for s in sessions.values()), return_exceptions=True)
         sessions.clear()
         pending_imports.clear()
@@ -445,7 +569,7 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "configured": len(secret()) >= 32}
+    return {"ok": True, "configured": len(secret()) >= 32, "sessionsRestored": restoration_ready}
 
 
 async def snapshot(session, cmd=None):
@@ -471,6 +595,26 @@ async def snapshot(session, cmd=None):
 
 
 async def execute(cmd: Command, upload=None):
+    if not restoration_ready:
+        raise HTTPException(503, "Browser sessions are being restored; retry shortly")
+    try:
+        return await execute_command(cmd, upload)
+    finally:
+        # Save refreshed cookies and state transitions, even when a site rejects
+        # the session. Status/list polling must not reset its expiry timestamps.
+        if store.enabled and cmd.operation not in {"status", "list", "prepare_import", "disconnect", "import"}:
+            key = resolve_key(cmd)
+            session = sessions.get(key)
+            if session:
+                async with session.lock:
+                    if sessions.get(key) is session:
+                        try:
+                            await checkpoint(key, session)
+                        except Exception:
+                            raise HTTPException(503, "Browser action may have completed, but session saving failed. Check the page before retrying.") from None
+
+
+async def execute_command(cmd: Command, upload=None):
     expire_imports()
     if cmd.operation == "list":
         entries = []
@@ -534,6 +678,8 @@ async def execute(cmd: Command, upload=None):
                 if pending_imports.get(key) is not pending or pending["expires"] <= time.time():
                     raise HTTPException(409, "Transfert annulé ou expiré")
                 session.phase = "ready"
+                session.shared = True
+                await checkpoint(key, session)
                 sessions[key] = session
                 return {**session.status(), "canControl": True}
             except BaseException:
@@ -578,6 +724,7 @@ async def execute(cmd: Command, upload=None):
     async with session.lock:
         if sessions.get(key) is not session or session.expired():
             if sessions.get(key) is session:
+                await store.delete(key)
                 sessions.pop(key)
                 await session.close()
             if cmd.operation == "status":
@@ -591,6 +738,7 @@ async def execute(cmd: Command, upload=None):
             if cmd.operation == "disconnect":
                 if not cmd.controller or cmd.session_id != session.id:
                     raise HTTPException(403, "Session incorrecte")
+                await store.delete(key)
                 sessions.pop(key)
                 await session.close()
                 return {"exists": False, "connected": False}
@@ -601,6 +749,10 @@ async def execute(cmd: Command, upload=None):
             raise HTTPException(409, "The upload session changed")
         if cmd.operation not in {"frame"}:
             session.used = time.time()
+        if cmd.operation == "takeover":
+            session.phase = "login"
+            return session.status()
+        await ensure_open(session)
         page = session.active_page()
         if cmd.operation in AGENT_ACTIONS:
             if upload:
@@ -614,9 +766,6 @@ async def execute(cmd: Command, upload=None):
                     session.uploads.remove(upload)
                     upload.retained = False
                 raise
-        if cmd.operation == "takeover":
-            session.phase = "login"
-            return session.status()
         if cmd.operation == "activate":
             if https_origin(page.url) != session.origin:
                 raise HTTPException(409, "Revenez sur le site après la connexion avant de partager.")
@@ -625,6 +774,7 @@ async def execute(cmd: Command, upload=None):
                 raise HTTPException(409, "Terminez la redirection de connexion avant de partager.")
             await snapshot(session)
             session.phase = "ready"
+            session.shared = True
             # Close login popups and other tabs before the agent can read.
             for other in list(session.context.pages):
                 if other != page:

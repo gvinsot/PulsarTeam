@@ -401,6 +401,15 @@ const MIGRATIONS: Migration[] = [
     'DROP TRIGGER IF EXISTS reset_task_column_timer ON tasks',
     'CREATE TRIGGER reset_task_column_timer BEFORE INSERT OR UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION reset_task_column_timer()',
   ]),
+  sqlMigration('202611250001_auth_browser_sessions', 'encrypted shared browser sessions', [
+    `CREATE TABLE IF NOT EXISTS auth_browser_sessions (
+       environment TEXT NOT NULL,
+       session_key TEXT NOT NULL,
+       ciphertext TEXT NOT NULL,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       PRIMARY KEY (environment, session_key)
+     )`,
+  ]),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

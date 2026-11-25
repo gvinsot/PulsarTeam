@@ -1,4 +1,5 @@
 import express from 'express';
+import { authBrowserSessionRoutes } from './routes/authBrowserSessions.js';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { setCurrentEnvironmentFromHost } from './lib/environment.js';
@@ -221,6 +222,9 @@ app.use(function lockEnvironmentFromHost(req, _res, next) {
 });
 
 app.use(rejectBrotliRequestBodies);
+// Service-authenticated snapshots have their own bounded parser, before the
+// general 1 MB parser. No cookie or user credential grants access here.
+app.use('/api/internal/auth-browser-sessions', authBrowserSessionRoutes());
 app.use(express.json({ limit: '1mb' }));
 
 // Global API rate limiter — 300 requests per minute per IP

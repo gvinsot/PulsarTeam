@@ -936,7 +936,8 @@ services:
       retries: 3
       start_period: 30s
 
-  # Dedicated, ephemeral authenticated browser; no Traefik/public port, no DB network.
+  # Dedicated authenticated browser; encrypted snapshots are stored by the API in PostgreSQL.
+  # No Traefik/public port or direct DB network access.
   # Provision AUTH_BROWSER_KEY to enable it. One replica owns the live sessions.
   mcp-auth-browser:
     # Per-service seccomp + no-new-privileges are reconciled by the post-deploy
@@ -947,6 +948,8 @@ services:
     image: registry.methodinfo.fr/mcp-auth-browser:latest
     environment:
       - AUTH_BROWSER_KEY=${AUTH_BROWSER_KEY:-}
+      - AUTH_BROWSER_STATE_API_URL=http://team-api:3001/api/internal/auth-browser-sessions
+    stop_grace_period: 60s
     networks:
       - auth-browser
     cap_drop:
