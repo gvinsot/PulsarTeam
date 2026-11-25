@@ -1,5 +1,6 @@
 """Bounded rendering checks for the server-owned page; never drive a login flow."""
 import asyncio
+import json
 import time
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -47,9 +48,43 @@ class NetworkTracker:
 
     def __init__(self, page):
         self.pending = {}
+        self.page = page
+        self.auth_failure = False
         page.on("request", self._started)
         page.on("requestfinished", self._ended)
         page.on("requestfailed", self._ended)
+        page.on("response", self._response)
+
+    async def _response(self, response):
+        """Detect an explicit application authentication rejection, including a
+        JSON login_required returned with HTTP 200. No body/header is exposed
+        to an agent or logged. Optional/third-party 401s alone are insufficient.
+        """
+        try:
+            if response.request.resource_type not in {"xhr", "fetch"}:
+                return
+            origin = https_origin(self.page.url)
+            allowed = {origin}
+            if origin == "https://www.instagram.com":
+                allowed.add("https://i.instagram.com")
+            if https_origin(response.url) not in allowed:
+                return
+            headers = response.headers
+            if "application/json" not in headers.get("content-type", "").lower():
+                return
+            # Playwright exposes a complete body, not a bounded stream. Only
+            # inspect small declared responses; DOM detection covers the rest.
+            size = int(headers.get("content-length", "0"))
+            if not 0 < size <= 32768:
+                return
+            body = await response.body()
+            if len(body) > 32768:
+                return
+            data = json.loads(body)
+            if isinstance(data, dict) and any(data.get(key) == "login_required" for key in ("message", "error_type", "error")):
+                self.auth_failure = True
+        except Exception:
+            pass  # Disposed page, non-JSON and transient responses are normal.
 
     def _started(self, request):
         if request.resource_type in CONTENT_REQUESTS:
@@ -80,7 +115,12 @@ PAGE_SNAPSHOT = """() => {
     }
     const all = selector => roots.flatMap(root => Array.from(root.querySelectorAll(selector)));
     const passwords = all('input[type="password"]');
-    const loginRequired = passwords.some(visible);
+    // A failed publish can leave the editor visible with no password field.
+    // Recognize the machine error only in visible error/dialog UI, not a post
+    // in the feed that happens to discuss authentication.
+    const rejectedLogin = all('[role="alert"], [role="dialog"], dialog').some(el =>
+        visible(el) && /(?:^|\\n)\\s*login_required\\s*(?:\\n|$)/i.test(el.innerText || ''));
+    const loginRequired = passwords.some(visible) || rejectedLogin;
     const secrets = passwords.map(input => input.value).filter(value => value.length >= 4);
     const body = (document.body?.innerText || '').trim();
     const shadow = roots.slice(1)
@@ -167,7 +207,9 @@ async def read_page(page, origin, network=None, fmt="both", wait_for="", wait_ms
     with settled=false. extras=False (session checks, not agent reads) skips the
     accessibility tree and frames.
     """
-    timeout = min(wait_ms / 1000, MAX_WAIT_SECONDS) if wait_ms else READ_TIMEOUT
+    # Studio's initial shell can outlive the usual eight-second render window.
+    default_timeout = 15.0 if origin == "https://studio.youtube.com" else READ_TIMEOUT
+    timeout = min(wait_ms / 1000, MAX_WAIT_SECONDS) if wait_ms else default_timeout
     deadline = time.monotonic() + timeout
     wanted = wait_for.strip().lower()
     signature = None

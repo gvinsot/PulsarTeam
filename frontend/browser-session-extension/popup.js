@@ -21,6 +21,14 @@ async function main() {
       : mode === 'share'
         ? 'You sign in on your own computer. The session is shared only with this destination.'
         : 'Sign in using the website tab opened by this extension, then reopen the extension from that tab.';
+  if (pair.site === 'https://www.instagram.com' && ['start', 'share'].includes(mode)) {
+    const language = globalThis.navigator?.language?.startsWith('fr') ? 'fr' : 'en';
+    const publishingNotice = {
+      en: ' For publishing, Instagram session cookies also apply to its API at i.instagram.com.',
+      fr: ' Pour publier, les cookies de session Instagram seront aussi utilisés par son API i.instagram.com.',
+    };
+    $('status').textContent += publishingNotice[language];
+  }
   if (mode === 'site_changed') {
     $('status').textContent =
       `This tab is on ${currentOrigin || 'a different address'}, but the request is for ${pair.site}. ` +

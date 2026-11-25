@@ -76,6 +76,13 @@ Every session counts towards the worker's capacity (`MAX_SESSIONS`).
 
 ## Update or troubleshoot the extension
 
+Version **1.0.5** retains Instagram parent-cookie provenance so its publishing
+API at `i.instagram.com` can receive the required cookies. Update/reload the
+extension and share Instagram again: old transfers intentionally contain no
+parent-domain information, so the worker cannot safely broaden them afterwards.
+The transfer popup discloses this additional Instagram API scope. Host-only
+cookies stay host-only; all other sites retain exact-host-only imports.
+
 Version **1.0.4** explains when the website tab is on a different origin and offers
 **Restart in PulsarTeam**. Cancel the old request there and reconnect with the final
 signed-in website address. Opening the popup in another tab offers **Return to
@@ -171,11 +178,21 @@ data to their own external services. WebSockets, service workers, downloads,
 camera and microphone access are disabled, so some sites will not work.
 
 MFA and passkeys can be used for local login, but their keys are never exported.
-Device-bound cookies, partitioned cookies, IndexedDB and sessionStorage are not
-supported. A website may reject a session copied to a different browser or IP,
+Device-bound cookies, partitioned cookies, local IndexedDB transfer and
+sessionStorage are not supported (server-created IndexedDB is checkpointed).
+A website may reject a session copied to a different browser or IP,
 or request a fresh challenge. Local login does not remove these restrictions.
 API OAuth tokens do not create browser sessions. A real LinkedIn connection is
 not certified by the synthetic integration tests.
+
+The worker uses Playwright's full Chromium channel (new headless mode), and
+YouTube Studio gets a fifteen-second initial render window. An empty page does
+not prove browser incompatibility or publication failure. Explicit
+`login_required` errors in visible dialogs or small first-party JSON responses
+mark the session `reauth_required`, even if its editor still looks signed in.
+After a dispatched action, this is reported without replaying the action or
+claiming publication succeeded. Reconnect locally, share again, then check the
+platform's published items before retrying a publication.
 
 ## Transfer protection
 
@@ -185,8 +202,11 @@ not certified by the synthetic integration tests.
   PulsarTeam document, its HTTPS origin and the current request before transfer.
   Reloading or navigating the PulsarTeam tab requires a new pairing.
 - Only cookies applicable to the website's home or current page are collected.
-  Parent-domain cookies are narrowed to the exact host at import and `Secure` is
-  enforced. Third-party SSO cookies, saved passwords, history and full browser
+  Parent-domain cookies are narrowed to exact hosts and `Secure` is enforced.
+  The sole publishing exception is `.instagram.com` cookies explicitly transferred
+  from `www.instagram.com`: the worker makes host-only copies for that site and
+  `i.instagram.com`, never a wildcard domain. Top-level navigation remains on the
+  shared website. Third-party SSO cookies, saved passwords, history and full browser
   profiles are not copied.
 - No session JSON is exported to disk. Cookies stay out of URLs, DOM attributes,
   logs, React state and extension storage. They pass transiently through the
@@ -216,7 +236,7 @@ not published as a ready session.
 ## Deployment
 
 Deploy the API, frontend and `mcp-auth-browser` worker together for this handoff
-contract, then reload extension 1.0.4 and transfer a fresh session. The worker
+contract, then reload extension 1.0.5 and transfer a fresh session. The worker
 deployment destroys its existing in-memory sessions.
 
 Provision the same random **AUTH_BROWSER_KEY**, at least 32 characters, for

@@ -92,6 +92,7 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
               <input id="secret" type="password" hidden value="do-not-export">
               <button onclick="window.published=(window.published||0)+1; document.querySelector('#result').textContent='Published '+window.published">Publish</button>
               <button onclick="document.body.innerHTML='<input type=password>Sign in'">Expire</button>
+              <button onclick="document.body.innerHTML='<div role=alert><h2>Post could not be shared</h2><p>login_required</p></div>'">Reject login</button>
               <a href="https://elsewhere.test/">External</a>
               <p id="result">Draft</p><p id="uploaded"></p>
               <script>document.querySelector('#video').onchange=async e=>{
@@ -128,6 +129,21 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
                 operation='prepare_import', url=ORIGIN))
         return await server.execute(server.Command(scope='board:a', controller='alice',
             operation='import', session_id=pending['sessionId'], storage=STATE, url=ORIGIN + path))
+
+    async def test_publish_authentication_error_marks_session_unusable_without_replay(self):
+        await self.import_page('/editor')
+        result = await server.execute(server.Command(scope='board:a', operation='agent_click',
+            target={'by': 'role', 'value': 'button', 'name': 'Reject login'}))
+        self.assertTrue(result['actionPerformed'])
+        self.assertTrue(result['requiresReauthentication'])
+        self.assertFalse(result['publicationConfirmed'])
+        state = await server.execute(server.Command(scope='board:a', operation='status'))
+        self.assertEqual(state['phase'], 'reauth_required')
+        self.assertFalse(state['canInteract'])
+        with self.assertRaises(HTTPException) as rejected:
+            await server.execute(server.Command(scope='board:a', operation='agent_click',
+                target={'by': 'role', 'value': 'button', 'name': 'Publish'}))
+        self.assertEqual(rejected.exception.status_code, 401)
 
     async def test_restart_restores_cookies_local_storage_and_same_session(self):
         from test_persistence import MemoryStore

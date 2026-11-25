@@ -15,7 +15,8 @@ import {
   type BrowserScope,
 } from '../services/authBrowser.js';
 
-// Never accept cookie domains, alternate storage origins or arbitrary browser state.
+// No arbitrary cookie domains/storage origins. The sole domain marker preserves
+// Instagram parent-cookie provenance for the worker's fixed publishing API host.
 const storageSchema = z
   .object({
     cookies: z
@@ -28,6 +29,7 @@ const storageSchema = z
             expires: z.number().finite().min(-1).max(253402300799),
             httpOnly: z.boolean(),
             sameSite: z.enum(['Strict', 'Lax', 'None']),
+            domain: z.literal('.instagram.com').optional(),
           })
           .strict()
       )
@@ -85,6 +87,13 @@ export function authBrowserRoutes() {
         return;
       }
       const input = parsed.data;
+      if (
+        input.storage?.cookies.some(cookie => cookie.domain) &&
+        (!input.url || new URL(input.url).origin !== 'https://www.instagram.com')
+      ) {
+        res.status(400).json({ error: 'Invalid cookie scope for this website.' });
+        return;
+      }
       if (input.operation === 'import' && !input.url) {
         res.status(400).json({
           error:

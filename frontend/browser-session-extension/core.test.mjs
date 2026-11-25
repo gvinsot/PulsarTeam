@@ -129,6 +129,20 @@ const linkedinCookie = {
   sameSite: 'no_restriction',
   hostOnly: false,
 };
+test('Instagram preserves only proven parent-cookie scope for its publishing API', () => {
+  const parent = { ...linkedinCookie, domain: '.instagram.com' };
+  const host = { ...parent, domain: 'www.instagram.com', hostOnly: true };
+  const site = 'https://www.instagram.com';
+  assert.equal(sessionCookies([parent], site)[0].domain, '.instagram.com');
+  assert.equal('domain' in sessionCookies([host], site)[0], false);
+  for (const cookies of [
+    [parent, host],
+    [host, parent],
+  ]) {
+    assert.equal(sessionCookies(cookies, site)[0].domain, '.instagram.com');
+  }
+  assert.deepEqual(sessionCookies([parent], 'https://www.instagram.com.evil.test'), []);
+});
 const linkedinHostCookie = { ...linkedinCookie, domain: 'www.linkedin.com', hostOnly: true };
 const linkedinSite = 'https://www.linkedin.com';
 

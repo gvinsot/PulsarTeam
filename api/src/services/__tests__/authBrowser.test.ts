@@ -245,7 +245,7 @@ test('session import forwards only the authenticated controller and authorized s
         body: JSON.stringify({
           operation: 'import',
           boardId: 'selected-board',
-          url: 'https://www.site.test/feed',
+          url: 'https://www.instagram.com/feed',
           sessionId: '00000000-0000-4000-8000-000000000000',
           storage: {
             cookies: [
@@ -256,6 +256,7 @@ test('session import forwards only the authenticated controller and authorized s
                 expires: -1,
                 httpOnly: true,
                 sameSite: 'Lax',
+                domain: '.instagram.com',
               },
             ],
             localStorage: [],
@@ -267,10 +268,35 @@ test('session import forwards only the authenticated controller and authorized s
     assert.equal(result.headers.get('cache-control'), 'no-store');
     assert.equal(forwarded.controller, 'alice');
     assert.equal(forwarded.scope, 'board:selected-board');
-    assert.equal(forwarded.url, 'https://www.site.test/feed');
+    assert.equal(forwarded.url, 'https://www.instagram.com/feed');
+    assert.equal(forwarded.storage.cookies[0].domain, '.instagram.com');
     assert.equal(forwarded.session_id, '00000000-0000-4000-8000-000000000000');
     assert.equal(forwarded.storage.cookies[0].httpOnly, true);
     assert.ok(!(await result.text()).includes('synthetic-secret'));
+    for (const [url, domain] of [
+      ['https://other.test/feed', '.instagram.com'],
+      ['https://www.instagram.com/feed', '.evil.test'],
+    ]) {
+      const rejected = await request(
+        `http://127.0.0.1:${(server.address() as AddressInfo).port}/control`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            operation: 'import',
+            boardId: 'selected-board',
+            url,
+            sessionId: '00000000-0000-4000-8000-000000000000',
+            storage: {
+              ...forwarded.storage,
+              cookies: [{ ...forwarded.storage.cookies[0], domain }],
+            },
+          }),
+        }
+      );
+      assert.equal(rejected.status, 400);
+      assert.ok(!(await rejected.text()).includes('synthetic-secret'));
+    }
   } finally {
     stub.mock.restore();
     await new Promise<void>(resolve => server.close(() => resolve()));

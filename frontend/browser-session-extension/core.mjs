@@ -74,6 +74,12 @@ export function sessionCookies(cookies, site, now = Date.now() / 1000) {
       httpOnly: c.httpOnly,
       sameSite:
         c.sameSite === 'no_restriction' ? 'None' : c.sameSite === 'strict' ? 'Strict' : 'Lax',
+      // Instagram publishes through i.instagram.com. Preserve provenance only
+      // for its parent cookies; the worker permits that one API host, never a
+      // wildcard domain. Host-only cookies must stay on the shared host.
+      ...(host === 'www.instagram.com' && domain === 'instagram.com' && !c.hostOnly
+        ? { domain: '.instagram.com' }
+        : {}),
     };
     const previous = seen.get(key);
     if (previous) {
@@ -87,6 +93,7 @@ export function sessionCookies(cookies, site, now = Date.now() / 1000) {
       ) {
         throw new ExtensionError('AMBIGUOUS_COOKIES');
       }
+      if (imported.domain) previous.domain = imported.domain;
       continue;
     }
     seen.set(key, imported);

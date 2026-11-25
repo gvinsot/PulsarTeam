@@ -198,7 +198,7 @@ class Session:
         self.imported = storage is not None
         proxy_url = await self.proxy.start()
         self.browser = await playwright.chromium.launch(
-            headless=True, chromium_sandbox=True,
+            headless=True, channel="chromium", chromium_sandbox=True,
             proxy={"server": proxy_url, "bypass": "<-loopback>"},
             # No service credentials in the browser's environment.
             env={k: v for k, v in os.environ.items()
@@ -448,8 +448,16 @@ def import_storage(raw, origin):
     result = []
     seen = set()
     for c in cookies:
-        if not isinstance(c, dict) or set(c) - {"name", "value", "path", "expires", "httpOnly", "sameSite"}:
+        if not isinstance(c, dict) or set(c) - {"name", "value", "path", "expires", "httpOnly", "sameSite", "domain"}:
             raise ValueError("Invalid cookie")
+        # Only the explicit Instagram parent-cookie provenance grants its
+        # publishing API a copy. Never broaden a host-only or legacy cookie,
+        # accept an arbitrary domain, or relax the top-level navigation guard.
+        api_host = None
+        if "domain" in c:
+            if origin != "https://www.instagram.com" or c["domain"] != ".instagram.com":
+                raise ValueError("Invalid cookie domain")
+            api_host = "i.instagram.com"
         name, value, path = c.get("name"), c.get("value"), c.get("path", "/")
         if (not isinstance(name, str) or not name or len(name) > 256 or
                 any(ord(x) < 33 or ord(x) > 126 or x in "=;," for x in name) or
@@ -469,10 +477,12 @@ def import_storage(raw, origin):
         seen.add((name, path))
         if expires != -1 and expires <= time.time():
             continue
-        # Strip parent domains: the imported credential is scoped to this exact host.
+        # Exact host cookies, including the narrowly permitted publishing API.
         result.append({"name": name, "value": value, "domain": urlsplit(origin).hostname,
                        "path": path, "secure": True, "httpOnly": http_only,
                        "sameSite": same_site, "expires": expires})
+        if api_host:
+            result.append({**result[-1], "domain": api_host})
     local_seen = set()
     for entry in local:
         if (not isinstance(entry, dict) or set(entry) != {"name", "value"} or
@@ -574,7 +584,7 @@ async def health():
 
 async def snapshot(session, cmd=None):
     page = session.active_page()
-    if session.navigation_blocked:
+    if session.navigation_blocked or (session.network and session.network.auth_failure):
         session.page_state = "login_required"
         session.phase = "reauth_required"
         raise HTTPException(401, "The website requires a new local login")
@@ -583,7 +593,7 @@ async def snapshot(session, cmd=None):
     network = session.network if page is session.page else None
     try:
         data = await read_page(page, session.origin, network, **options)
-        if session.navigation_blocked:
+        if session.navigation_blocked or (session.network and session.network.auth_failure):
             raise HTTPException(401, "The website requires a new local login")
     except HTTPException as error:
         session.page_state = "login_required" if error.status_code == 401 else "empty"

@@ -173,6 +173,20 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await server.execute(server.Command(scope='board:multiple', operation='list'))),
                          {'sessions': []})
 
+    def test_instagram_parent_cookies_reach_only_its_named_api(self):
+        original = STATE['cookies'][0]
+        parent = {**original, 'domain': '.instagram.com'}
+        state = {'cookies': [parent], 'localStorage': []}
+        normalized = server.import_storage(state, 'https://www.instagram.com')
+        self.assertEqual([c['domain'] for c in normalized['cookies']], ['www.instagram.com', 'i.instagram.com'])
+        self.assertEqual([c['domain'] for c in server.import_storage(STATE, 'https://www.instagram.com')['cookies']], ['www.instagram.com'])
+        for origin in ['https://other.test', 'https://www.instagram.com.evil.test', 'https://instagram.com']:
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                server.import_storage(state, origin)
+        for domain in ['.com', '.evil.test', '.instagram.com.evil.test', 'i.instagram.com']:
+            with self.subTest(domain=domain), self.assertRaises(ValueError):
+                server.import_storage({'cookies': [{**original, 'domain': domain}]}, 'https://www.instagram.com')
+
     def test_storage_rejects_other_origins_domains_ambiguous_and_oversized_data(self):
         for state in [
             {**STATE, 'origins': [{'origin': 'https://other.test'}]},

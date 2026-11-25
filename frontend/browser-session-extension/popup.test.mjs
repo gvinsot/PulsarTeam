@@ -25,7 +25,7 @@ async function popup(t, options = {}) {
               mode: options.mode || 'share',
               currentOrigin: options.currentOrigin,
               pair: {
-                site: 'https://www.linkedin.com',
+                site: options.site || 'https://www.linkedin.com',
                 appOrigin: 'https://pulsar.test',
                 scope: 'board:selected',
               },
@@ -53,6 +53,11 @@ async function popup(t, options = {}) {
   await setImmediate();
   return { chrome, state, element };
 }
+
+test('Instagram transfer discloses its publishing API session scope', async t => {
+  const { element } = await popup(t, { site: 'https://www.instagram.com' });
+  assert.match(element('status').textContent, /i\.instagram\.com/);
+});
 
 test('opening the popup preserves the actionable diagnostic returned by the background', async t => {
   const diagnostic =

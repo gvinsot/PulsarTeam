@@ -16,6 +16,53 @@ from playwright.async_api import async_playwright
 
 @unittest.skipUnless(os.environ.get("BROWSER_E2E") == "1", "Set BROWSER_E2E=1 for real Chromium")
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_instagram_api_receives_parent_cookies_but_not_host_only_cookies(self):
+        origin = 'https://www.instagram.com'
+        async with async_playwright() as pw:
+            sent = []
+            async def launch(**kwargs):
+                browser = await pw.chromium.launch(**kwargs)
+                async def new_context(**options):
+                    ctx = await browser.new_context(**options)
+                    async def fixture(route):
+                        if route.request.url.startswith('https://i.instagram.com/'):
+                            cookie = (await route.request.all_headers()).get('cookie', '')
+                            sent.append(cookie)
+                            body = '{"status":"ok"}' if 'sid=synthetic' in cookie else '{"message":"login_required"}'
+                            await route.fulfill(status=200, body=body, headers={
+                                'content-type': 'application/json', 'content-length': str(len(body)),
+                                'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true'})
+                        else:
+                            await route.fulfill(content_type='text/html', body='''<html><body><main>Editor</main>
+                              <button onclick="fetch('https://i.instagram.com/api/v1/media/configure/', {credentials:'include'})
+                                .then(r=>r.json()).then(r=>document.querySelector('main').innerText=r.message||'Accepted')">Share</button>
+                              </body></html>''')
+                    await ctx.route('**/*', fixture)
+                    return ctx
+                return SimpleNamespace(new_context=new_context, close=browser.close)
+            server.app.state.playwright = SimpleNamespace(chromium=SimpleNamespace(launch=launch))
+            for parent in [False, True]:
+                cookie = {'name': 'sid', 'value': 'synthetic', 'httpOnly': True, 'sameSite': 'None',
+                          **({'domain': '.instagram.com'} if parent else {})}
+                with patch.object(server, 'public_addresses', AsyncMock(return_value=[])):
+                    pending = await server.execute(server.Command(scope='board:instagram-test', controller='alice',
+                        operation='prepare_import', url=origin))
+                state = await server.execute(server.Command(scope='board:instagram-test', controller='alice',
+                    operation='import', session_id=pending['sessionId'], url=origin + '/editor',
+                    storage={'cookies': [cookie]}))
+                try:
+                    result = await server.execute(server.Command(scope='board:instagram-test', operation='agent_click',
+                        target={'by': 'role', 'value': 'button', 'name': 'Share'}))
+                    self.assertEqual('sid=synthetic' in sent[-1], parent)
+                    if parent:
+                        self.assertIn('Accepted', result['text'])
+                        self.assertNotIn('requiresReauthentication', result)
+                    else:
+                        self.assertTrue(result['requiresReauthentication'])
+                finally:
+                    await server.execute(server.Command(scope='board:instagram-test', operation='disconnect',
+                        controller='alice', session_id=state['sessionId']))
+
     async def test_human_login_handoff_and_site_boundary(self):
         async with async_playwright() as pw:
             # Install a synthetic upstream UNDER the production navigation guard.

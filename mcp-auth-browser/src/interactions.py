@@ -60,6 +60,13 @@ async def perform_action(session, cmd, snapshot, upload=None):
         result = await snapshot(session, cmd)
         return {**result, "actionPerformed": True,
                 "message": "The browser action completed. Verify the website's result; this alone does not confirm publication."}
+    except HTTPException as error:
+        if error.status_code == 401:
+            return {"actionPerformed": True, "pageAvailable": False,
+                    "requiresReauthentication": True, "publicationConfirmed": False,
+                    "message": "The website rejected authentication after the action. Reconnect and share this website session again. Verify publication before any retry."}
+        return {"actionPerformed": True, "pageAvailable": False,
+                "message": "The action completed but the resulting page could not be read. Check browser_status/browser_read; do not repeat the action."}
     except Exception:
         return {"actionPerformed": True, "pageAvailable": False,
                 "message": "The action completed but the resulting page could not be read. Check browser_status/browser_read; do not repeat the action."}
