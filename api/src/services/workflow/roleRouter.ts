@@ -18,6 +18,7 @@ import { getSettings } from '../configManager.js';
 import { isExternalTask, taskContentForPrompt } from '../../lib/taskTrust.js';
 import { getLlmConfig } from '../database.js';
 import { createProvider } from '../llmProviders.js';
+import { isInTaskScope } from './agentSelector.js';
 
 const ROLE_ROUTER_TIMEOUT_MS = 30_000;
 const ROLE_DESC_MAX_CHARS = 300;
@@ -38,8 +39,7 @@ function _collectAvailableRoles(
   const roleMap = new Map<string, { agents: string[]; description: string }>();
   for (const a of agents.values()) {
     if (a.enabled === false) continue;
-    if (ownerId && a.ownerId && a.ownerId !== ownerId) continue;
-    if (boardId && a.boardId !== boardId) continue;
+    if (!isInTaskScope(a, boardId, ownerId)) continue;
     const role = (a.role || '').trim();
     if (!role) continue;
     let entry = roleMap.get(role);

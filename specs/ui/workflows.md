@@ -149,6 +149,16 @@ Rules (engine: `api/src/services/workflow/columnAutoRetry.ts`, driven by the per
 
 The default board's workflow is read-only.
 
+### Agent selection on shared boards
+
+Workflow execution, automatic assignment and automatic role routing use agents
+on the task's own board, including agents owned by another user. The board's
+project link defines their shared project; an agent's working repository is only
+a selection preference. Agents from another board are never eligible, even if
+that board belongs to the same project. Role, enabled state, availability and
+active-run reservations still apply. Legacy tasks without a board retain their
+owner scope.
+
 ### Decision model action
 
 In Admin → LLM Configurations, choose **Decision model (Jev / System One)**.

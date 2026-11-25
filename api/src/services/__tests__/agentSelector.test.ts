@@ -1,9 +1,8 @@
 /**
  * AgentSelector tests
  *
- * Board and repo are *preferences* here, not filters: the selector narrows to
- * the task's board, then to its repo, but falls back to the wider pool rather
- * than returning nobody.
+ * The board is a hard boundary (and defines the project). Within that board,
+ * the working repo is a preference and ownership does not restrict selection.
  *
  * Focus: when a pending run_agent action looks for an idle agent on a given
  * board+role, the selector must be willing to pick an idle agent that is
@@ -20,6 +19,8 @@ import {
   findAgentByRole,
   findAgentForAssignment,
   hasIdleAgentWithRole,
+  hasSelectableAgent,
+  hasAgentWithRole,
   reserveAgentForTask,
   acquireLock,
   releaseLock,
@@ -302,7 +303,7 @@ test('a live reservation excludes an idle CLI from assignment and survives the s
   assert.equal(findAgentForAssignment(agents, 'dev')?.id, 'reserved');
 });
 
-test('findAgentForAssignment still respects the owner scope', () => {
+test('another board is excluded even with the same repository and a different owner', () => {
   const agents = makeAgents([
     {
       id: 'a1',
@@ -324,4 +325,72 @@ test('findAgentForAssignment still respects the owner scope', () => {
     findAgentByRole(agents, 'dev', 'u1', () => [], 'b1', 'org/repo'),
     null
   );
+});
+
+test('shared-board agents are eligible regardless of owner or working repository', () => {
+  const agent = {
+    id: 'shared-marketer',
+    role: 'marketing',
+    boardId: 'communication',
+    ownerId: 'matterworld-user',
+    project: null,
+    status: 'idle',
+    enabled: true,
+  };
+  const agents = new Map([[agent.id, agent]]);
+  const scope = { role: 'marketing', ownerId: 'board-owner', boardId: 'communication' };
+  assert.equal(hasIdleAgentWithRole(agents, scope.role, scope.boardId), true);
+  assert.equal(hasSelectableAgent(agents, scope), true);
+  assert.equal(hasAgentWithRole(agents, scope.role, scope.ownerId, scope.boardId), true);
+  assert.equal(
+    findAgentByRole(agents, scope.role, scope.ownerId, () => [], scope.boardId)?.id,
+    agent.id
+  );
+  assert.equal(
+    findAgentForAssignment(agents, scope.role, scope.ownerId, () => [], null, scope.boardId)?.id,
+    agent.id
+  );
+
+  for (const changes of [
+    { enabled: false },
+    { status: 'busy' },
+    { role: 'developer' },
+    { boardId: 'another-board-in-the-same-project' },
+  ]) {
+    const excluded = new Map([[agent.id, { ...agent, ...changes }]]);
+    assert.equal(hasSelectableAgent(excluded, scope), false);
+    assert.equal(
+      findAgentByRole(excluded, scope.role, scope.ownerId, () => [], scope.boardId),
+      null
+    );
+    assert.equal(
+      findAgentForAssignment(excluded, scope.role, scope.ownerId, () => [], null, scope.boardId),
+      null
+    );
+  }
+  const release = reserveAgentForTask(agent.id, 'shared-task', 'shared-task:run');
+  assert.ok(release);
+  try {
+    assert.equal(hasSelectableAgent(agents, scope), false);
+    assert.equal(
+      findAgentByRole(agents, scope.role, scope.ownerId, () => [], scope.boardId),
+      null
+    );
+    assert.equal(
+      findAgentForAssignment(agents, scope.role, scope.ownerId, () => [], null, scope.boardId),
+      null
+    );
+  } finally {
+    release();
+  }
+});
+
+test('board-less tasks retain the legacy owner boundary', () => {
+  const agent = { id: 'legacy', role: 'dev', ownerId: 'other-user', status: 'idle' };
+  const agents = new Map([[agent.id, agent]]);
+  assert.equal(findAgentByRole(agents, 'dev', 'owner'), null);
+  assert.equal(findAgentForAssignment(agents, 'dev', 'owner'), null);
+  assert.equal(hasSelectableAgent(agents, { role: 'dev', ownerId: 'owner' }), false);
+  assert.equal(hasAgentWithRole(agents, 'dev', 'owner'), false);
+  assert.equal(findAgentByRole(agents, 'dev', 'other-user')?.id, agent.id);
 });

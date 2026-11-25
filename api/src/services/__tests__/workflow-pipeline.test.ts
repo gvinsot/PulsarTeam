@@ -381,6 +381,37 @@ async function waitForStatus(
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════════
 
+test('shared-board workflow routes, assigns and runs another owners agent', async () => {
+  const { executeAction } = await import('../workflow/actionExecutor.js');
+  const mgr = await setup([{ name: 'Shared marketer', role: 'marketing', ownerId: 'member' }]);
+  const { task, agentId } = createTask(mgr, 'Prepare a communication draft', 'step1');
+  task.agentId = null;
+  task.projectId = 'matterworld-project';
+  task.project = 'MatterWorld';
+  const agent = mgr.agents.get(agentId);
+  assert.ok(agent);
+  agent.ownerId = 'member';
+  agent.project = null;
+  const context = { agentManager: mgr, io: mgr.io, ownerId: 'board-owner', workflow: null };
+  const assigned = await executeAction({ type: 'assign_agent', role: '__auto__' }, task, context);
+  assert.equal(assigned.executed, true);
+  assert.equal(taskRows.get(task.id)?.assignee, agentId);
+  let executions = 0;
+  mgr.sendMessage = async id => {
+    assert.equal(id, agentId);
+    executions++;
+    return 'Communication draft';
+  };
+  const result = await executeAction(
+    { type: 'run_agent', mode: 'title', role: '__auto__' },
+    task,
+    context
+  );
+  assert.equal(result.executed, true);
+  assert.equal(executions, 1);
+  assert.equal(agent.ownerId, 'member', 'execution must preserve the agent owner');
+});
+
 test('resuming a blocked task clears the obsolete error before sending the new prompt', async () => {
   const mgr = await setup([{ name: 'Recovered worker', role: 'assistant' }]);
   const { task, agentId } = createTask(mgr, 'Verify the reconnected repository', 'execute');

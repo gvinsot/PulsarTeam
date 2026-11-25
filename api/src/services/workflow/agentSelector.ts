@@ -170,6 +170,21 @@ export function isOnTaskBoard(agent: any, boardId: string | null | undefined): b
 }
 
 /**
+ * Board membership authorizes workflow selection, regardless of who owns the
+ * agent. The board's project_id defines the project for both tasks and agents;
+ * agent.project is a working repository, not the project boundary.
+ * Board-less legacy tasks retain their owner scope.
+ */
+export function isInTaskScope(
+  agent: { boardId?: string | null; ownerId?: string | null },
+  boardId: string | null,
+  ownerId: string | null
+): boolean {
+  if (boardId) return agent.boardId === boardId;
+  return !ownerId || !agent.ownerId || agent.ownerId === ownerId;
+}
+
+/**
  * Whether at least one idle, enabled agent exists (optionally matching a role)
  * on the task's board. Scoped like the selectors below, so an
  * `idle_agent_available` condition never goes green on an agent the following
@@ -195,7 +210,7 @@ export function hasIdleAgentWithRole(
 
 /**
  * True when findAgentByRole could pick SOME agent right now — same fences
- * (enabled, owner, board) and the same availability (idle or error, not busy in
+ * (enabled, task scope) and the same availability (idle or error, not busy in
  * another run). `role` narrows to one role; omitted, any role.
  */
 export function hasSelectableAgent(
@@ -212,15 +227,14 @@ export function hasSelectableAgent(
       (a.status === 'idle' || a.status === 'error') &&
       !isAgentBusy(a.id) &&
       (!role || (a.role || '').toLowerCase() === role.toLowerCase()) &&
-      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
-      isOnTaskBoard(a, boardId)
+      isInTaskScope(a, boardId, ownerId)
     )
       return true;
   }
   return false;
 }
 
-/** True when at least one enabled agent of the board (and owner) has `role`,
+/** True when at least one enabled agent in the task scope has `role`,
  *  whatever it is doing. */
 export function hasAgentWithRole(
   agents: Map<any, any>,
@@ -232,8 +246,7 @@ export function hasAgentWithRole(
     if (
       a.enabled !== false &&
       (a.role || '').toLowerCase() === role.toLowerCase() &&
-      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
-      isOnTaskBoard(a, boardId)
+      isInTaskScope(a, boardId, ownerId)
     )
       return true;
   }
@@ -266,7 +279,7 @@ function _preferOrFallback(
  *
  * @param {Map} agents             - agentManager.agents
  * @param {string} role            - required role
- * @param {string|null} ownerId    - only consider agents owned by this user (or unowned)
+ * @param {string|null} ownerId    - legacy owner scope, only used for board-less tasks
  * @param {Function} getAgentTasks - (agentId) => Task[]
  * @param {string|null} boardId    - the task's board; only its agents are eligible
  * @returns {Object|null}          - the selected agent, or null
@@ -281,14 +294,13 @@ export function findAgentByRole(
 ) {
   const allAgents = Array.from(agents.values()) as any[];
 
-  // Step 1: match role + owner + board. The board is a fence: another board's
-  // agent never picks up this task, even with the right role.
+  // Step 1: match role + task scope. Shared-board agents are eligible regardless
+  // of owner; another board's agent never picks up this task.
   const matching = allAgents.filter(
     (a: any) =>
       a.enabled !== false &&
       (a.role || '').toLowerCase() === role.toLowerCase() &&
-      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
-      isOnTaskBoard(a, boardId)
+      isInTaskScope(a, boardId, ownerId)
   );
 
   if (matching.length === 0) {
@@ -389,8 +401,7 @@ export function findAgentForAssignment(
       !isAgentBusy(a.id) &&
       !unavailable.has(a.id) &&
       (a.role || '').toLowerCase() === (role || '').toLowerCase() &&
-      (!ownerId || !a.ownerId || a.ownerId === ownerId) &&
-      isOnTaskBoard(a, boardId)
+      isInTaskScope(a, boardId, ownerId)
   );
 
   if (candidates.length === 0) return null;
