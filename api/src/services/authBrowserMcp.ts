@@ -12,8 +12,13 @@ import {
 import { text, jsonError } from './mcpResponses.js';
 import { resolveAgentCurrentTask } from './agentManager/currentTask.js';
 import { isAgentConfined } from './security/externalRunProfile.js';
-import { addTaskAttachment } from './database/taskAttachments.js';
+import {
+  addTaskAttachment,
+  listTaskAttachments,
+  getTaskAttachmentData,
+} from './database/taskAttachments.js';
 import { sanitizeAttachmentName } from '../lib/taskAttachments.js';
+import { publicBrowserUpload, uploadBrowserFile } from './authBrowserUpload.js';
 
 /** Read options shared by every tool that returns page content. */
 const readShape = {
@@ -49,6 +54,25 @@ const siteShape = {
     ),
 };
 
+const targetSchema = z
+  .object({
+    by: z.enum(['role', 'label', 'css']),
+    value: z
+      .string()
+      .min(1)
+      .max(500)
+      .describe(
+        'Accessibility role, exact field label, or CSS selector observed on the page. Must match one element.'
+      ),
+    name: z
+      .string()
+      .max(500)
+      .optional()
+      .describe('Exact accessible name when by=role, from browser_read aria.'),
+  })
+  .strict();
+const actionShape = { target: targetSchema, ...siteShape, ...readShape };
+
 const NO_ATTACHMENTS: PdfAttachmentTarget = {
   currentTaskId: async () => null,
   attach: async () => {
@@ -60,7 +84,7 @@ export function createAuthBrowserMcpServer(
   ctx: Pick<McpHandlerContext, 'agentId' | 'boardId'>,
   attachments: PdfAttachmentTarget = NO_ATTACHMENTS
 ) {
-  const server = new McpServer({ name: 'Authenticated Browser', version: '1.3.0' });
+  const server = new McpServer({ name: 'Authenticated Browser', version: '1.4.0' });
   const target = (site?: string) => resolveBrowserTarget(ctx.agentId, ctx.boardId, site);
   async function command(operation: string, params: Record<string, unknown>) {
     const { url, site, ...read } = params;
@@ -86,7 +110,12 @@ export function createAuthBrowserMcpServer(
       const { canControl: _humanControl, ...agentResult } = result;
       return text(JSON.stringify({ ...agentResult, browserLocation: 'server' }));
     } catch (error) {
-      return jsonError(error instanceof Error ? error.message : 'Browser unavailable');
+      const message = error instanceof Error ? error.message : 'Browser unavailable';
+      return jsonError(
+        operation.startsWith('agent_')
+          ? `${message} The action may have taken effect: inspect the page before retrying. Never blindly repeat a publication.`
+          : message
+      );
     }
   }
   server.tool(
@@ -126,6 +155,123 @@ export function createAuthBrowserMcpServer(
     'Scroll the page of a shared website to read more content.',
     { delta: z.number().int().min(-1400).max(1400).default(600), ...siteShape, ...readShape },
     args => call('scroll', args)
+  );
+  server.tool(
+    'browser_click',
+    'Click one button/link/control on the shared website, then read the result. Can submit forms or publish: act only for the user-requested task. Use an exact role/name or label from browser_read. Does not log in, switch sites or control third-party frames. An action is not proof of publication; verify the resulting page. Never automatically repeat an uncertain action.',
+    actionShape,
+    args => call('agent_click', args)
+  );
+  server.tool(
+    'browser_fill',
+    'Replace the value of one text field or contenteditable element on the shared page. Use an empty string to clear. No password fields or login automation. Read the page first to identify the target.',
+    { ...actionShape, text: z.string().max(4000) },
+    args => call('agent_fill', args)
+  );
+  server.tool(
+    'browser_press',
+    'Press a key on one identified control (e.g. Enter to submit, Space to toggle). This may submit a form; verify the result before retrying.',
+    {
+      ...actionShape,
+      text: z.enum([
+        'Enter',
+        'Tab',
+        'Shift+Tab',
+        'Backspace',
+        'Delete',
+        'Escape',
+        'ArrowLeft',
+        'ArrowRight',
+        'ArrowUp',
+        'ArrowDown',
+        'Home',
+        'End',
+        'Control+A',
+        'Meta+A',
+        'Space',
+      ]),
+    },
+    args => call('agent_press', args)
+  );
+  server.tool(
+    'browser_select',
+    'Select option values in one native HTML select control. For a custom dropdown use browser_click and browser_read.',
+    { ...actionShape, values: z.array(z.string().max(500)).min(1).max(30) },
+    args => call('agent_select', args)
+  );
+  server.tool(
+    'browser_upload_sources',
+    'List the files attached to your current task, with attachment_id, filename and size for browser_upload. These files are available on the API; a runner filesystem path is not a browser file path.',
+    {},
+    async () => {
+      if (!ctx.agentId || !attachments.list) return jsonError('No current task attachment source.');
+      const taskId = await attachments.currentTaskId(ctx.agentId);
+      if (!taskId) return jsonError('No current task attachment source.');
+      return text(JSON.stringify({ files: await attachments.list(taskId) }));
+    }
+  );
+  server.tool(
+    'browser_upload',
+    'Set a file on one input[type=file] in the shared page, including a hidden file input. Supply exactly one attachment_id from browser_upload_sources (current task only, attachment limit 10 MB) or a direct public HTTPS source_url (250 MB max, no redirects). For source_url, filename preserves the extension. No local runner or server paths. Upload may start processing automatically; it does not prove the site published the file. Read the page to verify progress.',
+    {
+      ...actionShape,
+      attachment_id: z.string().max(100).optional(),
+      source_url: z.string().url().max(8000).optional(),
+      filename: z.string().max(180).optional(),
+    },
+    async ({ attachment_id, source_url, filename, site, ...params }) => {
+      try {
+        if (Boolean(attachment_id) === Boolean(source_url))
+          return jsonError('Provide exactly one attachment_id or source_url.');
+        const t = await target(site);
+        // Check sharing before accessing any source file or URL.
+        const status = await browserCommand<{ canRead?: boolean; sessionId?: string }>(
+          t.scope,
+          'status',
+          {
+            site: t.site,
+          }
+        );
+        if (!status.canRead || !status.sessionId)
+          return jsonError('The website session is not shared.');
+        let file;
+        if (source_url) {
+          file = await publicBrowserUpload(source_url, filename);
+        } else {
+          if (!ctx.agentId || !attachment_id || !attachments.read)
+            return jsonError('No current task attachment source.');
+          const taskId = await attachments.currentTaskId(ctx.agentId);
+          if (!taskId) return jsonError('No current task attachment source.');
+          const attachment = await attachments.read(taskId, attachment_id);
+          if (!attachment) return jsonError('File not found on the current task.');
+          file = {
+            filename: attachment.filename,
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(attachment.data);
+                controller.close();
+              },
+            }),
+          };
+        }
+        return text(
+          JSON.stringify({
+            ...(await uploadBrowserFile(
+              t.scope,
+              { ...params, site: t.site, session_id: status.sessionId },
+              file
+            )),
+            browserLocation: 'server',
+          })
+        );
+      } catch (error) {
+        return jsonError(
+          error instanceof Error
+            ? error.message
+            : 'Upload was not confirmed. Inspect the page before retrying.'
+        );
+      }
+    }
   );
   server.tool(
     'browser_screenshot',
@@ -223,6 +369,8 @@ export interface PdfAttachmentTarget {
     filename: string;
     data: Buffer;
   }): Promise<{ id: string; filename: string; size: number }>;
+  list?(taskId: string): Promise<Array<{ attachment_id: string; filename: string; size: number }>>;
+  read?(taskId: string, attachmentId: string): Promise<{ filename: string; data: Buffer } | null>;
 }
 
 type AgentRegistry = Parameters<typeof resolveAgentCurrentTask>[0] & {
@@ -246,6 +394,13 @@ export function taskAttachmentTarget(agentManager: AgentRegistry): PdfAttachment
         uploadedBy: null,
         uploadedByName: agentManager.agents.get(agentId)?.name || 'agent',
       }),
+    list: async taskId =>
+      (await listTaskAttachments(taskId)).map(f => ({
+        attachment_id: f.id,
+        filename: f.filename,
+        size: f.size,
+      })),
+    read: getTaskAttachmentData,
   };
 }
 

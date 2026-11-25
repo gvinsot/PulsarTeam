@@ -2,8 +2,8 @@
 
 One Chromium process per (scope, website): an agent or board can share several
 sites, each its own session keyed ``<scope>@<host>``. Interactive login is a
-HUMAN-only API; MCP can only read, navigate or scroll a session explicitly
-released by that human.
+HUMAN-only API; MCP can read and interact with a session explicitly released
+by that human. No arbitrary JavaScript, credentials export or local file paths.
 """
 import asyncio
 import base64
@@ -16,15 +16,17 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Literal
 from urllib.parse import urlsplit, parse_qs
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from playwright.async_api import async_playwright
 
 from egress import PublicProxy, https_origin, public_addresses
 from page_state import NetworkTracker, read_page, shared_url
+from interactions import AGENT_ACTIONS, perform_action
 
 MAX_SESSIONS = 6
 SCREENSHOT_MAX_HEIGHT = 4000
@@ -35,6 +37,36 @@ IDLE_SECONDS = 30 * 60
 HUMAN_OPS = {"frame", "click", "text", "key", "wheel", "back", "home", "activate", "takeover", "disconnect"}
 KEYS = {"Enter", "Tab", "Shift+Tab", "Backspace", "Delete", "Escape", "ArrowLeft",
         "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Control+A", "Meta+A"}
+UPLOAD_MAX_BYTES = 250 * 1024 * 1024
+upload_slots = asyncio.Semaphore(2)
+STAGED_MAX_BYTES = 500 * 1024 * 1024
+staged_bytes = 0
+
+
+class StagedUpload:
+    """Keep the file alive while Chromium may lazily read it for an upload."""
+    def __init__(self, filename):
+        global staged_bytes
+        if staged_bytes + UPLOAD_MAX_BYTES > STAGED_MAX_BYTES:
+            raise HTTPException(429, "Upload storage full. Disconnect unused sessions to release files.")
+        self.directory = TemporaryDirectory(prefix="browser-upload-")
+        self.path = Path(self.directory.name) / filename
+        self.reserved = UPLOAD_MAX_BYTES
+        staged_bytes += self.reserved
+        self.retained = False
+        self.closed = False
+
+    def resize(self, size):
+        global staged_bytes
+        staged_bytes += size - self.reserved
+        self.reserved = size
+
+    def close(self):
+        global staged_bytes
+        if not self.closed:
+            self.directory.cleanup()
+            staged_bytes -= self.reserved
+            self.closed = True
 
 # Cloudflare challenges: the API has FlareSolverr solve the site's root and sends
 # back only these cookies plus the solver's user agent, which cf_clearance is
@@ -75,12 +107,22 @@ def secret():
         return os.environ.get("AUTH_BROWSER_KEY", "")
 
 
+class Target(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    by: Literal["role", "label", "css"]
+    value: str = Field(min_length=1, max_length=500)
+    name: str = Field(default="", max_length=500)
+
+
 class Command(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: str = Field(pattern=r"^(agent|board):[a-zA-Z0-9_-]{1,200}$")
     operation: Literal["status", "start", "frame", "click", "text", "key", "wheel", "back", "home",
                        "activate", "takeover", "disconnect", "read", "navigate", "scroll", "pdf",
-                       "screenshot", "clearance", "prepare_import", "import", "list"]
+                       "screenshot", "clearance", "prepare_import", "import", "list",
+                       "agent_click", "agent_fill", "agent_press", "agent_select", "agent_upload"]
+    target: Target | None = None
+    values: list[str] = Field(default_factory=list, max_length=30)
     # Which shared website of the scope (any URL on it). Optional while the
     # scope holds a single session or pending transfer.
     site: str = Field(default="", max_length=4000)
@@ -123,6 +165,7 @@ class Session:
         self.navigation_blocked = False
         self.imported = False
         self.network = None
+        self.uploads = []
 
     def expired(self):
         now = time.time()
@@ -131,6 +174,7 @@ class Session:
     def status(self):
         return {"exists": True, "connected": self.phase == "ready", "phase": self.phase,
                 "browserLocation": "server", "canRead": self.phase == "ready",
+                "canInteract": self.phase == "ready",
                 "pageState": self.page_state,
                 "sessionId": self.id, "site": self.origin,
                 "expiresAt": int((self.created + SESSION_SECONDS) * 1000)}
@@ -277,6 +321,9 @@ class Session:
     async def close(self):
         if self.browser:
             await self.browser.close()
+        for upload in self.uploads:
+            upload.close()
+        self.uploads.clear()
         await self.proxy.close()
 
 
@@ -423,7 +470,7 @@ async def snapshot(session, cmd=None):
     return data
 
 
-async def execute(cmd: Command):
+async def execute(cmd: Command, upload=None):
     expire_imports()
     if cmd.operation == "list":
         entries = []
@@ -550,9 +597,23 @@ async def execute(cmd: Command):
             session.require_human(cmd)
         else:
             session.require_agent()
+        if cmd.operation == "agent_upload" and cmd.session_id != session.id:
+            raise HTTPException(409, "The upload session changed")
         if cmd.operation not in {"frame"}:
             session.used = time.time()
         page = session.active_page()
+        if cmd.operation in AGENT_ACTIONS:
+            if upload:
+                session.uploads.append(upload)
+                upload.retained = True
+            try:
+                return await perform_action(session, cmd, snapshot, str(upload.path) if upload else None)
+            except HTTPException:
+                # Validation failed before dispatch, so no browser File uses it.
+                if upload:
+                    session.uploads.remove(upload)
+                    upload.retained = False
+                raise
         if cmd.operation == "takeover":
             session.phase = "login"
             return session.status()
@@ -672,3 +733,54 @@ async def command(cmd: Command, authorization: str = Header(default="")):
     except Exception:
         # Playwright exceptions often contain URLs or DOM/password details.
         raise HTTPException(502, "Le navigateur ne peut pas effectuer cette opération. Vérifiez la connexion ou reconnectez-vous.")
+
+
+@app.post("/upload")
+async def upload_file(request: Request, authorization: str = Header(default=""),
+                      x_browser_command: str = Header(default=""),
+                      x_upload_filename: str = Header(default="")):
+    key = secret()
+    if len(key) < 32 or not hmac.compare_digest(authorization, "Bearer " + key):
+        raise HTTPException(403, "Browser worker authentication required")
+    try:
+        if len(x_browser_command) > 12000 or len(x_upload_filename) > 1000:
+            raise ValueError("Oversized upload metadata")
+        cmd = Command.model_validate_json(base64.b64decode(x_browser_command, validate=True))
+        filename = base64.b64decode(x_upload_filename, validate=True).decode("utf-8")
+        if (cmd.operation != "agent_upload" or not cmd.target or not filename or
+                len(filename) > 180 or filename in {".", ".."} or
+                any(c in filename for c in '/\\') or any(ord(c) < 32 for c in filename)):
+            raise ValueError("Invalid upload metadata")
+    except Exception:
+        raise HTTPException(400, "Invalid upload metadata")
+    session = sessions.get(resolve_key(cmd))
+    if not session or session.expired():
+        raise HTTPException(409, "No active session")
+    session.require_agent()
+    if cmd.session_id != session.id:
+        raise HTTPException(409, "The upload session changed")
+    try:
+        async with asyncio.timeout(180), upload_slots:
+            # Chromium can read a selected file later, after another click.
+            # Keep accepted files until session destruction, with a global cap.
+            upload = StagedUpload(filename)
+            try:
+                total = 0
+                with upload.path.open("wb") as dest:
+                    async for chunk in request.stream():
+                        total += len(chunk)
+                        if total > UPLOAD_MAX_BYTES:
+                            raise HTTPException(413, "Upload exceeds 250 MB")
+                        dest.write(chunk)
+                if not total:
+                    raise HTTPException(400, "Empty upload")
+                upload.resize(total)
+                result = await asyncio.wait_for(execute(cmd, upload=upload), 50)
+                return {**result, "filename": filename, "size": total}
+            finally:
+                if not upload.retained:
+                    upload.close()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "Upload outcome uncertain. Inspect the page before retrying.")

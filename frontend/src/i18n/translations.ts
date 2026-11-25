@@ -1,6 +1,10 @@
 export type Lang = 'en' | 'fr';
 
 const translations = {
+  'authBrowser.interactions': {
+    en: 'Sharing lets the selected agents read, click, fill forms and upload files with this account, including publishing when requested. Pause sharing to suspend their access.',
+    fr: 'Le partage permet aux agents sélectionnés de lire, cliquer, remplir des formulaires et téléverser des fichiers avec ce compte, y compris publier sur demande. Mettez le partage en pause pour suspendre leur accès.',
+  },
   'decision.choice': { en: 'Model choice', fr: 'Choix du modèle' },
   'autoRetry.title': { en: 'Auto-retry', fr: 'Relance automatique' },
   'autoRetry.help': {

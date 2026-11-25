@@ -12,7 +12,9 @@ uses that server session. It never sends navigation commands to the extension.
 The separate LinkedIn plugin is retired. Use Authenticated Browser with the exact
 website origin, such as `https://www.linkedin.com/` or
 `https://www.legifrance.gouv.fr/`. The plugin provides general page navigation and
-reading; it does not reproduce specialized API tools or provide publishing tools.
+reading and interaction (click, fill, select, key presses and file upload). Agents
+can complete a user-requested publication through the website's own interface;
+there is no platform-specific publication API or guarantee of website support.
 Existing Authenticated Browser assignments keep the same `skill-auth-browser` and
 `mcp-auth-browser` identifiers. Retired built-in LinkedIn definitions are removed
 from the database by the existing startup cleanup after deployment. An old
@@ -118,6 +120,24 @@ replace the server-owned page, including while sharing is paused.
 - `browser_navigate`: open an HTTPS page on the exact origin of a shared website
   (whose session is used) and read it.
 - `browser_scroll`: scroll the page and read more content.
+- `browser_click`, `browser_fill`, `browser_press`, `browser_select`: interact with
+  one control on the shared main page, including open shadow roots. A target is
+  `{by: "role", value: "button", name: "Publish"}`, `{by: "label", value: "Title"}`
+  or `{by: "css", value: "#observed-id"}`. Read the page first; targets must match
+  exactly one element. Fill replaces the text; select uses native option values.
+  Password/hidden credential inputs and iframe targeting are refused.
+- `browser_upload_sources`: list the current task's attachment IDs and filenames.
+- `browser_upload`: set one file input, including a hidden one. `browser_read`
+  now returns `fileInputs` selectors. Provide either an `attachment_id` from the
+  current task (existing 10 MB attachment limit) or a direct public HTTPS
+  `source_url`, with optional `filename` (250 MB maximum). Runner/local paths,
+  private URLs and redirects are not supported. Do not make a private file
+  public just to use this tool. Sources are streamed without website cookies to
+  a bounded temporary worker file, retained until the session closes because
+  the website may read it after a later Publish click. Failed transfers are
+  erased immediately. Total staged files are capped at 500 MB across the worker;
+  disconnect unused sessions to release storage. No file bytes
+  pass through the model. The upload is bound to the original session ID.
 - `browser_screenshot`: JPEG of the viewport, or with `full_page` of the whole page in
   4000 px sections (`section` 1, 2, …; the result reports `section` and `sections`).
   Agents on a model without image support receive a text notice instead.
@@ -132,8 +152,15 @@ returned with `settled: false`. Password field values are redacted from every re
 a page with a visible password field, including a screenshot request, is refused as a
 login page. Third-party iframes are never read.
 
-There are no agent tools for arbitrary JavaScript, cookie or storage export,
-clicking, or submitting forms. Websites still execute their own JavaScript, and
+There are no agent tools for arbitrary JavaScript, cookie or storage export.
+The interaction tools can submit forms and publish with the shared account.
+Sharing/pause/revoke rules and exact-origin restrictions apply to every action.
+`canInteract` indicates whether the shared session is ready for these tools.
+An action's `actionPerformed` flag confirms a browser operation, not publication.
+After upload, inspect processing; after Publish, verify the site's confirmation
+and published link. If `outcome: "unknown"` or `pageAvailable: false` is returned,
+inspect the page before any retry. No action is automatically retried.
+Websites still execute their own JavaScript, and
 navigation or a GET request can have side effects on a poorly designed website.
 This is not a universal read-only guarantee. Page content remains untrusted and
 may contain prompt injection.
@@ -255,7 +282,7 @@ npm run build
 Worker tests, from the repository root:
 
 ```sh
-python -m pip install -r mcp-auth-browser/requirements.txt
+python -m pip install -r mcp-auth-browser/requirements-test.txt
 python -m unittest discover -s mcp-auth-browser/tests -v
 ```
 

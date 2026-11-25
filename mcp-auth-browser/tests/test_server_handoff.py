@@ -4,6 +4,8 @@ import base64
 import os
 import sys
 import unittest
+import json
+import httpx
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -81,6 +83,20 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
               <script>customElements.define('x-card', class extends HTMLElement {
                 connectedCallback() { this.attachShadow({mode: 'open'}).innerHTML = '<p>Shadow balance 42</p>'; }
               });</script></main></body></html>'''
+        elif path == '/editor':
+            body = '''<html><body><h1>Video editor</h1>
+              <label>Title <input id="title"></label>
+              <div role="textbox" aria-label="Description" contenteditable="true"></div>
+              <select aria-label="Visibility"><option value="private">Private</option><option value="public">Public</option></select>
+              <input id="video" type="file" accept="video/mp4" hidden>
+              <input id="secret" type="password" hidden value="do-not-export">
+              <button onclick="window.published=(window.published||0)+1; document.querySelector('#result').textContent='Published '+window.published">Publish</button>
+              <button onclick="document.body.innerHTML='<input type=password>Sign in'">Expire</button>
+              <a href="https://elsewhere.test/">External</a>
+              <p id="result">Draft</p><p id="uploaded"></p>
+              <script>document.querySelector('#video').onchange=async e=>{
+                const f=e.target.files[0]; document.querySelector('#uploaded').textContent=f.name+' '+f.size+' '+await f.text();
+              };</script></body></html>'''
         elif path == '/tall':
             body = '<html><title>Statement</title><body style="margin:0"><main style="height:9000px">Long statement</main></body></html>'
         elif path == '/frame':
@@ -112,6 +128,82 @@ class ServerHandoffTests(unittest.IsolatedAsyncioTestCase):
                 operation='prepare_import', url=ORIGIN))
         return await server.execute(server.Command(scope='board:a', controller='alice',
             operation='import', session_id=pending['sessionId'], storage=STATE, url=ORIGIN + path))
+
+    async def test_agent_interactions_and_binary_upload(self):
+        state = await self.import_page('/editor')
+        self.assertTrue(state['canInteract'])
+        async def act(operation, by, value, **params):
+            return await server.execute(server.Command(scope='board:a', operation=operation,
+                target={'by': by, 'value': value, 'name': params.pop('name', '')}, **params))
+        await act('agent_fill', 'label', 'Title', text='My video')
+        await act('agent_fill', 'role', 'textbox', name='Description', text='A caption')
+        await act('agent_select', 'label', 'Visibility', values=['public'])
+        page = server.sessions['board:a@site.test'].page
+        self.assertEqual(await page.locator('#title').input_value(), 'My video')
+        self.assertEqual(await page.locator('[contenteditable]').inner_text(), 'A caption')
+        self.assertEqual(await page.locator('select').input_value(), 'public')
+        await act('agent_press', 'label', 'Title', text='End')
+        read = await server.execute(server.Command(scope='board:a', operation='read'))
+        self.assertEqual(read['fileInputs'][0]['selector'], '#video')
+        metadata = {'scope': 'board:a', 'operation': 'agent_upload', 'site': ORIGIN, 'session_id': state['sessionId'],
+                    'target': {'by': 'css', 'value': '#video'}}
+        headers = {'authorization': 'Bearer ' + 'x' * 32,
+                   'x-browser-command': base64.b64encode(json.dumps(metadata).encode()).decode(),
+                   'x-upload-filename': base64.b64encode('12-vache.mp4'.encode()).decode()}
+        with patch.object(server, 'secret', return_value='x' * 32):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url='http://worker') as client:
+                denied = await client.post('/upload', headers={**headers, 'authorization': ''}, content=b'video')
+                self.assertEqual(denied.status_code, 403)
+                response = await client.post('/upload', headers=headers, content=b'video-bytes')
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertTrue(response.json()['actionPerformed'])
+                self.assertIn('12-vache.mp4 11 video-bytes', response.json()['text'])
+                # Browser File objects are read lazily: bytes must still exist
+                # after the worker response and before a later Publish click.
+                self.assertEqual(await page.locator('#video').evaluate('async el => await el.files[0].text()'), 'video-bytes')
+                self.assertEqual(server.staged_bytes, 11)
+                with patch.object(server, 'UPLOAD_MAX_BYTES', 2):
+                    oversized = await client.post('/upload', headers=headers, content=b'video')
+                    self.assertEqual(oversized.status_code, 413)
+                invalid = await client.post('/upload', headers={**headers,
+                    'x-upload-filename': base64.b64encode(b'../secret').decode()}, content=b'video')
+                self.assertEqual(invalid.status_code, 400)
+                changed = {**metadata, 'session_id': 'stale-session'}
+                response = await client.post('/upload', headers={**headers,
+                    'x-browser-command': base64.b64encode(json.dumps(changed).encode()).decode()}, content=b'video')
+                self.assertEqual(response.status_code, 409)
+        published = await act('agent_click', 'role', 'button', name='Publish')
+        self.assertTrue(published['actionPerformed'])
+        self.assertIn('Published 1', published['text'])
+        # A successful action that lands on login must not be reported as a
+        # failed click: an agent must not repeat a possible publication.
+        expired = await act('agent_click', 'role', 'button', name='Expire')
+        self.assertTrue(expired['actionPerformed'])
+        self.assertFalse(expired['pageAvailable'])
+        retained_path = server.sessions['board:a@site.test'].uploads[0].path
+        await server.execute(server.Command(scope='board:a', operation='disconnect',
+            controller='alice', session_id=state['sessionId']))
+        self.assertFalse(retained_path.exists())
+        self.assertEqual(server.staged_bytes, 0)
+
+    async def test_agent_actions_keep_authorization_and_target_boundaries(self):
+        state = await self.import_page('/editor')
+        async def click(target, scope='board:a'):
+            return await server.execute(server.Command(scope=scope, operation='agent_click', target=target))
+        for target in [{'by': 'css', 'value': 'button'}, {'by': 'css', 'value': '#secret'},
+                       {'by': 'css', 'value': 'iframe >> internal:control=enter-frame >> button'}]:
+            with self.assertRaises(HTTPException):
+                await click(target)
+        with self.assertRaises(HTTPException):
+            await click({'by': 'role', 'value': 'button', 'name': 'Publish'}, 'board:other')
+        await server.execute(server.Command(scope='board:a', operation='takeover',
+            controller='alice', session_id=state['sessionId']))
+        with self.assertRaises(HTTPException):
+            await click({'by': 'role', 'value': 'button', 'name': 'Publish'})
+        await server.execute(server.Command(scope='board:a', operation='activate',
+            controller='alice', session_id=state['sessionId']))
+        await click({'by': 'role', 'value': 'link', 'name': 'External'})
+        self.assertNotIn('https://elsewhere.test/', [u for u, _ in self.requests])
 
     async def test_waits_for_render_and_keeps_owned_page_session_and_identity(self):
         status = await self.import_page()

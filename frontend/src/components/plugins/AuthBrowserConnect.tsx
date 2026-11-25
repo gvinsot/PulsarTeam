@@ -3,6 +3,7 @@ import { api, type AuthBrowserControl, type AuthBrowserSession } from '../../api
 import { useConnectStatus, type ConnectWidgetProps } from '../connect/useConnectStatus';
 import { errorMessage } from '../../utils/errors';
 import { browserSessions, pendingTransfer, sessionLabel } from './authBrowserSessions';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 // One plugin instance shares SEVERAL websites: each has its own server browser
 // session (worker key `<scope>@<host>`). Only one transfer waits at a time,
@@ -13,6 +14,7 @@ export default function AuthBrowserConnect({
   boardId,
   onStatusChange,
 }: ConnectWidgetProps) {
+  const { t } = useLanguage();
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -245,6 +247,7 @@ export default function AuthBrowserConnect({
           Download extension
         </a>
       </details>
+      <p className="text-dark-400">{t('authBrowser.interactions')}</p>
       <p className="text-dark-400">
         Login and MFA stay in your browser. Device-bound sessions or sessions rejected by the
         website may not work on the cluster. Expired sessions require a new transfer.

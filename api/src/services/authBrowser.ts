@@ -9,6 +9,7 @@ export interface BrowserStatus {
   connected: boolean;
   canControl?: boolean;
   canRead?: boolean;
+  canInteract?: boolean;
   browserLocation?: 'server';
   pageState?: 'loading' | 'ready' | 'empty' | 'login_required' | 'challenge' | 'navigation_failed';
   phase?: 'pending' | 'login' | 'ready' | 'reauth_required';
@@ -81,6 +82,7 @@ export async function browserCommand<T = BrowserStatus>(
       424: 'The server browser did not render readable page content. This is a server-side page failure, not a local-tab focus problem. Do not repeat the login automatically.',
       413: 'The PDF of this page exceeds the 10 MB attachment limit.',
       429: 'Browser capacity reached. Close a session before trying again.',
+      422: 'The target must match exactly one element. Read the page and choose a more precise target.',
     };
     throw new BrowserCommandError(
       errors[response.status] || 'The browser is unavailable. Try again or reconnect.',

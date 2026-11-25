@@ -1,5 +1,29 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+
+const uploads: Array<{ scope: unknown; params: unknown; filename: string; bytes: string }> = [];
+mock.module('../authBrowserUpload.js', {
+  namedExports: {
+    publicBrowserUpload: async () => {
+      throw new Error('unexpected external source');
+    },
+    uploadBrowserFile: async (
+      scope: unknown,
+      params: unknown,
+      file: { filename: string; body: ReadableStream<Uint8Array> }
+    ) => {
+      uploads.push({
+        scope,
+        params,
+        filename: file.filename,
+        bytes: await new Response(file.body).text(),
+      });
+      return { actionPerformed: true };
+    },
+  },
+});
 
 const calls: Array<{ scope: unknown; operation: string; params?: unknown }> = [];
 const targets: Array<string | undefined> = [];
@@ -58,12 +82,18 @@ const call = (name: string, args = {}) => {
 
 test('MCP exposes only existing server session tools and separates agent access from human control', async () => {
   assert.deepEqual(Object.keys(server._registeredTools).sort(), [
+    'browser_click',
+    'browser_fill',
     'browser_navigate',
+    'browser_press',
     'browser_read',
     'browser_save_pdf',
     'browser_screenshot',
     'browser_scroll',
+    'browser_select',
     'browser_status',
+    'browser_upload',
+    'browser_upload_sources',
   ]);
   const result = JSON.parse((await call('browser_status')).content[0].text);
   assert.equal(result.browserLocation, 'server');
@@ -71,6 +101,72 @@ test('MCP exposes only existing server session tools and separates agent access 
   assert.equal(result.sites[0].site, 'https://site.test');
   assert.equal(result.sites[0].canRead, true);
   assert.equal('canControl' in result.sites[0], false);
+});
+
+test('agent actions retain the selected session and warn against blind retries', async () => {
+  calls.length = 0;
+  const target = { by: 'role', value: 'button', name: 'Publish' };
+  await call('browser_click', { site: 'https://site.test', target });
+  assert.deepEqual(calls.at(-1), {
+    scope: { type: 'board', id: 'selected' },
+    operation: 'agent_click',
+    params: { target, site: 'https://site.test' },
+  });
+  failure = new Error('Timed out');
+  try {
+    const result = await call('browser_click', { target });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /may have taken effect/);
+    assert.equal(calls.length, 2, 'never retries the click');
+  } finally {
+    failure = undefined;
+  }
+});
+
+test('uploads resolve bytes only on the current task, never an agent-named task or path', async () => {
+  let current: string | null = 'current-task';
+  const reads: string[][] = [];
+  const uploadServer = createAuthBrowserMcpServer(
+    { agentId: 'agent', boardId: null },
+    {
+      currentTaskId: async () => current,
+      attach: async () => {
+        throw new Error('unused');
+      },
+      list: async () => [{ attachment_id: 'video', filename: '12-vache.mp4', size: 5 }],
+      read: async (taskId, id) => {
+        reads.push([taskId, id]);
+        return id === 'video' ? { filename: '12-vache.mp4', data: Buffer.from('video') } : null;
+      },
+    }
+  );
+  const client = new Client({ name: 'upload-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await uploadServer.connect(serverTransport);
+  await client.connect(clientTransport);
+  const invoke = (args: Record<string, unknown>) =>
+    client.callTool({ name: 'browser_upload', arguments: args });
+  const target = { by: 'css', value: 'input[type=file]' };
+  try {
+    uploads.length = 0;
+    assert.equal((await invoke({ target, attachment_id: 'video' })).isError, undefined);
+    assert.deepEqual(reads, [['current-task', 'video']]);
+    assert.equal(uploads[0].bytes, 'video');
+    assert.equal(uploads[0].filename, '12-vache.mp4');
+    assert.equal((await invoke({ target, attachment_id: 'other-task-file' })).isError, true);
+    assert.equal(
+      (await invoke({ target, attachment_id: 'video', source_url: 'https://example.com/video' }))
+        .isError,
+      true
+    );
+    assert.equal((await invoke({ target })).isError, true);
+    current = null;
+    assert.equal((await invoke({ target, attachment_id: 'video' })).isError, true);
+    assert.equal(uploads.length, 1);
+  } finally {
+    await client.close();
+    await uploadServer.close();
+  }
 });
 
 test('navigation reuses the resolved scope and a rendering error cannot trigger a new connection', async () => {

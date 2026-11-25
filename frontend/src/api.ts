@@ -100,6 +100,7 @@ export interface AuthBrowserSession {
   connected: boolean;
   canControl?: boolean;
   canRead?: boolean;
+  canInteract?: boolean;
   browserLocation?: 'server';
   pageState?: 'loading' | 'ready' | 'empty' | 'login_required' | 'challenge' | 'navigation_failed';
   sessionId?: string;

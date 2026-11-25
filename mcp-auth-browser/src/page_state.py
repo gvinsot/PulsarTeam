@@ -95,7 +95,16 @@ PAGE_SNAPSHOT = """() => {
             ...new URLSearchParams(new URL(a.href).hash.slice(1)).keys()]
             .some(k => /^(code|access_token|id_token|oauth_token|oauth_verifier)$/i.test(k)))
         .slice(0, 150).map(a => ({text: (a.innerText || '').trim().slice(0, 200), url: a.href}));
-    return {url: location.href, title: document.title, text, links, loginRequired, secrets};
+    // File inputs are often hidden behind a visible Upload button. Expose their
+    // selectors, never input values or a local filename, so set_input_files can
+    // target them without opening an OS chooser. Ambiguous selectors are refused.
+    const fileInputs = all('input[type="file"]').slice(0, 30).map(el => ({
+        selector: el.id ? '#' + CSS.escape(el.id) :
+            'input[type="file"]' + (el.name ? '[name="' + CSS.escape(el.name) + '"]' : ''),
+        accept: el.accept, multiple: el.multiple,
+        label: el.getAttribute('aria-label') || ''
+    }));
+    return {url: location.href, title: document.title, text, links, fileInputs, loginRequired, secrets};
 }"""
 
 
@@ -204,6 +213,8 @@ async def finish(page, origin, data, fmt, settled, wanted, found, extras=True):
     secrets = list(data.pop("secrets", []))
     result = {"url": data.get("url"), "title": data.get("title"), "links": data.get("links", []),
               "settled": settled}
+    if extras:
+        result["fileInputs"] = data.get("fileInputs", [])
     if text_limit:
         result["text"] = clip(data.get("text", "").strip(), text_limit)
     if aria_limit:
