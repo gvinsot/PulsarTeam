@@ -98,6 +98,7 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   'GET /api/internal/auth-browser-sessions': ['authenticateAuthBrowserWorker'],
   'PUT /api/internal/auth-browser-sessions': ['authenticateAuthBrowserWorker'],
   'DELETE /api/internal/auth-browser-sessions': ['authenticateAuthBrowserWorker'],
+  'POST /api/internal/auth-browser-sessions/credentials': ['authenticateAuthBrowserWorker'],
   // ── /api/auth ─────────────────────────────────────────────────────
   // Sign-in surface. Reached before a session exists, by definition. /verify
   // and /logout validate for themselves the token they are handed.

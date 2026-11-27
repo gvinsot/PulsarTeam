@@ -11,9 +11,18 @@ import { BrowserCommandError } from '../services/authBrowser.js';
 import {
   browserCommand,
   browserConfigured,
+  browserSessionKey,
+  browserStateEnvironment,
   listBrowserSessions,
   type BrowserScope,
+  type BrowserStatus,
 } from '../services/authBrowser.js';
+import { browserCredentials } from '../schemas/authBrowserSessions.js';
+import {
+  browserCredentialKeys,
+  deleteBrowserCredentials,
+  saveBrowserCredentials,
+} from '../services/database/authBrowserSessions.js';
 
 // No arbitrary cookie domains/storage origins. The sole domain marker preserves
 // Instagram parent-cookie provenance for the worker's fixed publishing API host.
@@ -57,15 +66,57 @@ const schema = z
       .string()
       .regex(/^[a-zA-Z0-9_-]{1,200}$/)
       .optional(),
-    operation: z.enum(['status', 'prepare_import', 'import', 'activate', 'takeover', 'disconnect']),
+    operation: z.enum([
+      'status',
+      'prepare_import',
+      'import',
+      'activate',
+      'takeover',
+      'disconnect',
+      'set_lifetime',
+      'set_credentials',
+      'clear_credentials',
+      'relogin',
+    ]),
     sessionId: z.string().uuid().optional(),
     // Which of the scope's websites a session command targets (its origin).
     site: z.string().url().max(300).optional(),
     url: z.string().url().max(4000).optional(),
     storage: storageSchema.optional(),
+    // `set_lifetime`: the worker's LIFETIME_HOURS.
+    lifetimeHours: z
+      .union([z.literal(8), z.literal(24), z.literal(168), z.literal(720)])
+      .optional(),
+    // `set_credentials`: validated again by browserCredentials before storage.
+    credentials: z
+      .object({
+        username: z.string().max(500),
+        password: z.string().max(1000),
+        totpSecret: z.string().max(200).optional(),
+        loginUrl: z.string().max(4000).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine(s => Boolean(s.agentId) !== Boolean(s.boardId), 'Choose an agent or a board.');
+
+const CREDENTIAL_OPERATIONS = new Set(['set_credentials', 'clear_credentials']);
+
+/** Flag the websites whose sign-in credentials are stored. Best effort. */
+async function withAutoLogin(scope: BrowserScope, sessions: BrowserStatus[]) {
+  const environment = browserStateEnvironment();
+  const keyOf = (s: BrowserStatus) => (s.site ? browserSessionKey(scope, s.site) : '');
+  let stored = new Set<string>();
+  if (environment) {
+    try {
+      stored = await browserCredentialKeys(environment, sessions.map(keyOf).filter(Boolean));
+    } catch {
+      // Status stays available when the database is not.
+    }
+  }
+  return sessions.map(s => ({ ...s, autoLogin: stored.has(keyOf(s)) }));
+}
 
 export function authBrowserRoutes() {
   const router = Router();
@@ -126,11 +177,30 @@ export function authBrowserRoutes() {
         res.json({ configured: false, exists: false, connected: false });
         return;
       }
-      const { operation, sessionId, agentId: _agent, boardId: _board, ...params } = input;
+      const {
+        operation,
+        sessionId,
+        agentId: _agent,
+        boardId: _board,
+        lifetimeHours,
+        credentials,
+        ...params
+      } = input;
+      if ((operation === 'set_lifetime') !== Boolean(lifetimeHours)) {
+        res.status(400).json({ error: 'Choose a supported session lifetime.' });
+        return;
+      }
+      if ((operation === 'set_credentials') !== Boolean(credentials)) {
+        res.status(400).json({ error: 'Invalid sign-in credentials.' });
+        return;
+      }
       try {
         if (operation === 'status') {
           // One entry per website shared with this agent or board.
-          const sessions = await listBrowserSessions(scope, user.userId);
+          const sessions = await withAutoLogin(
+            scope,
+            await listBrowserSessions(scope, user.userId)
+          );
           res.json({
             configured: true,
             exists: sessions.length > 0,
@@ -139,11 +209,79 @@ export function authBrowserRoutes() {
           });
           return;
         }
+        if (CREDENTIAL_OPERATIONS.has(operation)) {
+          const environment = browserStateEnvironment();
+          if (!environment) {
+            res.status(503).json({
+              error: 'Automatic sign-in requires persistent browser sessions (APP_ENVIRONMENT).',
+            });
+            return;
+          }
+          // Only the user who shared this website session manages its
+          // credentials: the worker reports canControl for that user alone.
+          const origin = params.site ? new URL(params.site).origin : '';
+          const session = (await listBrowserSessions(scope, user.userId)).find(
+            s =>
+              Boolean(origin) &&
+              s.site === origin &&
+              s.sessionId === sessionId &&
+              s.canControl &&
+              s.phase !== 'pending'
+          );
+          if (!session || !sessionId) {
+            res.status(403).json({
+              error: 'Only the user who shared this website can manage its automatic sign-in.',
+            });
+            return;
+          }
+          const key = browserSessionKey(scope, origin);
+          if (operation === 'clear_credentials') {
+            await deleteBrowserCredentials(environment, key);
+            res.json({ ...session, autoLogin: false, configured: true });
+            return;
+          }
+          const stored = browserCredentials.safeParse({
+            username: credentials?.username,
+            password: credentials?.password,
+            ...(credentials?.totpSecret?.trim() ? { totp_secret: credentials.totpSecret } : {}),
+            ...(credentials?.loginUrl?.trim() ? { login_url: credentials.loginUrl.trim() } : {}),
+          });
+          // Never echo the submitted values, not even in validation details.
+          if (
+            !stored.success ||
+            (stored.data.login_url && new URL(stored.data.login_url).origin !== origin)
+          ) {
+            res.status(400).json({
+              error:
+                'Invalid sign-in credentials. The sign-in page must be on the shared website and the TOTP secret in base32.',
+            });
+            return;
+          }
+          await saveBrowserCredentials(environment, key, stored.data);
+          // Resets the failure counter and signs in now if the website already
+          // rejected the session.
+          const result = await browserCommand(scope, 'relogin', {
+            site: origin,
+            session_id: sessionId,
+            controller: user.userId,
+          });
+          res.json({ ...result, autoLogin: true, configured: true });
+          return;
+        }
         const result = await browserCommand(scope, operation, {
           ...params,
+          ...(lifetimeHours ? { lifetime_hours: lifetimeHours } : {}),
           session_id: sessionId,
           controller: user.userId,
         });
+        const environment = browserStateEnvironment();
+        if (operation === 'disconnect' && params.site && environment) {
+          // The worker deletes them with its snapshot; this also covers a
+          // worker running without persistence.
+          await deleteBrowserCredentials(environment, browserSessionKey(scope, params.site)).catch(
+            () => undefined
+          );
+        }
         res.json({ ...result, configured: true });
       } catch (error) {
         if (error instanceof BrowserCommandError) {

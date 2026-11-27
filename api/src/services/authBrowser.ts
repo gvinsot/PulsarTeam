@@ -16,6 +16,12 @@ export interface BrowserStatus {
   sessionId?: string;
   site?: string;
   expiresAt?: number;
+  /** Absolute lifetime chosen by the human who shared it (8 h by default). */
+  lifetimeHours?: number;
+  /** Automatic sign-in stopped after repeated failures until a human retries. */
+  autoLoginBlocked?: boolean;
+  /** Sign-in credentials are stored for automatic re-login (API-side flag). */
+  autoLogin?: boolean;
 }
 
 /** How a read renders the page (worker field names). */
@@ -31,6 +37,16 @@ export function browserConfigured() {
 
 export function workerScope(scope: BrowserScope) {
   return `${scope.type}:${scope.id}`;
+}
+
+/** The worker's session key for one website of a scope (server.py site_key). */
+export function browserSessionKey(scope: BrowserScope, site: string) {
+  return `${workerScope(scope)}@${new URL(site).hostname}`;
+}
+
+/** Namespace of persisted browser state; null until the deployment pins it. */
+export function browserStateEnvironment(): string | null {
+  return process.env.APP_ENVIRONMENT?.trim().toLowerCase() || null;
 }
 
 export class BrowserCommandError extends Error {

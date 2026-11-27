@@ -5,6 +5,7 @@ import {
   loadBrowserSessions,
   saveBrowserSession,
   deleteBrowserSession,
+  loadBrowserCredentials,
 } from '../services/database/authBrowserSessions.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 
@@ -60,6 +61,24 @@ export function authBrowserSessionRoutes() {
         res.sendStatus(204);
       } catch {
         res.status(503).json({ error: 'Browser session storage unavailable' });
+      }
+    })
+  );
+  // Sign-in credentials of one session, for the worker's automatic re-login
+  // only. POST so the key never sits in a URL or access log.
+  router.post(
+    '/credentials',
+    asyncHandler(async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      const parsed = browserSessionDelete.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid browser session key' });
+        return;
+      }
+      try {
+        res.json({ credentials: await loadBrowserCredentials(environment(), parsed.data.key) });
+      } catch {
+        res.status(503).json({ error: 'Browser credential storage unavailable' });
       }
     })
   );

@@ -20,7 +20,7 @@ class SessionStore:
     def enabled(self):
         return bool(self.url)
 
-    async def request(self, method, payload=None):
+    async def request(self, method, payload=None, path=""):
         if not self.enabled:
             return {"sessions": []}
         data = json.dumps(payload).encode() if payload is not None else None
@@ -28,7 +28,7 @@ class SessionStore:
             raise RuntimeError("Browser snapshot exceeds storage limit")
 
         def send():
-            request = Request(self.url, data=data, method=method, headers={
+            request = Request(self.url + path, data=data, method=method, headers={
                 "Authorization": "Bearer " + self.secret(), "Content-Type": "application/json"})
             # Never forward the worker credential through a redirect or an
             # environment-configured proxy. URL is deployment configuration.
@@ -57,3 +57,10 @@ class SessionStore:
 
     async def delete(self, key):
         await self.request("DELETE", {"key": key})
+
+    async def credentials(self, key):
+        """Sign-in credentials the human stored for this session, or None.
+        Fetched only for an automatic sign-in, never cached by the caller."""
+        if not self.enabled:
+            return None
+        return (await self.request("POST", {"key": key}, "/credentials")).get("credentials")

@@ -5,6 +5,42 @@ const translations = {
     en: 'Sharing lets the selected agents read, click, fill forms and upload files with this account, including publishing when requested. Pause sharing to suspend their access.',
     fr: 'Le partage permet aux agents sélectionnés de lire, cliquer, remplir des formulaires et téléverser des fichiers avec ce compte, y compris publier sur demande. Mettez le partage en pause pour suspendre leur accès.',
   },
+  'authBrowser.lifetime': { en: 'Session lifetime', fr: 'Durée de vie de la session' },
+  'authBrowser.lifetimeHelp': {
+    en: 'Beyond 8 hours, the session no longer expires after 30 minutes without use: the server revisits the website every few hours so it can renew its cookies.',
+    fr: 'Au-delà de 8 heures, la session n’expire plus après 30 minutes sans utilisation : le serveur revisite le site toutes les quelques heures pour qu’il renouvelle ses cookies.',
+  },
+  'authBrowser.lifetime.8': { en: '8 hours', fr: '8 heures' },
+  'authBrowser.lifetime.24': { en: '24 hours', fr: '24 heures' },
+  'authBrowser.lifetime.168': { en: '7 days', fr: '7 jours' },
+  'authBrowser.lifetime.720': { en: '30 days', fr: '30 jours' },
+  'authBrowser.autoLogin': { en: 'Automatic sign-in', fr: 'Reconnexion automatique' },
+  'authBrowser.autoLoginOn': {
+    en: 'Credentials stored: when the website rejects the session, the server signs in again by itself.',
+    fr: 'Identifiants enregistrés : si le site rejette la session, le serveur se reconnecte seul.',
+  },
+  'authBrowser.autoLoginSetup': {
+    en: 'Set up automatic sign-in',
+    fr: 'Configurer la reconnexion automatique',
+  },
+  'authBrowser.autoLoginWarning': {
+    en: 'The password (and the two-factor secret) are stored encrypted on the server and typed only into this website’s own sign-in form. Agents never see them. Captchas, SMS codes, device approvals and external sign-in providers (e.g. “Sign in with Google”) cannot be completed automatically. After 3 failed attempts, automatic sign-in stops until you retry.',
+    fr: 'Le mot de passe (et le secret à deux facteurs) sont stockés chiffrés sur le serveur et saisis uniquement dans le formulaire de connexion de ce site. Les agents ne les voient jamais. Captchas, codes SMS, validations sur un appareil et fournisseurs de connexion externes (ex. « Se connecter avec Google ») ne peuvent pas être franchis automatiquement. Après 3 échecs, la reconnexion automatique s’arrête jusqu’à ce que vous réessayiez.',
+  },
+  'authBrowser.username': { en: 'Username or email', fr: 'Identifiant ou e-mail' },
+  'authBrowser.password': { en: 'Password', fr: 'Mot de passe' },
+  'authBrowser.totpSecret': {
+    en: 'Two-factor (TOTP) secret, optional',
+    fr: 'Secret à deux facteurs (TOTP), facultatif',
+  },
+  'authBrowser.loginUrl': {
+    en: 'Sign-in page, optional (on the same website)',
+    fr: 'Page de connexion, facultative (sur le même site)',
+  },
+  'authBrowser.saveCredentials': { en: 'Save credentials', fr: 'Enregistrer les identifiants' },
+  'authBrowser.relogin': { en: 'Sign in again now', fr: 'Se reconnecter maintenant' },
+  'authBrowser.clearCredentials': { en: 'Remove credentials', fr: 'Supprimer les identifiants' },
+  'authBrowser.cancel': { en: 'Cancel', fr: 'Annuler' },
   'decision.choice': { en: 'Model choice', fr: 'Choix du modèle' },
   'autoRetry.title': { en: 'Auto-retry', fr: 'Relance automatique' },
   'autoRetry.help': {

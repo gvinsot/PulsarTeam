@@ -300,11 +300,37 @@ and restoration never replays clicks, uploads or publication actions. Temporary
 upload files and unfinished page forms are not restored. Abrupt machine failure
 can lose changes since the last checkpoint.
 
-Existing limits remain: eight hours absolute lifetime, thirty minutes idle,
-six sessions. Redeployment and status polling do not reset these timers.
-Provider expiration/revocation still requires manual reconnection; automatic
-OAuth renewal is not promised. Sessions lost before this upgrade cannot be
-recovered and must be shared once again.
+Limits: six sessions; by default eight hours absolute lifetime and thirty
+minutes idle. Redeployment and status polling do not reset these timers.
+Sessions lost before this upgrade cannot be recovered and must be shared once
+again.
+
+### Lifetime, keepalive and automatic sign-in
+
+The user who shared a website (and only that user) can change, per session:
+
+- **Lifetime**: 8 hours (default), 24 hours, 7 days or 30 days, counted from
+  the transfer. A session cannot be shortened below its age. Beyond 8 hours
+  the 30-minute idle limit no longer applies.
+- **Keepalive** (automatic for lifetimes beyond 8 hours): when no agent used
+  the session for about four hours (plus up to 30 minutes of random jitter),
+  the worker reopens the shared page so the website can renew its sliding
+  cookies, then saves the snapshot. It never counts as use and never extends
+  the lifetime. A restored session's browser is closed again afterwards.
+- **Automatic sign-in** (opt-in): username, password, optional TOTP secret
+  (base32) and optional sign-in page on the same origin. The API stores them
+  encrypted in `auth_browser_credentials` and only returns them to the worker
+  (`POST /api/internal/auth-browser-sessions/credentials`, worker key). They
+  are never sent back to the UI, to agents, or in a worker command. When the
+  website rejects the session (`reauth_required`), the worker signs in again
+  on the next agent command or within a minute, in the main frame of the
+  session's own origin only (navigation guards are unchanged), then checks
+  the shared page like an agent read. Attempts are spaced 30 minutes apart
+  and stop after three consecutive failures (persisted across restarts) until
+  the user clicks "Sign in again now" or saves new credentials. Disconnect and
+  expiry delete the credentials together with the snapshot. Captchas, SMS
+  codes, device approval and cross-origin identity providers cannot be
+  completed automatically; such sites still need a new transfer.
 
 Internal MCP tokens are bound to their agent and board. Headers cannot select a
 different agent. Regenerate MCP configurations or restart runners that still

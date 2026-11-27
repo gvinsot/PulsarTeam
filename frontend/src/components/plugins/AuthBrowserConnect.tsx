@@ -3,6 +3,7 @@ import { api, type AuthBrowserControl, type AuthBrowserSession } from '../../api
 import { useConnectStatus, type ConnectWidgetProps } from '../connect/useConnectStatus';
 import { errorMessage } from '../../utils/errors';
 import { browserSessions, pendingTransfer, sessionLabel } from './authBrowserSessions';
+import AuthBrowserSessionSettings from './AuthBrowserSessionSettings';
 import { useLanguage } from '../../contexts/LanguageContext';
 
 // One plugin instance shares SEVERAL websites: each has its own server browser
@@ -78,7 +79,12 @@ export default function AuthBrowserConnect({
     return () => node.removeEventListener('pulsar:browser-import', receive);
   }, [agentId, boardId, pendingId, pendingSite, fetchStatus]);
 
-  async function action(operation: AuthBrowserControl['operation'], session?: AuthBrowserSession) {
+  async function action(
+    operation: AuthBrowserControl['operation'],
+    session?: AuthBrowserSession,
+    extra: Pick<AuthBrowserControl, 'lifetimeHours' | 'credentials'> = {}
+  ): Promise<boolean> {
+    let ok = false;
     setBusy(true);
     setError('');
     try {
@@ -101,14 +107,17 @@ export default function AuthBrowserConnect({
         boardId,
         ...(session ? { site: session.site, sessionId: session.sessionId } : {}),
         ...(operation === 'prepare_import' ? { url } : {}),
+        ...extra,
       });
       if (operation === 'prepare_import') setUrl('');
+      ok = true;
       await fetchStatus();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
+    return ok;
   }
   async function refresh() {
     setError('');
@@ -171,6 +180,9 @@ export default function AuthBrowserConnect({
                   {s.phase === 'pending' ? 'Cancel' : 'Disconnect'}
                 </button>
               </div>
+              {s.canControl && s.phase && s.phase !== 'pending' && (
+                <AuthBrowserSessionSettings session={s} busy={busy} run={action} />
+              )}
             </li>
           ))}
         </ul>
@@ -249,8 +261,9 @@ export default function AuthBrowserConnect({
       </details>
       <p className="text-dark-400">{t('authBrowser.interactions')}</p>
       <p className="text-dark-400">
-        Login and MFA stay in your browser. Device-bound sessions or sessions rejected by the
-        website may not work on the cluster. Expired sessions require a new transfer.
+        Login and MFA stay in your browser unless you set up automatic sign-in for a website.
+        Device-bound sessions or sessions rejected by the website may not work on the cluster.
+        Expired sessions require a new transfer.
       </p>
       {busy && <p className="text-dark-300">Operation in progress…</p>}
       {(error || statusError) && (

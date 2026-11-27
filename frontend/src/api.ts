@@ -107,6 +107,12 @@ export interface AuthBrowserSession {
   phase?: 'pending' | 'login' | 'ready' | 'reauth_required';
   site?: string;
   expiresAt?: number;
+  /** Absolute lifetime chosen by the user who shared it (8 h by default). */
+  lifetimeHours?: number;
+  /** Sign-in credentials are stored: the server signs in again when rejected. */
+  autoLogin?: boolean;
+  /** Automatic sign-in stopped after repeated failures until retried. */
+  autoLoginBlocked?: boolean;
 }
 /** `status` (api/src/routes/authBrowser.ts): every website, `connected` if any is shared. */
 export interface AuthBrowserStatus {
@@ -115,11 +121,30 @@ export interface AuthBrowserStatus {
   connected: boolean;
   sessions?: AuthBrowserSession[];
 }
+/** Write-only: the API stores them encrypted and never returns them. */
+export interface AuthBrowserCredentials {
+  username: string;
+  password: string;
+  totpSecret?: string;
+  loginUrl?: string;
+}
 export interface AuthBrowserControl {
   agentId?: string;
   boardId?: string;
-  operation: 'status' | 'prepare_import' | 'import' | 'activate' | 'takeover' | 'disconnect';
+  operation:
+    | 'status'
+    | 'prepare_import'
+    | 'import'
+    | 'activate'
+    | 'takeover'
+    | 'disconnect'
+    | 'set_lifetime'
+    | 'set_credentials'
+    | 'clear_credentials'
+    | 'relogin';
   sessionId?: string;
+  lifetimeHours?: number;
+  credentials?: AuthBrowserCredentials;
   /** Origin of the website session a command targets. */
   site?: string;
   url?: string;

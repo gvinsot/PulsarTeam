@@ -410,6 +410,19 @@ const MIGRATIONS: Migration[] = [
        PRIMARY KEY (environment, session_key)
      )`,
   ]),
+  sqlMigration(
+    '202611270001_auth_browser_credentials',
+    'encrypted sign-in credentials for automatic browser re-login',
+    [
+      `CREATE TABLE IF NOT EXISTS auth_browser_credentials (
+         environment TEXT NOT NULL,
+         session_key TEXT NOT NULL,
+         ciphertext TEXT NOT NULL,
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+         PRIMARY KEY (environment, session_key)
+       )`,
+    ]
+  ),
 ];
 
 /** Move legacy appended notes out of `text` into `comments` (see migration above). */

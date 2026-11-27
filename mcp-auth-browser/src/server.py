@@ -11,6 +11,7 @@ import contextlib
 import hmac
 import os
 import json
+import random
 import re
 import time
 import uuid
@@ -27,6 +28,7 @@ from playwright.async_api import async_playwright
 from egress import PublicProxy, https_origin, public_addresses
 from page_state import NetworkTracker, read_page, shared_url
 from interactions import AGENT_ACTIONS, perform_action
+from autologin import LoginFailed, sign_in, valid_credentials
 from session_store import SessionStore
 
 MAX_SESSIONS = 6
@@ -35,7 +37,20 @@ SCREENSHOT_MAX_HEIGHT = 4000
 PDF_MAX_BYTES = 10 * 1024 * 1024
 SESSION_SECONDS = 8 * 3600
 IDLE_SECONDS = 30 * 60
-HUMAN_OPS = {"frame", "click", "text", "key", "wheel", "back", "home", "activate", "takeover", "disconnect"}
+# The human who shared a session may extend its lifetime. The default keeps the
+# 30-minute idle limit; a longer lifetime drops it, and the keepalive below
+# revisits the website so it can renew sliding cookies while nobody uses it.
+LIFETIME_HOURS = (8, 24, 7 * 24, 30 * 24)
+KEEPALIVE_SECONDS = 4 * 3600
+KEEPALIVE_JITTER_SECONDS = 1800
+MAINTENANCE_INTERVAL = 60
+# Automatic sign-in (autologin.py): bounded so a wrong password or a changed
+# login form cannot lock the account. A human `relogin` resets the counter.
+RELOGIN_MAX_FAILURES = 3
+RELOGIN_RETRY_SECONDS = 1800
+RELOGIN_SECONDS = 30
+HUMAN_OPS = {"frame", "click", "text", "key", "wheel", "back", "home", "activate", "takeover", "disconnect",
+             "set_lifetime", "relogin"}
 KEYS = {"Enter", "Tab", "Shift+Tab", "Backspace", "Delete", "Escape", "ArrowLeft",
         "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Control+A", "Meta+A"}
 UPLOAD_MAX_BYTES = 250 * 1024 * 1024
@@ -121,7 +136,8 @@ class Command(BaseModel):
     operation: Literal["status", "start", "frame", "click", "text", "key", "wheel", "back", "home",
                        "activate", "takeover", "disconnect", "read", "navigate", "scroll", "pdf",
                        "screenshot", "clearance", "prepare_import", "import", "list",
-                       "agent_click", "agent_fill", "agent_press", "agent_select", "agent_upload"]
+                       "agent_click", "agent_fill", "agent_press", "agent_select", "agent_upload",
+                       "set_lifetime", "relogin"]
     target: Target | None = None
     values: list[str] = Field(default_factory=list, max_length=30)
     # Which shared website of the scope (any URL on it). Optional while the
@@ -149,6 +165,8 @@ class Command(BaseModel):
     section: int = Field(default=1, ge=1, le=100)
     # `pdf` only: render with the screen look or the site's print stylesheet.
     media: Literal["screen", "print"] = "screen"
+    # `set_lifetime` only: one of LIFETIME_HOURS.
+    lifetime_hours: int | None = Field(default=None, ge=1, le=30 * 24)
 
 
 class Session:
@@ -171,10 +189,28 @@ class Session:
         self.saved_storage = None
         self.saved_url = origin
         self.user_agent = ""
+        self.lifetime = SESSION_SECONDS
+        self.keepalive_at = self.created
+        self.keepalive_jitter = random.uniform(0, KEEPALIVE_JITTER_SECONDS)
+        self.relogin_failures = 0
+        self.relogin_at = 0.0
 
     def expired(self):
         now = time.time()
-        return now - self.created > SESSION_SECONDS or now - self.used > IDLE_SECONDS
+        if now - self.created > self.lifetime:
+            return True
+        return self.lifetime <= SESSION_SECONDS and now - self.used > IDLE_SECONDS
+
+    def keepalive_due(self, now=None):
+        now = time.time() if now is None else now
+        last = max(self.used, self.keepalive_at)
+        return (self.shared and self.phase == "ready" and self.lifetime > SESSION_SECONDS and
+                now - last > KEEPALIVE_SECONDS + self.keepalive_jitter)
+
+    def relogin_due(self, now=None):
+        now = time.time() if now is None else now
+        return (self.shared and self.phase == "reauth_required" and
+                self.relogin_failures < RELOGIN_MAX_FAILURES and now - self.relogin_at > RELOGIN_RETRY_SECONDS)
 
     def status(self):
         return {"exists": True, "connected": self.phase == "ready", "phase": self.phase,
@@ -182,7 +218,9 @@ class Session:
                 "canInteract": self.phase == "ready",
                 "pageState": self.page_state,
                 "sessionId": self.id, "site": self.origin,
-                "expiresAt": int((self.created + SESSION_SECONDS) * 1000)}
+                "expiresAt": int((self.created + self.lifetime) * 1000),
+                "lifetimeHours": self.lifetime // 3600,
+                "autoLoginBlocked": self.relogin_failures >= RELOGIN_MAX_FAILURES}
 
     def require_human(self, cmd):
         if not cmd.controller or cmd.controller != self.controller or cmd.session_id != self.id:
@@ -359,6 +397,8 @@ async def checkpoint(key, session):
                       "controller": session.controller, "origin": session.origin,
                       "phase": session.phase, "created": session.created, "used": session.used,
                       "url": session.saved_url, "user_agent": session.user_agent,
+                      "lifetime": session.lifetime, "keepalive_at": session.keepalive_at,
+                      "relogin_failures": session.relogin_failures, "relogin_at": session.relogin_at,
                       "storage": session.saved_storage})
 
 
@@ -387,6 +427,20 @@ def restored_session(record):
     session.saved_url = shared_url(record["url"], origin)
     session.saved_storage = state
     session.user_agent = record["user_agent"]
+    # Snapshots saved before configurable lifetimes keep the former limits.
+    lifetime = record.get("lifetime", SESSION_SECONDS)
+    if type(lifetime) is not int or lifetime not in {h * 3600 for h in LIFETIME_HOURS}:
+        raise ValueError("Invalid persisted lifetime")
+    session.lifetime = lifetime
+    failures = record.get("relogin_failures", 0)
+    if type(failures) is not int or not 0 <= failures <= 1000:
+        raise ValueError("Invalid persisted sign-in state")
+    session.relogin_failures = failures
+    for field in ("keepalive_at", "relogin_at"):
+        value = record.get(field, session.created if field == "keepalive_at" else 0.0)
+        if type(value) not in {int, float} or not 0 <= value <= time.time() + 60:
+            raise ValueError("Invalid persisted session time")
+        setattr(session, field, value)
     session.shared = session.imported = True
     session.page_state = "restored"
     return session
@@ -556,10 +610,12 @@ async def lifespan(app):
         restoration_ready = not store.enabled
         restore_task = asyncio.create_task(restore_until_ready())
         task = asyncio.create_task(reap())
+        maintenance = asyncio.create_task(maintain())
         yield
-        restore_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await restore_task
+        for background in (restore_task, maintenance):
+            background.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await background
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
@@ -602,6 +658,120 @@ async def snapshot(session, cmd=None):
         raise
     session.page_state = "ready"
     return data
+
+
+async def open_for_maintenance(session):
+    """Open a lazily restored session WITHOUT discarding it when the website
+    rejects it (unlike ensure_open): a rejection is what a sign-in repairs."""
+    if session.context is not None:
+        return None
+    if session.saved_storage is None:
+        raise HTTPException(409, "No saved browser session")
+    return await session.open(app.state.playwright, session.saved_url, session.saved_storage)
+
+
+async def keep_alive(session):
+    """Revisit the shared page so the website renews sliding cookies, as a
+    person's open browser would. Never counts as use: `used` is untouched, so
+    the idle limit and the absolute lifetime still apply. Caller holds the lock."""
+    session.keepalive_at = time.time()
+    session.keepalive_jitter = random.uniform(0, KEEPALIVE_JITTER_SECONDS)
+    try:
+        if session.context is None:
+            response = await open_for_maintenance(session)
+        else:
+            response = await session.navigate(session.saved_url)
+        if cloudflare_challenge(response):
+            session.page_state = "challenge"
+            return
+        await snapshot(session)
+    except HTTPException:
+        # navigate/snapshot recorded a rejection (reauth_required) or a page
+        # failure; an automatic sign-in may follow.
+        pass
+
+
+async def relogin_session(key, session, force=False):
+    """Sign in again with the credentials the human stored for this session
+    (autologin.py). Caller holds session.lock. True once the session is ready.
+
+    Attempts are spaced and capped (RELOGIN_*), and counted across restarts,
+    so a wrong password or a changed form cannot lock the account. Missing
+    credentials or unavailable storage are not failed attempts."""
+    if not store.enabled or not session.shared or session.phase != "reauth_required":
+        return False
+    if not force and not session.relogin_due():
+        return False
+    session.relogin_at = time.time()
+    try:
+        raw = await store.credentials(key)
+    except Exception:
+        return False
+    if not raw:
+        return False
+    try:
+        credentials = valid_credentials(raw, session.origin)
+    except ValueError:
+        # Unusable stored credentials: stop until the human replaces them.
+        session.relogin_failures = RELOGIN_MAX_FAILURES
+        return False
+    finally:
+        raw = None
+    try:
+        async with asyncio.timeout(RELOGIN_SECONDS):
+            with contextlib.suppress(HTTPException):
+                await open_for_maintenance(session)
+            if session.context is None:
+                raise LoginFailed("Browser unavailable")
+            await sign_in(session.active_page(), session.origin, credentials)
+            # Verify on the shared page with the same checks as an agent read.
+            session.navigation_blocked = False
+            if session.network:
+                session.network.auth_failure = False
+            if cloudflare_challenge(await session.navigate(session.saved_url)):
+                raise LoginFailed("Website challenge")
+            await snapshot(session)
+    except Exception:
+        # Never log: Playwright errors can carry form values or page text.
+        session.phase = "reauth_required"
+        session.page_state = "login_required"
+        session.relogin_failures += 1
+        return False
+    finally:
+        credentials = None
+    session.phase = "ready"
+    session.relogin_failures = 0
+    session.keepalive_at = time.time()
+    return True
+
+
+async def maintain():
+    """Keepalive and automatic sign-in for shared sessions, one at a time."""
+    while True:
+        await asyncio.sleep(MAINTENANCE_INTERVAL)
+        if not restoration_ready:
+            continue
+        for key, session in list(sessions.items()):
+            if not (session.keepalive_due() or (store.enabled and session.relogin_due())):
+                continue
+            async with session.lock:
+                if sessions.get(key) is not session or session.expired():
+                    continue
+                was_closed, saved = session.context is None, False
+                try:
+                    if session.keepalive_due():
+                        await keep_alive(session)
+                    await relogin_session(key, session)
+                    await checkpoint(key, session)
+                    saved = True
+                except Exception:
+                    print("Browser session maintenance pending; retrying", flush=True)
+                finally:
+                    # A restored session reopens lazily on real use; keep the
+                    # browser only if its renewed cookies could not be saved.
+                    if was_closed and saved and session.context is not None:
+                        with contextlib.suppress(Exception):
+                            await session.close()
 
 
 async def execute(cmd: Command, upload=None):
@@ -754,11 +924,26 @@ async def execute_command(cmd: Command, upload=None):
                 return {"exists": False, "connected": False}
             session.require_human(cmd)
         else:
+            if session.phase == "reauth_required":
+                # Signs in again only when the human stored credentials.
+                await relogin_session(key, session)
             session.require_agent()
         if cmd.operation == "agent_upload" and cmd.session_id != session.id:
             raise HTTPException(409, "The upload session changed")
         if cmd.operation not in {"frame"}:
             session.used = time.time()
+        if cmd.operation == "set_lifetime":
+            if cmd.lifetime_hours not in LIFETIME_HOURS:
+                raise HTTPException(400, "Unsupported session lifetime")
+            if time.time() - session.created >= cmd.lifetime_hours * 3600:
+                raise HTTPException(409, "The session is already older than this lifetime")
+            session.lifetime = cmd.lifetime_hours * 3600
+            return {**session.status(), "canControl": True}
+        if cmd.operation == "relogin":
+            # The human asks for an attempt now (e.g. after storing credentials).
+            session.relogin_failures, session.relogin_at = 0, 0.0
+            await relogin_session(key, session, force=True)
+            return {**session.status(), "canControl": True}
         if cmd.operation == "takeover":
             session.phase = "login"
             return session.status()
